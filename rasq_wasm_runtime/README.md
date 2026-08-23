@@ -24,7 +24,7 @@ Verified here:
 
 - macOS arm64 — end-to-end (wasm plugin → wasmi → Dart FFI → Flutter widget
   tree) by `example`'s `flutter test` and a built `.app`
-- iOS simulator arm64 — `flutter build ios --simulator`
+- iOS simulator — `flutter build ios --simulator` (arm64+x86_64 framework), installed and run on an iPhone 17 simulator: snapshot/patch/call rendered
 - Android arm64 / armv7 / x86_64 — `flutter build apk` (NDK clang is handed to
   the hook by Flutter; the Flutter Gradle plugin auto-installs the NDK)
 

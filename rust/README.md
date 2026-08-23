@@ -42,8 +42,8 @@ rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-and
 | Flutter target | rust triple | extra config from the hook | status |
 |---|---|---|---|
 | macOS arm64 / x64 | `aarch64-apple-darwin` / `x86_64-apple-darwin` | `MACOSX_DEPLOYMENT_TARGET` | ✅ built + tested (arm64) |
-| iOS device arm64 | `aarch64-apple-ios` | `IPHONEOS_DEPLOYMENT_TARGET` | ✅ built |
-| iOS simulator arm64 / x64 | `aarch64-apple-ios-sim` / `x86_64-apple-ios` | same | ✅ built (arm64) |
+| iOS device arm64 | `aarch64-apple-ios` | `IPHONEOS_DEPLOYMENT_TARGET` | wired (device build not run here — needs a signing identity) |
+| iOS simulator arm64 / x64 | `aarch64-apple-ios-sim` / `x86_64-apple-ios` | same | ✅ built (universal) + run on iPhone 17 simulator |
 | Android arm64 / arm / x64 / ia32 | `aarch64-linux-android` / `armv7-linux-androideabi` / `x86_64-linux-android` / `i686-linux-android` | `CARGO_TARGET_*_LINKER` = NDK `<triple><api>-clang`, `-z max-page-size=16384` | ✅ built (arm64/arm/x64 via `flutter build apk`) |
 | Linux host | `*-unknown-linux-gnu` | — | wired, not run here |
 | Windows host | `*-pc-windows-msvc` | — | wired, not run here (no Windows box) |
