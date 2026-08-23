@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rasq.io/schema/plugin-manifest-0.2.json",
+  "title": "RASQ PluginManifest (function.json subset, draft v0.2)",
+  "type": "object",
+  "required": ["id", "name", "version", "kind"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9]+(\\.[a-z0-9_-]+)+$", "description": "Stable reverse-DNS id, e.g. rasq.official.misskey" },
+    "name": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+([-+][0-9A-Za-z.-]+)?$" },
+    "kind": { "type": "string", "enum": ["sns", "action", "view", "trend", "mediaViewer", "postProcessor"] },
+    "author": { "type": "string" },
+    "description": { "type": "string" },
+    "supportedSns": { "type": "array", "items": { "type": "string", "enum": ["bluesky", "misskey", "mastodon", "mixi2", "other"] } },
+    "permissions": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["render", "replace_tile", "transform_content", "tag_media", "replace_media", "register_action", "decorate_avatar", "fow.widget", "fow.interstitial", "fow.system", "network", "gpu_ml", "storage.safe", "storage.unsafe", "auto_hook"] }
+    },
+    "actions": { "type": "array", "items": { "$ref": "#/$defs/actionDescriptor" } },
+    "termsOfService": { "type": "string", "description": "Markdown shown before first login" },
+    "verified": { "type": "boolean", "default": false },
+    "official": { "type": "boolean", "default": false }
+  },
+  "$defs": {
+    "actionDescriptor": {
+      "type": "object",
+      "required": ["id", "genreTag", "label"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "genreTag": { "type": "string", "description": "Repost|Reaction|Reply|Quote|Share|Bookmark|... assigned at review" },
+        "label": { "type": "string" },
+        "icon": { "type": "string" },
+        "doneIcon": { "type": "string" },
+        "confirmMode": { "type": "string", "enum": ["immediate", "confirm", "saveDiscard", "stick"], "default": "immediate" },
+        "fow": { "type": "string", "enum": ["none", "widget", "interstitial", "system"], "default": "none" },
+        "countSource": { "type": "string", "enum": ["self", "first", "none"], "default": "self" },
+        "autoHookForbidden": { "type": "boolean", "default": false },
+        "destructive": { "type": "boolean", "default": false }
+      }
+    }
+  }
+}

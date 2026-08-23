@@ -1,0 +1,19 @@
+{
+  "id": "rasq.official.misskey",
+  "name": "Misskey Plugin",
+  "version": "0.1.0",
+  "kind": "sns",
+  "author": "RASQ Official",
+  "description": "Misskeyに接続するためのプラグイン。",
+  "supportedSns": ["misskey"],
+  "permissions": ["network", "storage.safe", "register_action"],
+  "actions": [
+    { "id": "reply", "genreTag": "Reply", "label": "返信", "icon": "subdirectory_arrow_left", "confirmMode": "confirm", "fow": "interstitial" },
+    { "id": "renote", "genreTag": "Repost", "label": "リノート", "icon": "repeat", "doneIcon": "repeat_on" },
+    { "id": "reaction", "genreTag": "Reaction", "label": "リアクション", "icon": "add_reaction_outlined", "doneIcon": "add_reaction" },
+    { "id": "favorite", "genreTag": "Bookmark", "label": "お気に入り", "icon": "star_border", "doneIcon": "star", "countSource": "none" }
+  ],
+  "termsOfService": "## Misskey Plugin の規約\n\nこのプラグインの利用にあたって、ユーザーは接続先 Misskey インスタンスの利用規約を遵守して利用するものとします。\n\n### 第一項　プラグインの再配布の禁止\n",
+  "verified": true,
+  "official": true
+}
