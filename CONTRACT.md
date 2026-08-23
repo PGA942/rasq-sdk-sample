@@ -1,4 +1,4 @@
-# RASQ Plugin Contract — Draft v0.2 (第一期 / Host ⇄ SNS plugin)
+# RASQ Plugin Contract — Draft v0.3 (第一期 / Host ⇄ SNS plugin)
 
 最終更新: 2026-08-22 / 根拠: `packages/rasq_plugin_api`(Dart 実装)・`packages/sns_misskey`(参照実装)・決定台帳 D-001〜D-015
 
@@ -85,10 +85,13 @@ AccountId = { kind, instance, handle }   key = "kind:instance:handle"
   "fow": "none",                   // none|widget|interstitial|system
   "countSource": "self",           // self|first|none
   "autoHookForbidden": false,      // 規約で自動呼び出し禁止 → 自動Hook候補から除外
-  "destructive": false
+  "destructive": false,
+  "iconPerPost": true              // 投稿ごとにアイコンを差し替え可(SNSプラグインとその配下のみ。D-017)
 }
 // automation(導出): forbidden ? forbidden : immediate ? allowed : humanGate
 ```
+- **短押し**(`performAction(actionId, postId)` 引数なし)の中身はプラグインが決める — Misskey 本番: 予測モデルで最有力の絵文字をリアクション。**長押し**は絵文字ピッカー FOW → `args.reaction`。
+- `ActionResult.icon`(`{url}` または `{material}`)で**投稿ごとにアイコンを差し替え**(操作前に予測絵文字のエッジ抽出アイコンを出す等)。差し替えできるのは SNS プラグイン+配下プラグインの `iconPerPost: true` のアクションのみ。他プラグインは視認性のため固定(ホスト検証ゲート V7 が無視)。バンドル用既定アイコン `icon`/`doneIcon` は必須。
 - `ActionRef` = `pluginId:accountKey:pluginVersion:fn`(D-006【提案】)。accountKey は `kind:instance:handle` なので両端から分割。
 - `performAction(actionId, postId, args)` → `ActionResult{done, count?, message?}`。`args` 例: `{"reaction":"🎉"}`, `{"undo":true}`。
 - 既定アクション(Misskey): `reply`(confirm, interstitial)/`renote`/`reaction`(長押しで絵文字ピッカー FOW)/`favorite`(countSource none)。
@@ -166,6 +169,8 @@ PostTile スロット×権限(原典一致): avatar=`decorate_avatar`(審査済�
 - **状態**: アクション済み/カウント/フォロー/既読は Store(`ActionStateStore`/`FollowStateStore`/`ReadStateStore`)。`actionStates()` や `ActionResult` の返り値だけが Store を更新する。
 - **L2 部品**(ホスト実装): Avatar/Badge/RichText/MediaGrid/ActionButton/Timestamp/Button/ListTile系/SectionHeader/Input/Tabs/UserRow/UserTileLarge/エラー・空・ローディング。ジオメトリトークン(spacing・最小タップ域44dp)はプラグイン変更不可。
 - **RSL(本文)**: ホストがインライン解析(URL/@mention/#tag/:emoji:)。MFM の装飾関数は第一期では剥がして本文のみ表示(M3 でレンダラー対応)。
+- **RRL 意味タグ**(D-019): 投稿内容を構成するノードにのみ `tag` を付ける(`main_text` `cw` `pic` `video` `gif` `file` `vote` `vote_option` `quote` `link` `hashtag` `mention` `emoji` `reaction` `user_name` `user_handle` `time`)。`Icon`・`Avatar`・`ActionBar`・レイアウトには付けない。RAi の位置検索、タイムラインソート、リレーショナルTL の抽出が参照する。
+- **実行/ワイヤ**(D-018/D-020): 中心は WASM。onnx / llama.cpp は `ml.infer` ホスト関数経由の補助(常時処理は想定外)。ワイヤは JSON v1(`rasq.boundary/1`)。内部表現は JSON でも RRL そのままでも可。詳細は `rasq-sdk-sample/PROTOCOL.md`。
 
 ---
 
