@@ -13,17 +13,24 @@ and exposes a small Dart API (`RasqWasmPlugin` in `lib/rasq_wasm_runtime.dart`).
 
 ## Status
 
-Builds and runs today on **macOS and Linux hosts** — `hook/build.dart` shells
-out to `cargo build` for the host target and bundles the resulting dylib.
-Verified end-to-end (wasm plugin -> wasmi -> Dart FFI -> Flutter widget tree)
-by `example`'s `flutter test`.
+`hook/build.dart` shells out to `cargo build --release --target <triple>` for
+whatever Flutter is building (macOS / iOS device + simulator / Android all
+ABIs / Linux / Windows hosts) and bundles the resulting dylib/so/dll as this
+package's code asset. Flutter then wraps it into a framework (Apple) or
+`jniLibs` (Android) like any other native asset — no Podfile / CMake /
+xcframework of our own.
 
-**Not yet wired: Android, iOS, Windows.** Each needs real cross-compilation
-support in `hook/build.dart` (Android NDK toolchains per ABI, an iOS
-xcframework build, MSVC on Windows) that doesn't exist yet — attempting a
-build for those targets fails loudly with `UnsupportedError` rather than
-silently producing a broken binary. This is the concrete next step for
-RASQ M3's D-007 runtime work.
+Verified here:
+
+- macOS arm64 — end-to-end (wasm plugin → wasmi → Dart FFI → Flutter widget
+  tree) by `example`'s `flutter test` and a built `.app`
+- iOS simulator arm64 — `flutter build ios --simulator`
+- Android arm64 / armv7 / x86_64 — `flutter build apk` (NDK clang is handed to
+  the hook by Flutter; the Flutter Gradle plugin auto-installs the NDK)
+
+Linux/Windows are mapped but have not been exercised (no such host here).
+Missing rustup targets fail the build with the exact `rustup target add …`
+line to run. See `../rust/README.md` for the full target matrix.
 
 ## Usage
 

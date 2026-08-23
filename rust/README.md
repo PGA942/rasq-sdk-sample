@@ -22,11 +22,31 @@ cargo build --release --target wasm32-unknown-unknown -p misskey-wasm-sample
 cargo test --release -p rasq_wasm_runtime_core   # loads the sample above and round-trips it through wasmi
 ```
 
-`rasq_wasm_runtime_core`'s own cdylib/staticlib (for the host's native
-architecture) is built automatically by the Flutter plugin's build hook
+`rasq_wasm_runtime_core`'s own cdylib (for whatever Flutter is targeting) is
+built automatically by the Flutter plugin's build hook
 (`../rasq_wasm_runtime/hook/build.dart`) — you don't need to build it by hand
-to use the Flutter plugin, only to hack on it directly or run its `cargo
-test`.
+to use the Flutter plugin, only to hack on it directly or run its `cargo test`.
+
+### Cross-compilation targets
+
+The hook runs `cargo build --release --target <triple>` per Flutter target.
+Install the rustup targets you need once:
+
+```sh
+# Apple
+rustup target add aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+# Android (linker = NDK clang, handed to the hook by Flutter; NDK is auto-installed by the Flutter Gradle plugin)
+rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
+```
+
+| Flutter target | rust triple | extra config from the hook | status |
+|---|---|---|---|
+| macOS arm64 / x64 | `aarch64-apple-darwin` / `x86_64-apple-darwin` | `MACOSX_DEPLOYMENT_TARGET` | ✅ built + tested (arm64) |
+| iOS device arm64 | `aarch64-apple-ios` | `IPHONEOS_DEPLOYMENT_TARGET` | ✅ built |
+| iOS simulator arm64 / x64 | `aarch64-apple-ios-sim` / `x86_64-apple-ios` | same | ✅ built (arm64) |
+| Android arm64 / arm / x64 / ia32 | `aarch64-linux-android` / `armv7-linux-androideabi` / `x86_64-linux-android` / `i686-linux-android` | `CARGO_TARGET_*_LINKER` = NDK `<triple><api>-clang`, `-z max-page-size=16384` | ✅ built (arm64/arm/x64 via `flutter build apk`) |
+| Linux host | `*-unknown-linux-gnu` | — | wired, not run here |
+| Windows host | `*-pc-windows-msvc` | — | wired, not run here (no Windows box) |
 
 ## Status / follow-ups (M3)
 
@@ -35,10 +55,10 @@ test`.
 - [x] `wasmi` embedded in a native runtime and driven from Dart via FFI,
       proven end-to-end through an actual Flutter app (macOS) — see
       `../rasq_wasm_runtime/`
-- [ ] Android/iOS/Windows cross-compilation wiring in
-      `rasq_wasm_runtime/hook/build.dart` (currently macOS/Linux host builds
-      only — no NDK/xcframework/MSVC toolchain set up yet)
-- [ ] Compare `wasmi` against `wasm3`/WAMR on iOS for the D-007 runtime
-      selection (interpreter perf, binary size)
+- [x] Cross-compilation wiring in `rasq_wasm_runtime/hook/build.dart` for
+      macOS / iOS (device + simulator) / Android (all ABIs) / Linux / Windows
+- [ ] Run the example on a physical iPhone and measure interpreter throughput
+      (D-007: compare `wasmi` vs `wasm3`/WAMR for binary size + perf)
 - [ ] Real plugin logic (talk to a Misskey instance) instead of the
-      hardcoded sample snapshot/patch/call payloads
+      hardcoded sample snapshot/patch/call payloads; host functions
+      (`net.fetch`, `storage.*`) exposed to the wasm side
