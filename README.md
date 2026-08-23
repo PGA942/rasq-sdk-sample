@@ -13,7 +13,7 @@ Misskey アダプタ(`packages/sns_misskey`)で検証したものを、ここで
 
 ## 次にやること(M3)
 
-1. `misskey-wasm-sample` で `PROTOCOL.md` の `snapshot/patch/call` を WASM 側から出す最小サンプル(まずは JSON v1)
-2. WASM ランタイム選定(D-007: wasm3 / WAMR / wasmi、iOS インタープリタ基準)の実測
+1. ~~`misskey-wasm-sample` で `PROTOCOL.md` の `snapshot/patch/call` を WASM 側から出す最小サンプル(まずは JSON v1)~~ → [`rust/misskey-wasm-sample`](rust/misskey-wasm-sample)
+2. ~~WASM ランタイム選定(D-007: wasm3 / WAMR / wasmi、iOS インタープリタ基準)の実測~~ → `wasmi` を [`rust/rasq_wasm_runtime_core`](rust/rasq_wasm_runtime_core) に組み込み、Flutter プラグイン [`rasq_wasm_runtime`](rasq_wasm_runtime)(macOS/Linux)から実行を確認。Android/iOS/Windows のクロスコンパイル配線と wasm3/WAMR との比較実測は未着手(`rust/README.md` 参照)
 3. スロット宣言(D-005)と `ActionRef`(D-006)の形式確定 → `schema/` に追加
 4. 性能が必要なら Snapshot を FlatBuffers/ZeroCopy 化(論理モデルは維持)
