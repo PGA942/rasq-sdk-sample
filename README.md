@@ -5,11 +5,15 @@ RASQ(プラグインベース SNS クライアント)の **プラグイン SDK �
 Misskey アダプタ(`packages/sns_misskey`)で検証したものを、ここで言語非依存の契約として固めていく。
 
 - [`CONTRACT.md`](CONTRACT.md) — Host ⇄ SNS plugin 契約 draft v0.2(`rasq-client/docs/PLUGIN_CONTRACT.md` と同内容)
+- [`PROTOCOL.md`](PROTOCOL.md) — 境界プロトコル draft v0.1(Snapshot / Patch / Call / Lifecycle / ホスト関数 / RRL ノードと意味タグ / 検証ゲート)
+- [`schema/rrl-node.schema.json`](schema/rrl-node.schema.json) / [`schema/boundary.schema.json`](schema/boundary.schema.json) — RRL ノードと境界メッセージの JSON Schema
+- [`examples/post-tile.rrl.json`](examples/post-tile.rrl.json) — 意味タグ付き PostTile の snapshot 例
 - [`schema/manifest.schema.json`](schema/manifest.schema.json) — `PluginManifest`(function.json 最小サブセット)の JSON Schema
 - [`examples/misskey.function.json`](examples/misskey.function.json) — Misskey 公式プラグインのマニフェスト例
 
 ## 次にやること(M3)
 
-1. 境界プロトコル(Snapshot / Patch / Call / Lifecycle, D-001)の IDL 化(FlatBuffers or protobuf、iOS インタープリタ前提)
-2. `SnsSession` の各操作を WASM 境界越しの関数呼び出し(`hostFn` / `event`)として写す
-3. `misskey-wasm-sample` で同じ契約を WASM 側から満たす
+1. `misskey-wasm-sample` で `PROTOCOL.md` の `snapshot/patch/call` を WASM 側から出す最小サンプル(まずは JSON v1)
+2. WASM ランタイム選定(D-007: wasm3 / WAMR / wasmi、iOS インタープリタ基準)の実測
+3. スロット宣言(D-005)と `ActionRef`(D-006)の形式確定 → `schema/` に追加
+4. 性能が必要なら Snapshot を FlatBuffers/ZeroCopy 化(論理モデルは維持)

@@ -1,0 +1,34 @@
+{
+  "schema": "rasq.boundary/1",
+  "scope": "rasq.official.misskey:misskey:misskey.io:yamada:0.1.0:tl-home",
+  "type": "snapshot",
+  "rev": 1,
+  "root": {
+    "t": "PostTile", "k": "post-{{id}}", "role": "contentBody",
+    "p": { "post": "$.post", "variant": "normal" },
+    "c": [
+      { "t": "Avatar", "k": "avatar", "p": { "user": "$.post.author" }, "on": { "tap": "openUser" } },
+      { "t": "Row", "k": "header", "c": [
+        { "t": "RichText", "k": "name", "tag": "user_name", "p": { "source": "$.post.author.displayName" } },
+        { "t": "Text", "k": "handle", "tag": "user_handle", "p": { "text": "$.post.author.handle" } },
+        { "t": "Timestamp", "k": "time", "tag": "time", "p": { "time": "$.post.createdAt" } }
+      ]},
+      { "t": "If", "k": "cw?", "p": { "cond": "$.post.contentWarning" }, "c": [
+        { "t": "Text", "k": "cw", "tag": "cw", "p": { "text": "$.post.contentWarning" } }
+      ]},
+      { "t": "RichText", "k": "body", "tag": "main_text", "p": { "source": "$.post.bodyRSL" } },
+      { "t": "MediaGrid", "k": "media", "p": { "items": "$.post.media" }, "c": [
+        { "t": "ForEach", "k": "tiles", "p": { "in": "$.post.media", "key": "id" }, "c": [
+          { "t": "Image", "k": "{{item.id}}", "tag": "pic", "p": { "src": "$.item.url", "sensitive": "$.item.sensitive" }, "on": { "tap": "openViewer" } }
+        ]}
+      ]},
+      { "t": "If", "k": "poll?", "p": { "cond": "$.post.poll" }, "c": [
+        { "t": "PollWidget", "k": "poll", "tag": "vote", "p": { "poll": "$.post.poll" }, "on": { "confirm": "vote" } }
+      ]},
+      { "t": "If", "k": "quote?", "p": { "cond": "$.post.quote" }, "c": [
+        { "t": "Call", "k": "quote", "tag": "quote", "p": { "component": "PostTile", "variant": "embedded", "post": "$.post.quote" } }
+      ]},
+      { "t": "ActionBar", "k": "actions", "role": "actionBar", "p": { "actions": "$.actions", "states": "$.actionStates[post.key]" } }
+    ]
+  }
+}

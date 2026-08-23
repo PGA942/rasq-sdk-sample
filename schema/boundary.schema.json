@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rasq.io/schema/boundary-0.1.json",
+  "title": "RASQ boundary messages (JSON wire, draft v0.1)",
+  "type": "object",
+  "required": ["schema", "scope", "type"],
+  "properties": {
+    "schema": { "const": "rasq.boundary/1" },
+    "scope": { "type": "string", "description": "instanceScope = pluginId:accountKey:pluginVersion:instanceId" },
+    "type": { "type": "string", "enum": ["snapshot", "patch", "hostFn", "hostFnResult", "result", "emit", "event", "lifecycle", "call", "resync"] }
+  },
+  "oneOf": [
+    { "properties": { "type": { "const": "snapshot" }, "rev": { "type": "integer", "minimum": 0 }, "root": { "$ref": "rrl-node.schema.json" } }, "required": ["rev", "root"] },
+    {
+      "properties": {
+        "type": { "const": "patch" },
+        "rev": { "type": "integer" },
+        "baseRev": { "type": "integer" },
+        "ops": {
+          "type": "array",
+          "maxItems": 512,
+          "items": {
+            "type": "object",
+            "required": ["op", "target"],
+            "properties": {
+              "op": { "type": "string", "enum": ["insert", "remove", "setProp", "replaceSubtree", "move"] },
+              "target": { "type": "string", "description": "nodeId" },
+              "index": { "type": "integer" },
+              "node": { "$ref": "rrl-node.schema.json" },
+              "prop": { "type": "string" },
+              "value": {}
+            }
+          }
+        }
+      },
+      "required": ["rev", "baseRev", "ops"]
+    },
+    { "properties": { "type": { "const": "hostFn" }, "callId": { "type": "string" }, "fn": { "type": "string", "enum": ["fow.open", "fow.close", "alert", "storage.get", "storage.set", "storage.delete", "net.fetch", "ml.infer", "wasm.call", "store.read", "geometry.lookup"] }, "args": { "type": "object" } }, "required": ["callId", "fn"] },
+    { "properties": { "type": { "const": "hostFnResult" }, "callId": { "type": "string" }, "ok": { "type": "boolean" }, "value": {}, "error": { "type": "object", "properties": { "code": { "type": "string", "pattern": "^(\\d{3}|[A-F][0-9A-F]{2})$" }, "message": { "type": "string" } } } }, "required": ["callId", "ok"] },
+    { "properties": { "type": { "const": "result" }, "callId": { "type": "string" }, "ok": { "type": "boolean" }, "value": {}, "error": { "type": "object" } }, "required": ["callId", "ok"] },
+    { "properties": { "type": { "const": "emit" }, "name": { "type": "string" }, "payload": {} }, "required": ["name"] },
+    { "properties": { "type": { "const": "event" }, "nodeId": { "type": "string" }, "kind": { "type": "string", "enum": ["tap", "longPress", "pointerDown", "pointerMove", "pointerUp", "confirm"] }, "payload": { "type": "object" } }, "required": ["nodeId", "kind"] },
+    { "properties": { "type": { "const": "lifecycle" }, "kind": { "type": "string", "enum": ["mount", "unmount", "visible", "hidden", "cancel"] }, "streamId": { "type": "string" } }, "required": ["kind"] },
+    { "properties": { "type": { "const": "call" }, "callId": { "type": "string" }, "fn": { "type": "string" }, "args": { "type": "object" } }, "required": ["callId", "fn"] },
+    { "properties": { "type": { "const": "resync" }, "reason": { "type": "string" } } }
+  ]
+}

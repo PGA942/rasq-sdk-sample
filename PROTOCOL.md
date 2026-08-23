@@ -1,0 +1,126 @@
+# RASQ Boundary Protocol — Draft v0.1 (M3 / Host ⇄ WASM plugin)
+
+最終更新: 2026-08-22 / 根拠: 決定台帳 D-001(実行境界)・D-002(4層)・D-012(FOW)・D-017〜D-020、Qwen壁打ち「転送プロトコル v0」
+対になる文書: [`CONTRACT.md`](CONTRACT.md)(操作レベルの契約) / スキーマ: [`schema/rrl-node.schema.json`](schema/rrl-node.schema.json), [`schema/boundary.schema.json`](schema/boundary.schema.json)
+
+## 0. 原則
+
+1. **実行境界**(D-001): 画面コンストラクタはプラグインごとに隔離された WASM インスタンスで動き、RRL の AST を生成してホスト(Dart レンダラー)へ渡す。ホストは WASM 出力を信頼せず境界で再検証する。
+2. **動かす中心は WASM**(D-018)。onnx / llama.cpp などの ML ランタイムは**補助**で、ホスト関数 `ml.infer` 経由で呼ぶ(審査済み+`gpu_ml` 権限)。SmallLM に常時処理をさせる構成は想定外。iOS はインタープリタ実行が基準なので、描画ホットパスは WASM に載せない。
+3. **ワイヤ形式は JSON v1**(D-020)。内部表現は JSON でも RRL そのままでも可。性能が必要な経路(Snapshot)は後で FlatBuffers/ZeroCopy を**同じ論理モデルのまま**追加する。メッセージには `schema: "rasq.boundary/1"` を付け、版交渉する。
+4. **状態は DSL の外**。RRL ノードはステートレス。変更はイベント → function.json の関数 → ホスト Store → Props(Bind)の一方向。
+5. **ID は安定**。path hash は使わない。`{instanceScope}:{explicitKey}`(§2)。
+
+## 1. インスタンスとスコープ
+
+```
+instanceScope = "{pluginId}:{accountKey}:{pluginVersion}:{instanceId}"
+accountKey    = "{kind}:{instance}:{handle}"
+nodeId        = "{instanceScope}:{key}"      // key はプラグインがツリー内で付ける。ForEach はアイテムIDを key にする
+```
+アカウント分離(アカウントごとのプラグイン版)と Store / キャッシュ / 関数解決のスコープを同じキー体系で解決する。
+
+## 2. RRL ノード(JSON)
+
+```jsonc
+{ "t": "Text", "k": "body", "tag": "main_text", "p": { "source": "$.bodyRSL" }, "on": { "tap": "openThread" }, "c": [] }
+```
+| フィールド | 意味 |
+|---|---|
+| `t` | ノード型。L1 Primitive / L2 Standard Component / L3 Control(§2.1) |
+| `k` | 明示 key(兄弟内で一意)。省略時はホストが `t#index` を補うが **差分更新の対象にはならない** |
+| `tag` | **意味タグ**(§2.2)。投稿内容に関係しないノード(Icon, Spacer, ActionBar 等)には付けない |
+| `p` | Props。`$.path` は Bind(ホスト Store/投稿オブジェクトへの参照) |
+| `on` | イベント → function.json の関数名(`tap/longPress/pointerDown/pointerMove/pointerUp/confirm/mount`) |
+| `c` | 子ノード |
+| `role` | 検証ゲート用の構造ロール(`threadNav` / `contentBody` / `mediaItem` / `actionBar`)— 完全置き換えタイルの必須ロール保証に使う |
+
+### 2.1 ノード型(D-002)
+- **L1 Primitive**: `Text` `Icon` `Image` `Row` `Column` `Stack` `Grid` `Scroll` `Canvas` `Spacer`
+- **L2 Standard Component**(ホスト実装・Props のみ): atomic `Input` `Avatar` `Badge` `RichText` `MediaGrid` `ActionButton` `Timestamp` `Button` `ListTile` `SwitchListTile` `RadioListTile` `ValueListTile` `WarningListTile` `DestructiveListTile` `SectionHeader` / composite `PostTile` `ActionBar` `TrendHeader` `UserRow` `UserTileLarge` `PollWidget` `NotificationTile` `PluginTile` `VCCard` `CollapsedPost` `HeaderedListView` `SortableList` `SegmentedControl` `Tabs`
+- **L3 Control**: `If` `ForEach` `Call` `Bind` `Slot` `Stream`
+- **L4 Host-owned Surface** はノードとして現れない(ホスト関数 `fow.open` 等で要求)。`AdSlot` はレンダラー挿入地点(プラグインからは見えない)。
+
+### 2.2 意味タグ(D-019)
+RAi の位置検索、タイムラインソート、リレーショナルTL(本文/画像抽出)が参照する。**投稿内容を構成するノードにのみ付ける**。
+
+| tag | 付ける先 |
+|---|---|
+| `main_text` | 本文(RSL) |
+| `cw` | 注釈(CW)テキスト |
+| `pic` / `video` / `gif` / `file` | メディアタイル(`MediaGrid` の各タイル、または単体 `Image`/`Video`) |
+| `vote` / `vote_option` | 投票本体 / 選択肢 |
+| `quote` | 引用(埋め込み投稿) |
+| `link` / `hashtag` / `mention` / `emoji` | 本文中のインライン要素(RSL スパンにも同じ名前で付く) |
+| `reaction` | リアクション表示(絵文字+数) |
+| `user_name` / `user_handle` | 投稿者名 / ハンドル |
+| `time` | 投稿時刻 |
+
+付けないもの: `Icon`(装飾)、`Avatar`、`ActionBar`/`ActionButton`、`Spacer`、レイアウト(`Row/Column/...`)。
+
+## 3. メッセージ
+
+すべて `{ "schema": "rasq.boundary/1", "scope": instanceScope, ... }` を共通ヘッダに持つ。
+
+### 3.1 プラグイン → ホスト
+| type | 内容 | 備考 |
+|---|---|---|
+| `snapshot` | `{ rev, root: Node }` | 初期ツリー全体。読み取り専用。ZeroCopy 対象(将来) |
+| `patch` | `{ rev, baseRev, ops: [ {op: insert|remove|setProp|replaceSubtree|move, target: nodeId, index?, node?, prop?, value?} ] }` | **原子バッチ**。`baseRev` がホストの現行 rev と不一致 → 拒否 → `resync` を返す。サイズ/頻度上限超過は異常として記録(B系) |
+| `hostFn` | `{ callId, fn, args }` | §4 ホスト関数。戻りは `hostFnResult{callId, ok, value|error}` |
+| `result` | `{ callId, ok, value|error }` | ホストからの `call` への応答 |
+| `emit` | `{ name, payload }` | 同一インスタンス内の ephemeral UI 状態(開閉・フォーカス)。ビジネス状態は Store へ |
+
+### 3.2 ホスト → プラグイン
+| type | 内容 | 備考 |
+|---|---|---|
+| `event` | `{ nodeId, kind: tap|longPress|pointerDown|pointerMove|pointerUp|confirm, payload }` | `Canvas` は raw pointer を必ず転送 |
+| `lifecycle` | `{ kind: mount|unmount|visible|hidden|cancel, streamId? }` | `mount` は論理マウントで一度だけ。可視性は `visible/hidden` で分離(仮想化TL) |
+| `call` | `{ callId, fn, args }` | `CONTRACT.md` §5 の各操作(function.json で宣言した関数) |
+| `resync` | `{ reason }` | スナップショットの再送要求 |
+
+### 3.3 ライフサイクル / 障害隔離
+- WASM がトラップしても**レンダラーは生存**。最後に成功した snapshot を描画し続け、当該プラグインのみ縮退表示(エラーコード B系で記録)。スロット単位の障害隔離(P3)。
+- ホストは `closeOwnedBy(pluginId)` で当該プラグインのオーバーレイ(FOW 含む)を一括クローズ。
+
+## 4. ホスト関数(`hostFn`)と必要権限
+
+| fn | args | 権限 |
+|---|---|---|
+| `fow.open` | `{ id, spec: FowSpec(type, confirmMode, initialHeightFactor, title, cancelText, confirmText), root: Node }` | `fow.widget` / `fow.interstitial` / `fow.system` |
+| `fow.close` | `{ id, result?, reason? }` | 同上 |
+| `alert` | `{ title, message, confirmText, cancelText?, destructive? }` | — |
+| `storage.get/set/delete` | `{ ns: safe|unsafe, key, value? }`(`pluginId` で自動プレフィックス) | `storage.safe` / `storage.unsafe` |
+| `net.fetch` | `{ method, url, headers, body }`(ホスト代理・dedupe・キャッシュ) | `network`(審査済み) |
+| `ml.infer` | `{ backend: onnx|llama, model, input }` | `gpu_ml`(審査済み) |
+| `wasm.call` | `{ pluginId, fn, args }`(子プラグイン呼び出し) | 構成で許可された子のみ |
+| `store.read` | `{ kind: actionState|followState|readState, key }` | — |
+| `geometry.lookup` | `{ tag? , role?, nodeId? }` → 画面上の矩形(RAi 位置検索・アクセシビリティ共用) | `fow.system` |
+
+## 5. アクションと投稿ごとのアイコン(D-017)
+
+- 短押し `performAction(actionId, postId)`(引数なし)は**プラグインが中身を決める**(Misskey 本番: 予測モデルで最有力の絵文字をリアクション)。長押しは絵文字ピッカー FOW → `args.reaction`。
+- `actionStates()` / `performAction()` の `ActionResult.icon` で**投稿ごとにアイコンを差し替え**できる(操作前に予測絵文字のエッジ抽出アイコンを表示する等)。
+- 差し替えできるのは **SNS プラグインとその配下プラグインの、`iconPerPost: true` を宣言したアクションのみ**。他プラグインのアイコンは視認性のため固定(ホスト検証ゲートが無視する)。バンドル用の既定アイコン(`icon`/`doneIcon`)は必須。
+
+## 6. 検証ゲート(ホスト側、realize / スロット解決時)
+
+| # | チェック | 違反時 |
+|---|---|---|
+| V1 | スロット×権限ティア(sideload は content のみ、media は tag のみ、avatar/action/full は審査済み) | アタッチ拒否(E系) |
+| V2 | sideload content の GPU/ネットワーク使用 | アタッチ拒否(E系) |
+| V3 | 安全フラグの単調性(センシティブ/CW の解除試行) | 無視 |
+| V4 | ジオメトリトークン(spacing/margin/最小タップ域44dp/メディア余白) | ホスト値で上書き |
+| V5 | 完全置き換えの必須 role(`threadNav` 等) | 標準 PostTile へフォールバック(B系) |
+| V6 | アクションバー: 1投稿1本・幅指定1プラグイン1つ・容量超過 | 超過分をサイドメニューへ |
+| V7 | `iconPerPost` 未宣言 / 非配下プラグインからのアイコン差し替え | 無視(既定アイコン) |
+| V8 | 自動化時の confirmMode ゲート + `autoHookForbidden` | humanGate で停止 / 候補除外 |
+| V9 | viewer 面の変換が全画面遷移時のみか | 無効化(E系) |
+| V10 | `patch` の rev 不一致 / サイズ・頻度上限 | 拒否 + `resync` / 異常記録 |
+| V11 | `tag` の付与先(投稿内容外ノードへの tag) | 無視 |
+| V12 | スロット単位の障害隔離 | 当該スロットのみ標準部品化(B系) |
+
+## 7. 未決
+- D-005 content/action スロット仕様の形式定義 — `roles`/`slots` 宣言の JSON 化
+- D-006 `ActionRef` 形式(`pluginId:accountKey:pluginVersion:fn`)の確定
+- D-007 WASM ランタイム選定(wasm3 / WAMR / wasmi; iOS インタープリタ)と `misskey-wasm-sample` での実測

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rasq.io/schema/rrl-node-0.1.json",
+  "title": "RRL node (JSON wire, draft v0.1)",
+  "type": "object",
+  "required": ["t"],
+  "additionalProperties": false,
+  "properties": {
+    "t": {
+      "type": "string",
+      "enum": [
+        "Text", "Icon", "Image", "Row", "Column", "Stack", "Grid", "Scroll", "Canvas", "Spacer",
+        "Input", "Avatar", "Badge", "RichText", "MediaGrid", "ActionButton", "Timestamp", "Button",
+        "ListTile", "SwitchListTile", "RadioListTile", "ValueListTile", "WarningListTile", "DestructiveListTile", "SectionHeader",
+        "PostTile", "ActionBar", "TrendHeader", "UserRow", "UserTileLarge", "PollWidget", "NotificationTile", "PluginTile", "VCCard",
+        "CollapsedPost", "HeaderedListView", "SortableList", "SegmentedControl", "Tabs",
+        "If", "ForEach", "Call", "Bind", "Slot", "Stream"
+      ]
+    },
+    "k": { "type": "string", "description": "Explicit key, unique among siblings. ForEach items use the item id." },
+    "tag": {
+      "type": "string",
+      "description": "Semantic tag — only on nodes that form the post content (D-019).",
+      "enum": ["main_text", "cw", "pic", "video", "gif", "file", "vote", "vote_option", "quote", "link", "hashtag", "mention", "emoji", "reaction", "user_name", "user_handle", "time"]
+    },
+    "role": { "type": "string", "enum": ["threadNav", "contentBody", "mediaItem", "actionBar"] },
+    "p": { "type": "object", "description": "Props. String values starting with \"$.\" are Bind references.", "additionalProperties": true },
+    "on": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tap": { "type": "string" }, "longPress": { "type": "string" },
+        "pointerDown": { "type": "string" }, "pointerMove": { "type": "string" }, "pointerUp": { "type": "string" },
+        "confirm": { "type": "string" }, "mount": { "type": "string" }
+      }
+    },
+    "c": { "type": "array", "items": { "$ref": "#" } }
+  }
+}
