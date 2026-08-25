@@ -9,6 +9,10 @@ crate-type = ["cdylib", "staticlib", "lib"]
 
 [dependencies]
 wasmi = "1"
+serde_json = "1"
+# Native `net.fetch` backend (PROTOCOL §4 / D-023): blocking HTTP inside the
+# runtime so mobile hosts don't need a synchronous Dart HTTP bridge. Pure
+# Rust TLS (rustls) so it cross-compiles to iOS/Android untouched.
+ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 
 [dev-dependencies]
-serde_json = "1"

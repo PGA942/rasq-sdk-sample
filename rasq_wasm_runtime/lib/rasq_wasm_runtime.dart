@@ -41,7 +41,12 @@ class RasqWasmPlugin {
   /// Instantiates a wasm module from its raw bytes. [hostFn] serves the
   /// plugin's host-function calls; without it every `rasq.host_fn` call
   /// answers `E00`.
-  factory RasqWasmPlugin.fromBytes(Uint8List wasmBytes, {RasqHostFnHandler? hostFn}) {
+  ///
+  /// [nativeFetch] serves `net.fetch` **inside the runtime** (blocking HTTP,
+  /// rustls — works on iOS/Android where the embedder has no synchronous
+  /// HTTP). While enabled, `net.fetch` never reaches [hostFn]; the calling
+  /// isolate blocks for the duration of each request.
+  factory RasqWasmPlugin.fromBytes(Uint8List wasmBytes, {RasqHostFnHandler? hostFn, bool nativeFetch = false}) {
     final bytesPtr = malloc<ffi.Uint8>(wasmBytes.length);
     ffi.NativeCallable<bindings.RasqHostFnCallbackFunction>? callable;
     try {
@@ -76,6 +81,7 @@ class RasqWasmPlugin {
         callable?.close();
         throw RasqWasmInstantiateException();
       }
+      if (nativeFetch) bindings.rasq_wasm_set_native_fetch(instance, true);
       return RasqWasmPlugin._(instance, callable);
     } finally {
       malloc.free(bytesPtr);
