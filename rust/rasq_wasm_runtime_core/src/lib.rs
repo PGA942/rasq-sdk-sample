@@ -7,12 +7,25 @@
 //! only shuttles bytes across the host<->wasm boundary, it does not
 //! interpret the messages.
 
-use std::ffi::{c_char, CStr, CString};
+use std::ffi::{c_char, c_void, CStr, CString};
 use std::slice;
-use wasmi::{Engine, Instance, Linker, Memory, Module, Store, TypedFunc};
+use wasmi::{Caller, Engine, Instance, Linker, Memory, Module, Store, TypedFunc};
+
+/// Host-function callback provided by the embedder (Dart via FFI).
+///
+/// `request` is a NUL-terminated `rasq.hostfn/1` JSON string. The returned
+/// string must be allocated with [`rasq_wasm_string_dup`] (so this crate can
+/// free it); returning null means "no handler" and yields an `E00` error to
+/// the plugin.
+pub type RasqHostFnCallback = extern "C" fn(request: *const c_char, user_data: *mut c_void) -> *mut c_char;
+
+struct HostState {
+    callback: Option<RasqHostFnCallback>,
+    user_data: usize,
+}
 
 pub struct RasqWasmInstance {
-    store: Store<()>,
+    store: Store<HostState>,
     memory: Memory,
     instance: Instance,
 }
@@ -37,11 +50,17 @@ impl From<wasmi::errors::MemoryError> for RasqWasmError {
 }
 
 impl RasqWasmInstance {
-    fn load(wasm_bytes: &[u8]) -> Result<Self, RasqWasmError> {
+    fn load(wasm_bytes: &[u8], callback: Option<RasqHostFnCallback>, user_data: usize) -> Result<Self, RasqWasmError> {
         let engine = Engine::default();
         let module = Module::new(&engine, wasm_bytes)?;
-        let mut store = Store::new(&engine, ());
-        let linker = Linker::new(&engine);
+        let mut store = Store::new(&engine, HostState { callback, user_data });
+        let mut linker = Linker::new(&engine);
+        // PROTOCOL.md §4.1: (import "rasq" "host_fn" (func (param i32 i32) (result i64))).
+        // Always provided; without a registered callback it answers E00 so a
+        // plugin never traps just because the host has no handler.
+        linker
+            .func_wrap("rasq", "host_fn", host_fn_impl)
+            .map_err(wasmi::Error::from)?;
         let instance = linker.instantiate_and_start(&mut store, &module)?;
         let memory = instance
             .get_memory(&store, "memory")
@@ -51,6 +70,11 @@ impl RasqWasmInstance {
             memory,
             instance,
         })
+    }
+
+    #[cfg(test)]
+    fn load_plain(wasm_bytes: &[u8]) -> Result<Self, RasqWasmError> {
+        Self::load(wasm_bytes, None, 0)
     }
 
     fn typed_func<Params, Results>(&mut self, name: &'static str) -> Result<TypedFunc<Params, Results>, RasqWasmError>
@@ -117,6 +141,52 @@ impl RasqWasmInstance {
     }
 }
 
+/// Implements the `rasq.host_fn` import (PROTOCOL.md §4.1, synchronous v1):
+/// read the request JSON from wasm memory → call the embedder's callback →
+/// allocate the response inside wasm memory (via the plugin's `alloc`) and
+/// return `(ptr << 32) | len`.
+fn host_fn_impl(mut caller: Caller<'_, HostState>, ptr: u32, len: u32) -> Result<i64, wasmi::Error> {
+    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+        Some(m) => m,
+        None => return Err(wasmi::Error::new("plugin has no exported memory")),
+    };
+    let mut request = vec![0u8; len as usize];
+    memory
+        .read(&caller, ptr as usize, &mut request)
+        .map_err(|e| wasmi::Error::new(format!("host_fn: bad request buffer: {e}")))?;
+
+    let response: String = match caller.data().callback {
+        None => r#"{"ok":false,"error":{"code":"E00","message":"no host_fn handler registered"}}"#.to_string(),
+        Some(callback) => {
+            let request_c = CString::new(request)
+                .unwrap_or_else(|_| CString::new("{}").unwrap());
+            let user_data = caller.data().user_data as *mut c_void;
+            let raw = callback(request_c.as_ptr(), user_data);
+            if raw.is_null() {
+                r#"{"ok":false,"error":{"code":"E00","message":"host_fn handler returned null"}}"#.to_string()
+            } else {
+                // Ownership: the callback allocated this via rasq_wasm_string_dup.
+                let s = unsafe { CStr::from_ptr(raw) }.to_string_lossy().into_owned();
+                unsafe { drop(CString::from_raw(raw)) };
+                s
+            }
+        }
+    };
+
+    let bytes = response.as_bytes();
+    let alloc = caller
+        .get_export("alloc")
+        .and_then(|e| e.into_func())
+        .ok_or_else(|| wasmi::Error::new("plugin has no exported alloc"))?
+        .typed::<u32, u32>(&caller)
+        .map_err(|e| wasmi::Error::new(format!("alloc signature mismatch: {e}")))?;
+    let out_ptr = alloc.call(&mut caller, bytes.len() as u32)?;
+    memory
+        .write(&mut caller, out_ptr as usize, bytes)
+        .map_err(|e| wasmi::Error::new(format!("host_fn: write response failed: {e}")))?;
+    Ok((((out_ptr as u64) << 32) | bytes.len() as u64) as i64)
+}
+
 fn result_to_c_string<T: Into<String>>(result: Result<T, RasqWasmError>) -> *mut c_char {
     let s = match result {
         Ok(v) => v.into(),
@@ -136,14 +206,46 @@ fn serde_error_json(e: &RasqWasmError) -> String {
     format!("{{\"ok\":false,\"error\":{{\"code\":\"C02\",\"message\":{message:?}}}}}")
 }
 
-/// Instantiate a wasm module from raw bytes. Returns null on failure.
+/// Instantiate a wasm module from raw bytes (no host-function handler:
+/// `rasq.host_fn` answers E00). Returns null on failure.
 #[no_mangle]
 pub extern "C" fn rasq_wasm_instantiate(bytes_ptr: *const u8, bytes_len: usize) -> *mut RasqWasmInstance {
     let bytes = unsafe { slice::from_raw_parts(bytes_ptr, bytes_len) };
-    match RasqWasmInstance::load(bytes) {
+    match RasqWasmInstance::load(bytes, None, 0) {
         Ok(instance) => Box::into_raw(Box::new(instance)),
         Err(_) => std::ptr::null_mut(),
     }
+}
+
+/// Instantiate with a host-function handler serving the `rasq.host_fn`
+/// import (PROTOCOL.md §4.1). `callback` receives the request JSON and must
+/// return a response string allocated with `rasq_wasm_string_dup` (or null
+/// for "unhandled"). `user_data` is passed through untouched.
+#[no_mangle]
+pub extern "C" fn rasq_wasm_instantiate_with_host(
+    bytes_ptr: *const u8,
+    bytes_len: usize,
+    callback: RasqHostFnCallback,
+    user_data: *mut c_void,
+) -> *mut RasqWasmInstance {
+    let bytes = unsafe { slice::from_raw_parts(bytes_ptr, bytes_len) };
+    match RasqWasmInstance::load(bytes, Some(callback), user_data as usize) {
+        Ok(instance) => Box::into_raw(Box::new(instance)),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Copies a NUL-terminated string into this crate's allocator. Host-function
+/// callbacks MUST return strings allocated here so the runtime can free them.
+#[no_mangle]
+pub extern "C" fn rasq_wasm_string_dup(s: *const c_char) -> *mut c_char {
+    if s.is_null() {
+        return std::ptr::null_mut();
+    }
+    let bytes = unsafe { CStr::from_ptr(s) }.to_bytes();
+    CString::new(bytes.to_vec())
+        .map(|c| c.into_raw())
+        .unwrap_or(std::ptr::null_mut())
 }
 
 /// Frees an instance created by `rasq_wasm_instantiate`.
@@ -209,7 +311,54 @@ mod tests {
     fn load() -> RasqWasmInstance {
         let bytes = std::fs::read(WASM_PATH)
             .expect("build misskey-wasm-sample first: cargo build --release --target wasm32-unknown-unknown -p misskey-wasm-sample");
-        RasqWasmInstance::load(&bytes).expect("instantiate")
+        RasqWasmInstance::load_plain(&bytes).expect("instantiate")
+    }
+
+    /// Test host_fn handler: storage.set/get over a process-global map, plus
+    /// an echo for everything else. Mirrors what the Dart side will provide.
+    extern "C" fn test_host_fn(request: *const c_char, _user_data: *mut c_void) -> *mut c_char {
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+        static STORE: Mutex<Option<HashMap<String, serde_json::Value>>> = Mutex::new(None);
+
+        let req: serde_json::Value =
+            serde_json::from_str(&unsafe { CStr::from_ptr(request) }.to_string_lossy()).unwrap();
+        let call_id = req["callId"].clone();
+        let args = &req["args"];
+        let mut store = STORE.lock().unwrap();
+        let store = store.get_or_insert_with(HashMap::new);
+        let value = match req["fn"].as_str().unwrap_or("") {
+            "storage.set" => {
+                store.insert(args["key"].as_str().unwrap().to_string(), args["value"].clone());
+                serde_json::json!({})
+            }
+            "storage.get" => serde_json::json!({"value": store.get(args["key"].as_str().unwrap())}),
+            other => serde_json::json!({"echo": other}),
+        };
+        let response = serde_json::json!({"callId": call_id, "ok": true, "value": value});
+        let c = CString::new(response.to_string()).unwrap();
+        rasq_wasm_string_dup(c.as_ptr())
+    }
+
+    #[test]
+    fn host_fn_round_trip_via_storage() {
+        let bytes = std::fs::read(WASM_PATH).expect("build misskey-wasm-sample first");
+        let mut instance =
+            RasqWasmInstance::load(&bytes, Some(test_host_fn), 0).expect("instantiate");
+        let json = instance
+            .call("storageRoundTrip", r#"{"key":"greeting","value":"やあ"}"#, "call-3")
+            .expect("call");
+        assert!(json.contains(r#""ok":true"#), "{json}");
+        assert!(json.contains("やあ"), "{json}");
+    }
+
+    #[test]
+    fn host_fn_without_handler_reports_e00() {
+        let mut instance = load();
+        let json = instance
+            .call("storageRoundTrip", r#"{"key":"k","value":1}"#, "call-4")
+            .expect("call");
+        assert!(json.contains("E00"), "{json}");
     }
 
     #[test]

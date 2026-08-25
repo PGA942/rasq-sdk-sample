@@ -13,30 +13,70 @@ class RasqWasmInstantiateException implements Exception {
   String toString() => 'RasqWasmInstantiateException: failed to instantiate wasm module';
 }
 
+/// Handles one host-function call from the plugin (`rasq.hostfn/1` request
+/// JSON in, `{callId, ok, value|error}` response JSON out). Return `null` for
+/// "unhandled" — the runtime turns that into an `E00` error for the plugin.
+///
+/// v1 is **synchronous**: the wasm plugin blocks inside `snapshot`/`patch`/
+/// `call` until this returns, so it runs on whatever isolate invoked those.
+typedef RasqHostFnHandler = String? Function(String requestJson);
+
 /// A loaded RASQ SNS plugin, running inside an embedded `wasmi` interpreter
 /// (D-007: chosen over a JIT'ing runtime so the same engine works on iOS).
 ///
 /// Speaks the `rasq.boundary/1` wire format from `PROTOCOL.md`: [snapshot]
 /// and [patch] are emitted by the plugin, [call] delivers a host function
-/// call into it. This class only shuttles the JSON strings across the FFI
-/// boundary — decoding/validating them is the host renderer's job.
+/// call into it, and the plugin's own `rasq.host_fn` calls (net.fetch /
+/// storage.* / ml.infer …, see `schema/host-fn.schema.json`) arrive at the
+/// [RasqHostFnHandler] given to [RasqWasmPlugin.fromBytes]. This class only
+/// shuttles JSON strings across the FFI boundary — decoding/validating them
+/// is the host runtime's job.
 class RasqWasmPlugin {
   final ffi.Pointer<bindings.RasqWasmInstance> _instance;
+  final ffi.NativeCallable<bindings.RasqHostFnCallbackFunction>? _callable;
   bool _destroyed = false;
 
-  RasqWasmPlugin._(this._instance);
+  RasqWasmPlugin._(this._instance, this._callable);
 
-  /// Instantiates a wasm module from its raw bytes.
-  factory RasqWasmPlugin.fromBytes(Uint8List wasmBytes) {
+  /// Instantiates a wasm module from its raw bytes. [hostFn] serves the
+  /// plugin's host-function calls; without it every `rasq.host_fn` call
+  /// answers `E00`.
+  factory RasqWasmPlugin.fromBytes(Uint8List wasmBytes, {RasqHostFnHandler? hostFn}) {
     final bytesPtr = malloc<ffi.Uint8>(wasmBytes.length);
+    ffi.NativeCallable<bindings.RasqHostFnCallbackFunction>? callable;
     try {
       bytesPtr.asTypedList(wasmBytes.length).setAll(0, wasmBytes);
-      final instance =
-          bindings.rasq_wasm_instantiate(bytesPtr, wasmBytes.length);
+      final ffi.Pointer<bindings.RasqWasmInstance> instance;
+      if (hostFn == null) {
+        instance = bindings.rasq_wasm_instantiate(bytesPtr, wasmBytes.length);
+      } else {
+        ffi.Pointer<ffi.Char> trampoline(ffi.Pointer<ffi.Char> request, ffi.Pointer<ffi.Void> userData) {
+          final String? response;
+          try {
+            response = hostFn(request.cast<Utf8>().toDartString());
+          } catch (_) {
+            return ffi.nullptr; // runtime reports E00 instead of trapping
+          }
+          if (response == null) return ffi.nullptr;
+          final tmp = response.toNativeUtf8();
+          try {
+            // Must be duplicated into the runtime's allocator (it frees it).
+            return bindings.rasq_wasm_string_dup(tmp.cast());
+          } finally {
+            malloc.free(tmp);
+          }
+        }
+
+        // isolateLocal: the callback fires synchronously while we're inside
+        // snapshot()/patch()/call() on this isolate's thread.
+        callable = ffi.NativeCallable<bindings.RasqHostFnCallbackFunction>.isolateLocal(trampoline);
+        instance = bindings.rasq_wasm_instantiate_with_host(bytesPtr, wasmBytes.length, callable.nativeFunction, ffi.nullptr);
+      }
       if (instance == ffi.nullptr) {
+        callable?.close();
         throw RasqWasmInstantiateException();
       }
-      return RasqWasmPlugin._(instance);
+      return RasqWasmPlugin._(instance, callable);
     } finally {
       malloc.free(bytesPtr);
     }
@@ -79,6 +119,7 @@ class RasqWasmPlugin {
   void dispose() {
     if (_destroyed) return;
     bindings.rasq_wasm_destroy(_instance);
+    _callable?.close();
     _destroyed = true;
   }
 

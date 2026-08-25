@@ -57,6 +57,11 @@ rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-and
       `../rasq_wasm_runtime/`
 - [x] Cross-compilation wiring in `rasq_wasm_runtime/hook/build.dart` for
       macOS / iOS (device + simulator) / Android (all ABIs) / Linux / Windows
+- [x] Host functions over the `rasq.host_fn` import (PROTOCOL §4.1, sync v1):
+      wasmi serves the import, the embedder registers a callback
+      (`rasq_wasm_instantiate_with_host`), Dart provides handlers per
+      `schema/host-fn.schema.json` — proven wasm → Dart → wasm by the
+      `storageRoundTrip` sample fn
 - [ ] Run the example on a physical iPhone and measure interpreter throughput
       (D-007: compare `wasmi` vs `wasm3`/WAMR for binary size + perf)
 - [ ] Real plugin logic (talk to a Misskey instance) instead of the

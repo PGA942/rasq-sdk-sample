@@ -16,5 +16,7 @@ void main() {
     expect(find.textContaining('"type":"snapshot"'), findsOneWidget);
     expect(find.textContaining('"type":"patch"'), findsOneWidget);
     expect(find.textContaining('"postId":"abc"'), findsWidgets);
+    // Host-function round trip: the value went wasm → Dart storage → wasm.
+    expect(find.textContaining('こんにちは wasm'), findsOneWidget);
   });
 }

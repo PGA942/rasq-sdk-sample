@@ -1,0 +1,20 @@
+[
+  { "s": "text", "text": "打ち上げ成功！ " },
+  { "s": "transform", "fn": "tada", "c": [ { "s": "emoji", "shortcode": "rocket_local" } ] },
+  { "s": "text", "text": " " },
+  {
+    "s": "transform", "fn": "spin", "args": { "speed": "1.5s" },
+    "c": [
+      { "s": "transform", "fn": "x2", "c": [ { "s": "text", "text": "回る", "bold": true } ] }
+    ]
+  },
+  { "s": "text", "text": "\n詳細は " },
+  { "s": "link", "text": "blog.example.com/launch", "url": "https://blog.example.com/launch" },
+  { "s": "text", "text": " " },
+  { "s": "hashtag", "tag": "打上会" },
+  { "s": "text", "text": " " },
+  { "s": "mention", "handle": "username", "host": "misskey.io" },
+  { "s": "text", "text": "\n" },
+  { "s": "transform", "fn": "fg", "args": { "color": "ff5555" }, "c": [ { "s": "text", "text": "赤文字" } ] },
+  { "s": "transform", "fn": "unknown_future_fn", "c": [ { "s": "text", "text": "（未知fnは中身そのまま）" } ] }
+]

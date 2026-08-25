@@ -6,6 +6,7 @@ import 'dart:ffi' as ffi;
 
 /// Instantiates a wasm module from raw bytes. Returns NULL on failure
 /// (invalid module, missing `memory`/`alloc`/`dealloc` exports, ...).
+/// The `rasq.host_fn` import answers E00 (no handler) for every call.
 @ffi.Native<
   ffi.Pointer<RasqWasmInstance> Function(ffi.Pointer<ffi.Uint8>, ffi.IntPtr)
 >()
@@ -13,6 +14,28 @@ external ffi.Pointer<RasqWasmInstance> rasq_wasm_instantiate(
   ffi.Pointer<ffi.Uint8> bytes_ptr,
   int bytes_len,
 );
+
+/// Instantiates with a host-function handler. `user_data` is passed through
+/// to every callback invocation untouched.
+@ffi.Native<
+  ffi.Pointer<RasqWasmInstance> Function(
+    ffi.Pointer<ffi.Uint8>,
+    ffi.IntPtr,
+    RasqHostFnCallback,
+    ffi.Pointer<ffi.Void>,
+  )
+>()
+external ffi.Pointer<RasqWasmInstance> rasq_wasm_instantiate_with_host(
+  ffi.Pointer<ffi.Uint8> bytes_ptr,
+  int bytes_len,
+  RasqHostFnCallback callback,
+  ffi.Pointer<ffi.Void> user_data,
+);
+
+/// Copies a NUL-terminated string into the runtime's allocator. Host-function
+/// callbacks MUST return strings allocated here.
+@ffi.Native<ffi.Pointer<ffi.Char> Function(ffi.Pointer<ffi.Char>)>()
+external ffi.Pointer<ffi.Char> rasq_wasm_string_dup(ffi.Pointer<ffi.Char> s);
 
 /// Frees an instance created by rasq_wasm_instantiate.
 @ffi.Native<ffi.Void Function(ffi.Pointer<RasqWasmInstance>)>()
@@ -55,3 +78,15 @@ external ffi.Pointer<ffi.Char> rasq_wasm_call(
 external void rasq_wasm_free_string(ffi.Pointer<ffi.Char> s);
 
 final class RasqWasmInstance extends ffi.Opaque {}
+
+typedef RasqHostFnCallbackFunction = ffi.Pointer<ffi.Char> Function(
+  ffi.Pointer<ffi.Char> request,
+  ffi.Pointer<ffi.Void> user_data,
+);
+
+/// Host-function handler serving the plugin's `rasq.host_fn` import
+/// (PROTOCOL.md §4.1, synchronous v1). Receives a `rasq.hostfn/1` request
+/// JSON; must return a response JSON allocated with rasq_wasm_string_dup
+/// (the runtime frees it), or NULL for "unhandled" (becomes an E00 error).
+typedef RasqHostFnCallback =
+    ffi.Pointer<ffi.NativeFunction<RasqHostFnCallbackFunction>>;

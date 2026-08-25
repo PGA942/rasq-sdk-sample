@@ -1,0 +1,20 @@
+{
+  "id": "rasq.official.astell/vc-summarizer",
+  "version": "0.1.0",
+  "task": "generation",
+  "io": { "input": "chat", "output": "text" },
+  "runtimes": {
+    "llama": {
+      "file": "models/summarizer-q4_k_m.gguf",
+      "promptTemplate": "<|system|>{system}<|user|>{input}<|assistant|>",
+      "contextTokens": 4096,
+      "sampling": { "temperature": 0.3, "topP": 0.9, "maxTokens": 256, "stop": ["<|user|>"] }
+    },
+    "server": { "engine": "vllm", "model": "rasq/vc-summarizer-0.1", "openaiCompatible": true }
+  },
+  "placement": { "prefer": ["server", "device"], "minDeviceRamMb": 4096, "allowMeteredDownload": false },
+  "artifacts": {
+    "llama": { "sizeMb": 2100, "sha512": "TODO" }
+  },
+  "license": "proprietary"
+}

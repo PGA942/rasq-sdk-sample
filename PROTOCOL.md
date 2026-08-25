@@ -58,6 +58,16 @@ RAi の位置検索、タイムラインソート、リレーショナルTL(本�
 
 付けないもの: `Icon`(装飾)、`Avatar`、`ActionBar`/`ActionButton`、`Spacer`、レイアウト(`Row/Column/...`)。
 
+### 2.3 RSL スパン(本文のワイヤ)
+
+`RichText` の `p.source` は **生文字列**(ホストが plain/MFM/HTML を解析)または **スパン配列**(プラグインが解析済み)のどちらでも良い。スパンの JSON は [`schema/rsl-span.schema.json`](schema/rsl-span.schema.json)、例は [`examples/mfm-body.rsl.json`](examples/mfm-body.rsl.json)。
+
+- 種別: `text`(bold/italic/strike/small/code)/ `emoji` / `image` / `link` / `mention` / `hashtag` / `transform`
+- **`transform` = MFM 装飾関数**。`{s:"transform", fn, args, c:[...]}` で入れ子可。ホストが必ず描画するコアセット:
+  `x2 x3 x4 small blur rotate flip fg bg center shake spin jump bounce rainbow twitch jelly tada plain`
+  未知の `fn` は **中身をそのまま描画**(剥がし)。派手系(アニメーション)の描画はホストのモーション設定で無効化できる。
+- 検証ゲート: sideload content のスパンは非インタラクティブ化(旧D2)、`link`/`mention` の先はホストが開く。
+
 ## 3. メッセージ
 
 すべて `{ "schema": "rasq.boundary/1", "scope": instanceScope, ... }` を共通ヘッダに持つ。
@@ -97,6 +107,29 @@ RAi の位置検索、タイムラインソート、リレーショナルTL(本�
 | `store.read` | `{ kind: actionState|followState|readState, key }` | — |
 | `geometry.lookup` | `{ tag? , role?, nodeId? }` → 画面上の矩形(RAi 位置検索・アクセシビリティ共用) | `fow.system` |
 
+各 fn の args / value の形は [`schema/host-fn.schema.json`](schema/host-fn.schema.json) を正とする。
+
+### 4.1 wasm ABI(v1・同期)
+
+ホスト関数は wasm の **import** として渡す。v1 は同期(呼び出し中プラグインはブロック。非同期化は callId ベースの poll/notify を将来の v2 で):
+
+```
+(import "rasq" "host_fn" (func (param i32 i32) (result i64)))
+  ;; param  = リクエスト JSON (`rasq.hostfn/1`: {schema, callId, fn, args}) の ptr/len
+  ;; result = レスポンス JSON ({callId, ok, value|error}) を書いた wasm メモリの (ptr<<32)|len
+  ;;          ホストはプラグインの `alloc` でメモリを確保して書き込む。プラグイン側が `dealloc` で返す
+```
+
+権限の無い fn・未知の fn は `{ok:false, error:{code:"E01"|"C01"}}` を返す(トラップさせない)。
+
+### 4.2 `ml.infer` の配置解決(D-018)
+
+- モデルは [`schema/model-manifest.schema.json`](schema/model-manifest.schema.json) のマニフェストで宣言し、`ml.infer` は **マニフェスト id** で参照する。プラグインはエンドポイントもファイルも見えない。
+- マニフェストの `runtimes` に載せられるもの: **デバイス側 = `onnx`(onnx runtime)/ `llama`(llama.cpp)**、**サーバー側 = `server`(Triton Inference Server / vLLM)**。同じ論理 IO(`io.input`/`io.output`)を全ランタイムで満たすこと。
+- **配置はホストが解決**(端末 RAM・電源・従量回線・ポリシー・審査状態)。`placementHint` はヒント。結果の `value.placement` / `value.runtime` で実際にどこで動いたかが返る。
+- onnx 実行時のテンソル詰め替え・トークナイズはマニフェストの `inputs[].semantic` / `tokenizer` に従ってホストが行う。
+- 例: [`examples/reaction-predictor.model.json`](examples/reaction-predictor.model.json)(onnx int8 + Triton)/ [`examples/astell-summarizer.model.json`](examples/astell-summarizer.model.json)(gguf + vLLM)。
+
 ## 5. アクションと投稿ごとのアイコン(D-017)
 
 - 短押し `performAction(actionId, postId)`(引数なし)は**プラグインが中身を決める**(Misskey 本番: 予測モデルで最有力の絵文字をリアクション)。長押しは絵文字ピッカー FOW → `args.reaction`。
@@ -123,4 +156,7 @@ RAi の位置検索、タイムラインソート、リレーショナルTL(本�
 ## 7. 未決
 - D-005 content/action スロット仕様の形式定義 — `roles`/`slots` 宣言の JSON 化
 - D-006 `ActionRef` 形式(`pluginId:accountKey:pluginVersion:fn`)の確定
-- D-007 WASM ランタイム選定(wasm3 / WAMR / wasmi; iOS インタープリタ)と `misskey-wasm-sample` での実測
+- D-007 WASM ランタイム選定 — `wasmi` で仮組み済み(rust/)。wasm3 / WAMR との実測比較と iOS 実機計測が残
+- host_fn の非同期化(v2: callId + poll/notify)。v1 は同期
+- `net.fetch` のストリーミング / バイナリ大容量(v1 は bodyB64)
+- モデルマニフェストの配布・審査フロー(ストア側)と `function.json` への `models` 欄追加

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:rasq_wasm_runtime/rasq_wasm_runtime.dart';
@@ -27,7 +29,23 @@ class _MyAppState extends State<MyApp> {
 
   Future<_WasmDemoResult> _runDemo() async {
     final bytes = await rootBundle.load('assets/misskey_wasm_sample.wasm');
-    final plugin = RasqWasmPlugin.fromBytes(bytes.buffer.asUint8List());
+    // Host functions (schema/host-fn.schema.json): storage.* over an
+    // in-memory map — enough to demo the wasm → host → wasm round trip.
+    final storage = <String, Object?>{};
+    final plugin = RasqWasmPlugin.fromBytes(bytes.buffer.asUint8List(), hostFn: (requestJson) {
+      final req = jsonDecode(requestJson) as Map<String, dynamic>;
+      final args = (req['args'] as Map?)?.cast<String, Object?>() ?? const {};
+      final value = switch (req['fn'] as String?) {
+        'storage.set' => (() {
+            storage[args['key'] as String] = args['value'];
+            return const <String, Object?>{};
+          })(),
+        'storage.get' => {'value': storage[args['key'] as String]},
+        _ => null, // unhandled → runtime answers E00
+      };
+      if (value == null) return null;
+      return jsonEncode({'callId': req['callId'], 'ok': true, 'value': value});
+    });
     try {
       final snapshot = plugin.snapshot();
       final patch = plugin.patch();
@@ -36,7 +54,12 @@ class _MyAppState extends State<MyApp> {
         argsJson: '{"postId":"abc"}',
         callId: 'call-1',
       );
-      return _WasmDemoResult(snapshot: snapshot, patch: patch, call: call);
+      final hostFnDemo = plugin.call(
+        fn: 'storageRoundTrip',
+        argsJson: '{"key":"greeting","value":"こんにちは wasm"}',
+        callId: 'call-2',
+      );
+      return _WasmDemoResult(snapshot: snapshot, patch: patch, call: call, hostFnDemo: hostFnDemo);
     } finally {
       plugin.dispose();
     }
@@ -70,6 +93,9 @@ class _MyAppState extends State<MyApp> {
                   const SizedBox(height: 16),
                   const Text('call(openThread)', style: TextStyle(fontWeight: FontWeight.bold)),
                   SelectableText(result.call),
+                  const SizedBox(height: 16),
+                  const Text('call(storageRoundTrip) — wasm → host_fn(storage.*) → wasm', style: TextStyle(fontWeight: FontWeight.bold)),
+                  SelectableText(result.hostFnDemo),
                 ],
               ),
             );
@@ -84,6 +110,7 @@ class _WasmDemoResult {
   final String snapshot;
   final String patch;
   final String call;
+  final String hostFnDemo;
 
-  _WasmDemoResult({required this.snapshot, required this.patch, required this.call});
+  _WasmDemoResult({required this.snapshot, required this.patch, required this.call, required this.hostFnDemo});
 }
