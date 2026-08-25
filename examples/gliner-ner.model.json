@@ -1,0 +1,29 @@
+{
+  "id": "rasq.official.search/gliner-ner",
+  "version": "0.1.0",
+  "task": "custom",
+  "io": { "input": "texts", "output": "tensors" },
+  "runtimes": {
+    "onnx": {
+      "file": "models/gliner_multi_small_q.onnx",
+      "quantization": "int8",
+      "inputs": [
+        { "name": "input_ids", "dtype": "int64", "shape": [1, "seq"], "semantic": "token_ids" },
+        { "name": "attention_mask", "dtype": "int64", "shape": [1, "seq"], "semantic": "attention_mask" },
+        { "name": "words_mask", "dtype": "int64", "shape": [1, "seq"], "semantic": "raw" },
+        { "name": "text_lengths", "dtype": "int64", "shape": [1, 1], "semantic": "raw" },
+        { "name": "span_idx", "dtype": "int64", "shape": [1, "spans", 2], "semantic": "raw" },
+        { "name": "span_mask", "dtype": "bool", "shape": [1, "spans"], "semantic": "raw" }
+      ],
+      "outputs": [
+        { "name": "logits", "dtype": "float32", "shape": [1, "spans", "labels"], "semantic": "logits" }
+      ],
+      "tokenizer": { "type": "hf-tokenizer-json", "file": "models/gliner_tokenizer.json", "maxTokens": 384, "padding": "longest" }
+    },
+    "server": { "engine": "triton", "model": "gliner_multi_small" }
+  },
+  "placement": { "prefer": ["device", "server"], "minDeviceRamMb": 1024, "allowMeteredDownload": false },
+  "artifacts": { "onnx": { "sizeMb": 170, "sha512": "TODO" } },
+  "license": "apache-2.0",
+  "$comment": "ゼロショット NER (D-022): 検索の関連順とリレーショナルTLで、クエリ/ジャンル語・ユーザー表示名・一般固有名詞をゼロショット抽出してルールベース段のマッチ語彙を広げる。ラベルはリクエスト時に動的指定(ゼロショット)。重いので最終版で差し替え前提。"
+}
