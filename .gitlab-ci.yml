@@ -1,0 +1,55 @@
+# RASQ SDK sample CI
+# - rust: builds the wasm plugin sample + runs the wasmi runtime tests
+# - dart: runs the Flutter FFI plugin's tests (the build hook shells out to
+#   cargo, so Rust is installed in that job too).
+# Flutter image is PINNED (3.47.1 = Dart 3.13.1); `flutter:stable` lags and
+# shipped Dart 3.12, which fails the packages' `sdk: ^3.13.1` constraint.
+stages:
+- test
+
+rust:
+  stage: test
+  image: rust:1
+  cache:
+    key: cargo-$CI_COMMIT_REF_SLUG
+    paths:
+      - .cargo/
+      - rust/target/
+  variables:
+    CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
+  script:
+    - rustup target add wasm32-unknown-unknown
+    - cd rust
+    - cargo build --release --target wasm32-unknown-unknown -p misskey-wasm-sample
+    - cargo test --release -p rasq_wasm_runtime_core
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+
+dart:
+  stage: test
+  image: ghcr.io/cirruslabs/flutter:3.47.1
+  cache:
+    key: dart-$CI_COMMIT_REF_SLUG
+    paths:
+      - .pub-cache/
+      - .cargo/
+  variables:
+    PUB_CACHE: "$CI_PROJECT_DIR/.pub-cache"
+    CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
+  before_script:
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+    - export PATH="$CARGO_HOME/bin:$PATH"
+    - rustup target add wasm32-unknown-unknown
+    - (cd rust && cargo build --release --target wasm32-unknown-unknown -p misskey-wasm-sample)
+  script:
+    - cd rasq_wasm_runtime
+    - dart pub get
+    - dart analyze lib test hook
+    - dart test
+    - cd example
+    - flutter pub get
+    - flutter test
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
