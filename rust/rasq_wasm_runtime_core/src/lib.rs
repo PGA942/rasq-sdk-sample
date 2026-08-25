@@ -333,6 +333,33 @@ mod tests {
                 serde_json::json!({})
             }
             "storage.get" => serde_json::json!({"value": store.get(args["key"].as_str().unwrap())}),
+            // Canned Misskey local-timeline (2 notes) for the timeline test.
+            "net.fetch" => serde_json::json!({
+                "status": 200,
+                "headers": {},
+                "bodyText": serde_json::json!([
+                    {
+                        "id": "n1",
+                        "text": "打ち上げ成功！ $[tada 🎉]",
+                        "cw": null,
+                        "createdAt": "2026-08-23T12:00:00.000Z",
+                        "user": {"username": "douglas", "name": "ダグラス", "host": null, "avatarUrl": "https://example.invalid/a.png"},
+                        "files": [{"id": "f1", "type": "image/png", "url": "https://example.invalid/1.png", "thumbnailUrl": null, "isSensitive": false}],
+                        "repliesCount": 2, "renoteCount": 5,
+                        "reactions": {"👍": 3, "🎉": 4}
+                    },
+                    {
+                        "id": "n2",
+                        "text": "CWつき",
+                        "cw": "ネタバレ",
+                        "createdAt": "2026-08-23T11:00:00.000Z",
+                        "user": {"username": "tivard", "name": null, "host": "other.example", "avatarUrl": null},
+                        "files": [],
+                        "repliesCount": 0, "renoteCount": 0,
+                        "reactions": {}
+                    }
+                ]).to_string()
+            }),
             other => serde_json::json!({"echo": other}),
         };
         let response = serde_json::json!({"callId": call_id, "ok": true, "value": value});
@@ -350,6 +377,33 @@ mod tests {
             .expect("call");
         assert!(json.contains(r#""ok":true"#), "{json}");
         assert!(json.contains("やあ"), "{json}");
+    }
+
+    #[test]
+    fn timeline_rebuilds_the_tree_from_net_fetch() {
+        let bytes = std::fs::read(WASM_PATH).expect("build misskey-wasm-sample first");
+        let mut instance =
+            RasqWasmInstance::load(&bytes, Some(test_host_fn), 0).expect("instantiate");
+
+        // Initial snapshot: sample tile at rev 1.
+        let before = instance.snapshot().expect("snapshot");
+        assert!(before.contains("post-sample-1"), "{before}");
+
+        let result = instance
+            .call("timeline", r#"{"host":"misskey.example","limit":10}"#, "call-t")
+            .expect("call");
+        assert!(result.contains(r#""ok":true"#), "{result}");
+        assert!(result.contains(r#""treeUpdated":true"#), "{result}");
+        assert!(result.contains(r#""count":2"#), "{result}");
+
+        let after = instance.snapshot().expect("snapshot 2");
+        assert!(after.contains(r#""rev":2"#), "{after}");
+        assert!(after.contains("ダグラス"), "{after}");
+        assert!(after.contains("post-n1"), "{after}");
+        assert!(after.contains("【CW: ネタバレ】"), "{after}");
+        assert!(after.contains(r#""instance":"misskey.example""#), "{after}"); // local user → fetch host
+        assert!(after.contains(r#""instance":"other.example""#), "{after}"); // remote user → note host
+        assert!(after.contains(r#""count":5"#), "{after}"); // renote count in ActionBar states
     }
 
     #[test]
