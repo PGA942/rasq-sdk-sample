@@ -5,15 +5,20 @@ RASQ(プラグインベース SNS クライアント)の **プラグイン SDK �
 Misskey アダプタ(`packages/sns_misskey`)で検証したものを、ここで言語非依存の契約として固めていく。
 
 - [`CONTRACT.md`](CONTRACT.md) — Host ⇄ SNS plugin 契約 draft v0.2(`rasq-client/docs/PLUGIN_CONTRACT.md` と同内容)
-- [`PROTOCOL.md`](PROTOCOL.md) — 境界プロトコル draft v0.1(Snapshot / Patch / Call / Lifecycle / ホスト関数 / RRL ノードと意味タグ / 検証ゲート)
+- [`PROTOCOL.md`](PROTOCOL.md) — 境界プロトコル draft v0.1(Snapshot / Patch / Call / Lifecycle / ホスト関数 wasm ABI / RSL スパン / RRL ノードと意味タグ / 検証ゲート / ml.infer 配置解決)
 - [`schema/rrl-node.schema.json`](schema/rrl-node.schema.json) / [`schema/boundary.schema.json`](schema/boundary.schema.json) — RRL ノードと境界メッセージの JSON Schema
+- [`schema/rsl-span.schema.json`](schema/rsl-span.schema.json) — 本文(RSL)スパンのワイヤ。MFM 装飾は `transform` スパン
+- [`schema/host-fn.schema.json`](schema/host-fn.schema.json) — ホスト関数(`rasq.hostfn/1`)の fn 別 args/value
+- [`schema/model-manifest.schema.json`](schema/model-manifest.schema.json) — ML モデルマニフェスト(デバイス: onnx runtime / llama.cpp、サーバー: Triton / vLLM。配置はホストが解決)
 - [`examples/post-tile.rrl.json`](examples/post-tile.rrl.json) — 意味タグ付き PostTile の snapshot 例
+- [`examples/mfm-body.rsl.json`](examples/mfm-body.rsl.json) — MFM transform 入り本文スパンの例
+- [`examples/reaction-predictor.model.json`](examples/reaction-predictor.model.json) / [`examples/astell-summarizer.model.json`](examples/astell-summarizer.model.json) — モデルマニフェスト例(onnx+Triton / gguf+vLLM)
 - [`schema/manifest.schema.json`](schema/manifest.schema.json) — `PluginManifest`(function.json 最小サブセット)の JSON Schema
 - [`examples/misskey.function.json`](examples/misskey.function.json) — Misskey 公式プラグインのマニフェスト例
 
 ## 次にやること(M3)
 
-1. `misskey-wasm-sample` で `PROTOCOL.md` の `snapshot/patch/call` を WASM 側から出す最小サンプル(まずは JSON v1)
-2. WASM ランタイム選定(D-007: wasm3 / WAMR / wasmi、iOS インタープリタ基準)の実測
+1. ~~`misskey-wasm-sample` で `PROTOCOL.md` の `snapshot/patch/call` を WASM 側から出す最小サンプル(まずは JSON v1)~~ → [`rust/misskey-wasm-sample`](rust/misskey-wasm-sample)
+2. ~~WASM ランタイム選定(D-007: wasm3 / WAMR / wasmi、iOS インタープリタ基準)の実測~~ → `wasmi` を [`rust/rasq_wasm_runtime_core`](rust/rasq_wasm_runtime_core) に組み込み、Flutter プラグイン [`rasq_wasm_runtime`](rasq_wasm_runtime) から実行を確認(macOS 実行、iOS シミュレータ / Android 全 ABI ビルド)。wasm3/WAMR との比較実測と iOS 実機計測は未着手(`rust/README.md` 参照)
 3. スロット宣言(D-005)と `ActionRef`(D-006)の形式確定 → `schema/` に追加
 4. 性能が必要なら Snapshot を FlatBuffers/ZeroCopy 化(論理モデルは維持)

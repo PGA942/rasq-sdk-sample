@@ -1,0 +1,19 @@
+name: rasq_wasm_runtime
+description: >
+  RASQ M3 WASM host runtime: embeds wasmi (a pure-Rust WASM interpreter,
+  no JIT) so SNS plugins compiled to wasm32 can run inside the Flutter host.
+version: 0.0.1
+
+environment:
+  sdk: ^3.13.1
+
+dependencies:
+  code_assets: ^1.1.0
+  ffi: ^2.1.4
+  hooks: ^2.0.0
+  logging: ^1.3.0
+
+dev_dependencies:
+  ffigen: ^20.1.1
+  flutter_lints: ^6.0.0
+  test: ^1.28.0

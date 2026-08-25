@@ -1,0 +1,35 @@
+{
+  "id": "rasq.official.misskey/reaction-predictor",
+  "version": "0.1.0",
+  "task": "classification",
+  "io": { "input": "text", "output": "labels" },
+  "runtimes": {
+    "onnx": {
+      "file": "models/reaction_predictor.onnx",
+      "quantization": "int8",
+      "inputs": [
+        { "name": "input_ids", "dtype": "int64", "shape": [1, "seq"], "semantic": "token_ids" },
+        { "name": "attention_mask", "dtype": "int64", "shape": [1, "seq"], "semantic": "attention_mask" }
+      ],
+      "outputs": [
+        { "name": "logits", "dtype": "float32", "shape": [1, "labels"], "semantic": "logits" }
+      ],
+      "tokenizer": {
+        "type": "sentencepiece",
+        "file": "models/tokenizer.model",
+        "maxTokens": 128,
+        "addBos": true,
+        "addEos": true,
+        "padding": "longest",
+        "special": { "pad": "<pad>", "unk": "<unk>" }
+      },
+      "labelsFile": "models/reaction_labels.json"
+    },
+    "server": { "engine": "triton", "model": "reaction_predictor_v01" }
+  },
+  "placement": { "prefer": ["device", "server"], "minDeviceRamMb": 512, "allowMeteredDownload": false },
+  "artifacts": {
+    "onnx": { "sizeMb": 38.5, "sha512": "TODO" }
+  },
+  "license": "proprietary"
+}

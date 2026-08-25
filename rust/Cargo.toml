@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = [
+    "misskey-wasm-sample",
+    "rasq_wasm_runtime_core",
+]
+
+[profile.release]
+opt-level = "s"
+lto = true

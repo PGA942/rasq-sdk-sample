@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rasq.io/schema/rsl-span-0.1.json",
+  "title": "RSL span (inline body wire, draft v0.1)",
+  "description": "Structured form of a post body. `RichText.p.source` accepts either a raw string (the host parses plain/MFM/HTML) or an array of these spans (the plugin pre-parsed). Transform spans carry MFM-style decorations; unknown `fn`s degrade to rendering the children unchanged.",
+  "type": "array",
+  "items": { "$ref": "#/$defs/span" },
+  "$defs": {
+    "span": {
+      "type": "object",
+      "required": ["s"],
+      "oneOf": [
+        {
+          "properties": {
+            "s": { "const": "text" },
+            "text": { "type": "string" },
+            "bold": { "type": "boolean" },
+            "italic": { "type": "boolean" },
+            "strike": { "type": "boolean" },
+            "small": { "type": "boolean" },
+            "code": { "type": "boolean" }
+          },
+          "required": ["s", "text"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "s": { "const": "emoji" },
+            "shortcode": { "type": "string" },
+            "url": { "type": "string", "format": "uri" }
+          },
+          "required": ["s", "shortcode"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "s": { "const": "image" },
+            "url": { "type": "string", "format": "uri" },
+            "height": { "type": "number" },
+            "alt": { "type": "string" }
+          },
+          "required": ["s", "url"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "s": { "const": "link" },
+            "text": { "type": "string" },
+            "url": { "type": "string", "format": "uri" }
+          },
+          "required": ["s", "url"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "s": { "const": "mention" },
+            "handle": { "type": "string" },
+            "host": { "type": "string" }
+          },
+          "required": ["s", "handle"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "s": { "const": "hashtag" },
+            "tag": { "type": "string" }
+          },
+          "required": ["s", "tag"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "s": { "const": "transform" },
+            "fn": {
+              "type": "string",
+              "description": "Decoration function. Core set every host must render: x2 x3 x4 small blur rotate flip fg bg center shake spin jump bounce rainbow twitch jelly tada plain. Anything else: render children unchanged."
+            },
+            "args": {
+              "type": "object",
+              "additionalProperties": { "type": ["string", "number", "boolean"] },
+              "description": "MFM-style args, e.g. {\"deg\": 30}, {\"speed\": \"0.5s\"}, {\"h\": true}, {\"color\": \"ff0000\"}."
+            },
+            "c": { "type": "array", "items": { "$ref": "#/$defs/span" } }
+          },
+          "required": ["s", "fn", "c"],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

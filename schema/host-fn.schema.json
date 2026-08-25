@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rasq.io/schema/host-fn-0.1.json",
+  "title": "Host function calls (rasq.hostfn/1, draft v0.1)",
+  "description": "Args/result contract for each host function (PROTOCOL.md §4). Over the wasm ABI the request is {schema:'rasq.hostfn/1', callId, fn, args} and the response is {callId, ok, value|error} — same envelope as boundary hostFn/hostFnResult. v1 is synchronous from the plugin's point of view.",
+  "type": "object",
+  "required": ["schema", "callId", "fn"],
+  "properties": {
+    "schema": { "const": "rasq.hostfn/1" },
+    "callId": { "type": "string" },
+    "fn": { "type": "string" },
+    "args": { "type": "object" }
+  },
+  "$defs": {
+    "response": {
+      "type": "object",
+      "required": ["callId", "ok"],
+      "properties": {
+        "callId": { "type": "string" },
+        "ok": { "type": "boolean" },
+        "value": {},
+        "error": {
+          "type": "object",
+          "properties": { "code": { "type": "string", "pattern": "^(\\d{3}|[A-F][0-9A-F]{2})$" }, "message": { "type": "string" } }
+        }
+      }
+    },
+    "fns": {
+      "fow.open": {
+        "args": { "id": "string", "spec": "{type: widget|interstitial|system, confirmMode, initialHeightFactor?, title?, cancelText?, confirmText?}", "root": "rrl-node.schema.json" },
+        "value": { "opened": "boolean" },
+        "permission": "fow.widget | fow.interstitial | fow.system"
+      },
+      "fow.close": { "args": { "id": "string", "result": "any?", "reason": "string?" }, "value": {}, "permission": "same as fow.open" },
+      "alert": {
+        "args": { "title": "string", "message": "string", "confirmText": "string", "cancelText": "string?", "destructive": "boolean?" },
+        "value": { "confirmed": "boolean" },
+        "permission": null
+      },
+      "storage.get": { "args": { "ns": "safe|unsafe", "key": "string" }, "value": { "value": "any|null" }, "permission": "storage.safe | storage.unsafe" },
+      "storage.set": { "args": { "ns": "safe|unsafe", "key": "string", "value": "any" }, "value": {}, "permission": "storage.safe | storage.unsafe" },
+      "storage.delete": { "args": { "ns": "safe|unsafe", "key": "string" }, "value": {}, "permission": "storage.safe | storage.unsafe" },
+      "net.fetch": {
+        "args": { "method": "GET|POST|PUT|PATCH|DELETE", "url": "uri", "headers": "{string:string}?", "body": "string? (utf-8) | {b64: string}?" },
+        "value": { "status": "integer", "headers": "{string:string}", "bodyText": "string?", "bodyB64": "string? (binary responses)" },
+        "permission": "network (審査済み)",
+        "notes": "Host-proxied: dedupe, cache, cookie/credential isolation. Plugins never open sockets."
+      },
+      "ml.infer": {
+        "args": {
+          "model": "string — model manifest id (model-manifest.schema.json). The manifest declares which runtimes exist (onnx / llama / server); the HOST resolves placement (D-018) — plugins cannot pick endpoints.",
+          "input": "task-shaped logical input, e.g. {text: string} | {texts: [string]} | {tokens: [int]} | {tensors: {name: {dtype, shape, dataB64}}}",
+          "placementHint": "device|server|null — hint only, host decides"
+        },
+        "value": {
+          "output": "task-shaped logical output, e.g. {labels: [{label, score}]} | {text: string} | {vector: [number]} | {tensors: {...}}",
+          "placement": "device|server",
+          "runtime": "onnx|llama|triton|vllm",
+          "timings": { "totalMs": "number?" }
+        },
+        "permission": "gpu_ml (審査済み)"
+      },
+      "wasm.call": { "args": { "pluginId": "string", "fn": "string", "args": "object" }, "value": { "value": "any" }, "permission": "構成で許可された子のみ" },
+      "store.read": { "args": { "kind": "actionState|followState|readState", "key": "string" }, "value": { "value": "any|null" }, "permission": null },
+      "geometry.lookup": {
+        "args": { "tag": "string?", "role": "string?", "nodeId": "string?" },
+        "value": { "rects": [{ "nodeId": "string", "x": "number", "y": "number", "w": "number", "h": "number" }] },
+        "permission": "fow.system"
+      }
+    }
+  }
+}
