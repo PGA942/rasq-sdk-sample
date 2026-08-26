@@ -1,9 +1,37 @@
 {
   "id": "rasq.official.astell/vc-summarizer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "task": "generation",
-  "io": { "input": "chat", "output": "text" },
+  "io": { "input": "text", "output": "text" },
   "runtimes": {
+    "onnx": {
+      "file": "models/astell/mt5_copy.onnx",
+      "quantization": "fp32",
+      "executionProviders": ["cuda", "coreml", "cpu"],
+      "inputs": [
+        { "name": "input_ids", "dtype": "int64", "shape": [1, "seq"], "semantic": "token_ids" },
+        { "name": "attention_mask", "dtype": "int64", "shape": [1, 128], "semantic": "attention_mask" },
+        { "name": "decoder_input_ids", "dtype": "int64", "shape": [1, "dec_seq"], "semantic": "decoder_token_ids" }
+      ],
+      "outputs": [
+        { "name": "logits", "dtype": "float32", "shape": ["batch", "dec_seq", 250112], "semantic": "logits" }
+      ],
+      "tokenizer": {
+        "type": "sentencepiece",
+        "file": "models/astell/spiece.model",
+        "maxTokens": 128,
+        "padding": "max",
+        "addEos": true,
+        "special": { "eos": "</s>", "pad": "<pad>", "unk": "<unk>" }
+      },
+      "generation": {
+        "decoderStartTokenId": 0,
+        "eosTokenId": 1,
+        "padTokenId": 0,
+        "maxNewTokens": 64,
+        "strategy": "greedy"
+      }
+    },
     "llama": {
       "file": "models/summarizer-q4_k_m.gguf",
       "promptTemplate": "<|system|>{system}<|user|>{input}<|assistant|>",
@@ -14,6 +42,7 @@
   },
   "placement": { "prefer": ["server", "device"], "minDeviceRamMb": 4096, "allowMeteredDownload": false },
   "artifacts": {
+    "onnx": { "sizeMb": 1146, "sha512": "8231e7a8792794cfcd793ee54aee94924f0cccf26676da470db05c3f705fb425384e77ec470f75d835fe9d5ab3bfb73fbcc573dd4976cc901bab3c8fda822134" },
     "llama": { "sizeMb": 2100, "sha512": "TODO" }
   },
   "license": "proprietary"

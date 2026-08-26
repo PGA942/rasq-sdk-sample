@@ -7,6 +7,7 @@
   "required": ["id", "version", "task", "io", "runtimes"],
   "additionalProperties": false,
   "properties": {
+    "$comment": { "type": "string", "description": "Free-form note for humans; ignored by hosts." },
     "id": { "type": "string", "description": "Stable id, namespaced by plugin: '<pluginId>/<model-name>'." },
     "version": { "type": "string", "description": "SemVer of the model artifact set." },
     "task": { "type": "string", "enum": ["classification", "embedding", "generation", "custom"] },
@@ -40,7 +41,20 @@
             "inputs": { "type": "array", "items": { "$ref": "#/$defs/tensor" } },
             "outputs": { "type": "array", "items": { "$ref": "#/$defs/tensor" } },
             "tokenizer": { "$ref": "#/$defs/tokenizer" },
-            "labelsFile": { "type": "string" }
+            "labelsFile": { "type": "string" },
+            "generation": {
+              "type": "object",
+              "description": "seq2seq 生成の設定。KV キャッシュ無しの単発 forward で export されたモデルは、ホストがこの設定でデコーダーループ(decoder_input_ids を伸ばしながら再実行)を回す。",
+              "additionalProperties": false,
+              "required": ["decoderStartTokenId", "eosTokenId"],
+              "properties": {
+                "decoderStartTokenId": { "type": "integer" },
+                "eosTokenId": { "type": "integer" },
+                "padTokenId": { "type": "integer" },
+                "maxNewTokens": { "type": "integer" },
+                "strategy": { "type": "string", "enum": ["greedy"], "description": "現状 greedy のみ(サンプリングは server 側に任せる)。" }
+              }
+            }
           }
         },
         "llama": {
@@ -99,7 +113,7 @@
         "name": { "type": "string" },
         "dtype": { "type": "string", "enum": ["float32", "float16", "int64", "int32", "int8", "uint8", "bool", "string"] },
         "shape": { "type": "array", "items": { "type": ["integer", "string"] }, "description": "Integers are fixed dims; strings are symbolic ('batch', 'seq', 'labels')." },
-        "semantic": { "type": "string", "enum": ["token_ids", "attention_mask", "token_type_ids", "logits", "probabilities", "embedding", "image_chw", "raw"], "description": "Tells the host how to fill / read the tensor from the logical IO." }
+        "semantic": { "type": "string", "enum": ["token_ids", "attention_mask", "token_type_ids", "decoder_token_ids", "logits", "probabilities", "embedding", "image_chw", "raw"], "description": "Tells the host how to fill / read the tensor from the logical IO. decoder_token_ids = seq2seq のデコーダー入力(生成ループでホストが伸ばす)。" }
       }
     },
     "tokenizer": {

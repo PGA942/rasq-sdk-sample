@@ -128,7 +128,8 @@ RAi の位置検索、タイムラインソート、リレーショナルTL(本�
 - マニフェストの `runtimes` に載せられるもの: **デバイス側 = `onnx`(onnx runtime)/ `llama`(llama.cpp)**、**サーバー側 = `server`(Triton Inference Server / vLLM)**。同じ論理 IO(`io.input`/`io.output`)を全ランタイムで満たすこと。
 - **配置はホストが解決**(端末 RAM・電源・従量回線・ポリシー・審査状態)。`placementHint` はヒント。結果の `value.placement` / `value.runtime` で実際にどこで動いたかが返る。
 - onnx 実行時のテンソル詰め替え・トークナイズはマニフェストの `inputs[].semantic` / `tokenizer` に従ってホストが行う。
-- 例: [`examples/reaction-predictor.model.json`](examples/reaction-predictor.model.json)(onnx int8 + Triton)/ [`examples/astell-summarizer.model.json`](examples/astell-summarizer.model.json)(gguf + vLLM)。
+- **seq2seq 生成(onnx)**: KV キャッシュ無しの単発 forward で export されたモデルは、`runtimes.onnx.generation`(`decoderStartTokenId` / `eosTokenId` / `padTokenId` / `maxNewTokens` / `strategy: greedy`)に従って**ホストがデコーダーループ**(semantic `decoder_token_ids` のテンソルを伸ばしながら再実行)を回す。サンプリング付き生成はサーバー側(vLLM)に任せる。
+- 例: [`examples/reaction-predictor.model.json`](examples/reaction-predictor.model.json)(onnx int8 + Triton)/ [`examples/astell-summarizer.model.json`](examples/astell-summarizer.model.json)(onnx fp32 単発 forward + generation / gguf + vLLM)。
 
 ## 5. アクションと投稿ごとのアイコン(D-017)
 
