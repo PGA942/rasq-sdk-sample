@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rasq.example/schema/settings-page.schema.json",
+  "title": "RASQ settings page (rasq.settings-page/1, D-031)",
+  "description": "設定第二階層以降の 1 ページ。wasm 不要の静的 RRL ドキュメントで、値は Bind `$.settings.<key>` で解決し、タイルの change イベント(on: {\"change\": \"settings.set\"}、設定キー = ノードの k)をホストが KV 書き込みへ変換する。ホスト設定の保存先はアカウント毎 KV `<area>.v1`(D-035)、プラグイン設定ページの保存先は storage.safe。",
+  "type": "object",
+  "required": ["schema", "area", "root"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": "rasq.settings-page/1" },
+    "area": {
+      "type": "string",
+      "description": "設定領域 id(例: appearance.display)。KV キー `<area>.v1` とアセット名に使う。"
+    },
+    "title": { "type": "string", "description": "ページヘッダーの題。" },
+    "defaults": {
+      "type": "object",
+      "description": "未保存キーの既定値。Bind 解決前に保存値へマージされる。"
+    },
+    "root": {
+      "$ref": "./rrl-node.schema.json",
+      "description": "ページ本体。設定タイルは ListTile / SwitchListTile / RadioListTile / ValueListTile / WarningListTile / DestructiveListTile / SectionHeader / SliderListTile / RangeSliderListTile。"
+    }
+  }
+}

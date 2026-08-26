@@ -62,6 +62,8 @@ RAi の位置検索、タイムラインソート、リレーショナルTL(本�
 
 `RichText` の `p.source` は **生文字列**(ホストが plain/MFM/HTML を解析)または **スパン配列**(プラグインが解析済み)のどちらでも良い。スパンの JSON は [`schema/rsl-span.schema.json`](schema/rsl-span.schema.json)、例は [`examples/mfm-body.rsl.json`](examples/mfm-body.rsl.json)。
 
+**設定ページ (D-031)**: 設定第二階層以降は wasm 不要の**静的 RRL ドキュメント**([`schema/settings-page.schema.json`](schema/settings-page.schema.json)、`rasq.settings-page/1`)。値は Bind `$.settings.<key>`、タイルの `change` イベント(`on: {"change": "settings.set"}`、設定キー = ノードの `k`)をホストが KV 書き込みへ変換する。プラグインの設定ページも同じ形式・同じレンダラーで、永続化のみ `storage.safe`。
+
 - 種別: `text`(bold/italic/strike/small/code)/ `emoji` / `image` / `link` / `mention` / `hashtag` / `transform`
 - **`transform` = MFM 装飾関数**。`{s:"transform", fn, args, c:[...]}` で入れ子可。ホストが必ず描画するコアセット:
   `x2 x3 x4 small blur rotate flip fg bg center shake spin jump bounce rainbow twitch jelly tada plain`
