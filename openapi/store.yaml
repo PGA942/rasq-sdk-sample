@@ -1,0 +1,258 @@
+# RASQ プラグインストア契約 v0 (D-033) — クライアント側から先に定義する正本。
+# ORGATE-server はこの契約を実装する。REST/JSON。将来 WebTransport 化しても
+# ペイロード(components.schemas)はそのまま流用する。
+# ストアは審査済みプラグインのみ掲載(D-004 ②)。サイドロードはアプリ側の
+# 「プラグインのインポート」導線のみで、この API を通らない。
+openapi: 3.1.0
+info:
+  title: RASQ Plugin Store API
+  version: 0.1.0
+  description: >-
+    プラグインストア(M4)のページ関数/構成取得関数/インストール関数/レビュー関数。
+    認証は RASQ アカウントの Bearer(閲覧は匿名可、レビュー投稿・ブックマークは要認証)。
+servers:
+  - url: https://store.orgate.example/api/v1
+paths:
+  /home:
+    get:
+      operationId: storeHome
+      summary: ストアホーム(今週のトレンド/ブックマーク/おすすめ)
+      parameters:
+        - { name: locale, in: query, schema: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  trending: { type: array, items: { $ref: "#/components/schemas/PluginCard" } }
+                  bookmarks: { type: array, items: { $ref: "#/components/schemas/PluginCard" } }
+                  recent: { type: array, items: { $ref: "#/components/schemas/PluginCard" } }
+  /plugins:
+    get:
+      operationId: searchPlugins
+      summary: 検索 + 探索導線(カテゴリ/SNS別/用途別/無料・広告/公式・検証済み/最近更新/軽量/オフライン)
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: category, in: query, schema: { type: string } }
+        - { name: sns, in: query, schema: { type: string }, description: 対象 SNS (misskey / bluesky / …) }
+        - { name: filter, in: query, schema: { type: array, items: { type: string, enum: [free, no_ads, official, verified, recent, lightweight, offline] } }, style: form, explode: false }
+        - { name: sort, in: query, schema: { type: string, enum: [relevance, downloads, rating, updated] } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/PluginCard" } }
+                  nextCursor: { type: [string, "null"] }
+  /plugins/{pluginId}:
+    get:
+      operationId: pluginPage
+      summary: プラグインページ(プレビュー/DL数/評価/バージョン/権限/常設安全性ブロック)
+      parameters:
+        - { name: pluginId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { content: { application/json: { schema: { $ref: "#/components/schemas/PluginDetail" } } } }
+  /plugins/{pluginId}/manifest:
+    get:
+      operationId: pluginManifest
+      summary: 構成取得(インストール前のマニフェスト+アーティファクト一覧。確認シートの根拠)
+      parameters:
+        - { name: pluginId, in: path, required: true, schema: { type: string } }
+        - { name: version, in: query, schema: { type: string }, description: 省略時は stable 最新 }
+      responses:
+        "200": { content: { application/json: { schema: { $ref: "#/components/schemas/InstallManifest" } } } }
+  /plugins/{pluginId}/artifacts/{artifactId}:
+    get:
+      operationId: downloadArtifact
+      summary: インストール関数のダウンロード実体(.rasqpkg = Zstd tar。SHA-512 + ed25519 署名は InstallManifest 側)
+      parameters:
+        - { name: pluginId, in: path, required: true, schema: { type: string } }
+        - { name: artifactId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { content: { application/zstd: { schema: { type: string, format: binary } } } }
+  /plugins/{pluginId}/reviews:
+    get:
+      operationId: reviews
+      summary: レビュー一覧(実利用済み/利用バージョン/開発者返信/参考になった/通報/並び替え)
+      parameters:
+        - { name: pluginId, in: path, required: true, schema: { type: string } }
+        - { name: sort, in: query, schema: { type: string, enum: [helpful, recent, rating_high, rating_low] } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Review" } }
+                  nextCursor: { type: [string, "null"] }
+    post:
+      operationId: createReview
+      summary: レビュー作成(要認証。実利用済みフラグはサーバーがインストール履歴から付ける)
+      security: [{ bearer: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rating]
+              properties:
+                rating: { type: integer, minimum: 1, maximum: 5 }
+                body: { type: string }
+                usedVersion: { type: string }
+      responses:
+        "201": { content: { application/json: { schema: { $ref: "#/components/schemas/Review" } } } }
+  /plugins/{pluginId}/releases:
+    get:
+      operationId: releaseNotes
+      summary: リリースノート(アップデート差分。権限増加は permissionsAdded で明示 → 自動更新を止める判断材料)
+      parameters:
+        - { name: pluginId, in: path, required: true, schema: { type: string } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/ReleaseNote" } }
+                  nextCursor: { type: [string, "null"] }
+  /me/bookmarks:
+    get:
+      operationId: myBookmarks
+      summary: ストアのブックマーク一覧(要認証)
+      security: [{ bearer: [] }]
+      responses:
+        "200": { content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/PluginCard" } } } } }
+    put:
+      operationId: setBookmark
+      summary: ブックマーク追加/削除
+      security: [{ bearer: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pluginId, bookmarked]
+              properties:
+                pluginId: { type: string }
+                bookmarked: { type: boolean }
+      responses:
+        "204": { description: ok }
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer }
+  schemas:
+    PluginStatus:
+      type: string
+      description: 状態表記の統一(rasq_design のステータストークンと 1:1)
+      enum: [in_review, published, update_available, warning, suspended, withdrawn, unlisted, beta, revoked]
+    PluginCard:
+      type: object
+      required: [id, name, version, status]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        summary: { type: string }
+        iconUrl: { type: string, format: uri }
+        version: { type: string }
+        status: { $ref: "#/components/schemas/PluginStatus" }
+        origin: { type: string, enum: [official, verified, community] }
+        rating: { type: number }
+        downloads: { type: integer }
+        sizeMb: { type: number }
+        hasAds: { type: boolean }
+        price: { type: number, description: 0 = 無料 }
+    PluginDetail:
+      allOf:
+        - $ref: "#/components/schemas/PluginCard"
+        - type: object
+          properties:
+            description: { type: string }
+            screenshots: { type: array, items: { type: string, format: uri } }
+            channel: { type: string, enum: [stable, beta] }
+            updatedAt: { type: string, format: date-time }
+            safety: { $ref: "#/components/schemas/SafetyBlock" }
+            compatibility: { $ref: "#/components/schemas/Compatibility" }
+            developer:
+              type: object
+              properties:
+                name: { type: string }
+                supportUrl: { type: string, format: uri }
+    SafetyBlock:
+      type: object
+      description: 詳細画面上部の常設ブロック(権限・安全性)
+      properties:
+        rasqFeatures: { type: array, items: { type: string }, description: 利用できる RASQ 機能 }
+        permissions: { type: array, items: { $ref: "#/components/schemas/PermissionEntry" } }
+        externalHosts: { type: array, items: { type: string }, description: 外部通信先 }
+        dataHandling: { type: string, description: 保存・送信されるデータの説明 }
+        crashFreeRate: { type: number, description: 直近の正常起動率 (0-1) }
+        backgroundExecution: { type: boolean }
+        usesGpu: { type: boolean }
+        externalSdks: { type: array, items: { type: string } }
+        adPlacements: { type: array, items: { type: string } }
+    PermissionEntry:
+      type: object
+      required: [permission]
+      properties:
+        permission: { type: string, description: manifest の権限 id (net.fetch / gpu_ml / storage.unsafe / …) }
+        reason: { type: string, description: 用途ごとの権限理由(公開申請時に開発者が記入) }
+    Compatibility:
+      type: object
+      properties:
+        rasqVersion: { type: string, description: 対応 RASQ 本体バージョン範囲 (semver range) }
+        os: { type: array, items: { type: string, enum: [ios, android, macos, windows, linux] } }
+        requiresPlugins: { type: array, items: { type: string }, description: 必要な他プラグイン id }
+        conflictsWith: { type: array, items: { type: string } }
+        requiredRuntimes: { type: array, items: { type: string }, description: onnx / llama など }
+    InstallManifest:
+      type: object
+      description: インストール確認シートと検証の根拠。plugin manifest 本体 + アーティファクト。
+      required: [pluginId, version, manifest, artifacts]
+      properties:
+        pluginId: { type: string }
+        version: { type: string }
+        channel: { type: string, enum: [stable, beta] }
+        manifest: { type: object, description: schema/manifest.schema.json 準拠のプラグインマニフェスト }
+        permissionsAdded: { type: array, items: { $ref: "#/components/schemas/PermissionEntry" }, description: 前版から増えた権限(自動更新停止のトリガー) }
+        artifacts:
+          type: array
+          items:
+            type: object
+            required: [id, kind, sizeBytes, sha512, signature]
+            properties:
+              id: { type: string }
+              kind: { type: string, enum: [bundle, model, asset], description: bundle = .rasqpkg 本体、model = ML モデル実体(遅延DL可) }
+              sizeBytes: { type: integer }
+              sha512: { type: string }
+              signature: { type: string, description: ed25519(ストア鍵)。base64 }
+              lazy: { type: boolean, description: true = 初回利用時にダウンロード(大型モデル) }
+    Review:
+      type: object
+      required: [id, rating, createdAt]
+      properties:
+        id: { type: string }
+        rating: { type: integer }
+        body: { type: string }
+        usedVersion: { type: string }
+        verifiedUse: { type: boolean, description: 実利用済み(サーバーがインストール履歴から判定) }
+        helpfulCount: { type: integer }
+        developerReply: { type: [string, "null"] }
+        createdAt: { type: string, format: date-time }
+    ReleaseNote:
+      type: object
+      required: [version, publishedAt]
+      properties:
+        version: { type: string }
+        channel: { type: string, enum: [stable, beta] }
+        notes: { type: string }
+        permissionsAdded: { type: array, items: { $ref: "#/components/schemas/PermissionEntry" } }
+        publishedAt: { type: string, format: date-time }
