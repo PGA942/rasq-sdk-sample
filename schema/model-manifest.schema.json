@@ -32,6 +32,11 @@
           "properties": {
             "file": { "type": "string", "description": "Path inside the plugin bundle." },
             "quantization": { "type": "string", "enum": ["fp32", "fp16", "int8", "int4"] },
+            "executionProviders": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["cuda", "tensorrt", "coreml", "nnapi", "qnn", "cpu"] },
+              "description": "onnx runtime の実行プロバイダ優先順(GPU/NPU 利用のヒント)。ホストは端末で使えるものへフォールバックし、末尾は常に cpu 扱い。"
+            },
             "inputs": { "type": "array", "items": { "$ref": "#/$defs/tensor" } },
             "outputs": { "type": "array", "items": { "$ref": "#/$defs/tensor" } },
             "tokenizer": { "$ref": "#/$defs/tokenizer" },

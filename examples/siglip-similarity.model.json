@@ -2,25 +2,88 @@
   "id": "rasq.official.search/siglip-similarity",
   "version": "0.1.0",
   "task": "embedding",
-  "io": { "input": "tensors", "output": "vector" },
+  "io": {
+    "input": "tensors",
+    "output": "vector"
+  },
   "runtimes": {
     "onnx": {
       "file": "models/siglip_base_patch16_224_q.onnx",
       "quantization": "int8",
       "inputs": [
-        { "name": "pixel_values", "dtype": "float32", "shape": [1, 3, 224, 224], "semantic": "image_chw" },
-        { "name": "input_ids", "dtype": "int64", "shape": [1, 64], "semantic": "token_ids" }
+        {
+          "name": "pixel_values",
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            224,
+            224
+          ],
+          "semantic": "image_chw"
+        },
+        {
+          "name": "input_ids",
+          "dtype": "int64",
+          "shape": [
+            1,
+            64
+          ],
+          "semantic": "token_ids"
+        }
       ],
       "outputs": [
-        { "name": "image_embeds", "dtype": "float32", "shape": [1, 768], "semantic": "embedding" },
-        { "name": "text_embeds", "dtype": "float32", "shape": [1, 768], "semantic": "embedding" }
+        {
+          "name": "image_embeds",
+          "dtype": "float32",
+          "shape": [
+            1,
+            768
+          ],
+          "semantic": "embedding"
+        },
+        {
+          "name": "text_embeds",
+          "dtype": "float32",
+          "shape": [
+            1,
+            768
+          ],
+          "semantic": "embedding"
+        }
       ],
-      "tokenizer": { "type": "sentencepiece", "file": "models/siglip_tokenizer.model", "maxTokens": 64, "padding": "max" }
+      "tokenizer": {
+        "type": "sentencepiece",
+        "file": "models/siglip_tokenizer.model",
+        "maxTokens": 64,
+        "padding": "max"
+      },
+      "executionProviders": [
+        "cuda",
+        "coreml",
+        "nnapi",
+        "cpu"
+      ]
     },
-    "server": { "engine": "triton", "model": "siglip_base_patch16_224" }
+    "server": {
+      "engine": "triton",
+      "model": "siglip_base_patch16_224"
+    }
   },
-  "placement": { "prefer": ["device", "server"], "minDeviceRamMb": 1536, "allowMeteredDownload": false },
-  "artifacts": { "onnx": { "sizeMb": 380, "sha512": "TODO" } },
+  "placement": {
+    "prefer": [
+      "device",
+      "server"
+    ],
+    "minDeviceRamMb": 1536,
+    "allowMeteredDownload": false
+  },
+  "artifacts": {
+    "onnx": {
+      "sizeMb": 380,
+      "sha512": "TODO"
+    }
+  },
   "license": "apache-2.0",
-  "$comment": "画像×テキスト類似 (D-022): 検索の関連順(候補が siglipCandidateThreshold 以上のとき並び補正)とリレーショナルTLの類似投稿取得に使う。テキスト同士は text_embeds 同士のコサインで代用。重いので最終版で差し替え前提。"
+  "$comment": "多言語 (SigLIP2 multilingual)・GPU利用想定 (executionProviders)。画像×テキスト類似 (D-022): 検索の関連順(候補が siglipCandidateThreshold 以上のとき並び補正)とリレーショナルTLの類似投稿取得に使う。テキスト同士は text_embeds 同士のコサインで代用。重いので最終版で差し替え前提。"
 }
