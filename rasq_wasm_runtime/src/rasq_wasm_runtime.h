@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <stdint.h>
 
 #if _WIN32
@@ -28,6 +29,12 @@ FFI_PLUGIN_EXPORT RasqWasmInstance *rasq_wasm_instantiate_with_host(const uint8_
 // Copies a NUL-terminated string into the runtime's allocator. Host-function
 // callbacks MUST return strings allocated here.
 FFI_PLUGIN_EXPORT char *rasq_wasm_string_dup(const char *s);
+
+// Enables the runtime-native `net.fetch` backend (blocking HTTP inside the
+// runtime; works on mobile where the embedder has no synchronous HTTP).
+// While enabled, net.fetch never reaches the host-function callback. The
+// calling thread blocks for the duration of each request.
+FFI_PLUGIN_EXPORT void rasq_wasm_set_native_fetch(RasqWasmInstance *instance, bool enabled);
 
 // Frees an instance created by rasq_wasm_instantiate.
 FFI_PLUGIN_EXPORT void rasq_wasm_destroy(RasqWasmInstance *instance);

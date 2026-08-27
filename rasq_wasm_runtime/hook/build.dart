@@ -24,6 +24,12 @@ import 'package:logging/logging.dart';
 /// (rustc finds the SDK via `xcrun`), so no extra config is needed there.
 void main(List<String> args) async {
   await build(args, (input, output) async {
+    // フックはコードアセット以外のフェーズ(データアセット収集や
+    // ホットリロード時の再実行)でも呼ばれる。そのとき `config.code` に
+    // 触れると Bad state 例外でデバッグセッションごと落ちるので、
+    // コードアセットのビルド時以外は何もしない。
+    if (!input.config.buildCodeAssets) return;
+
     final logger = Logger('')
       ..level = Level.ALL
       ..onRecord.listen((record) => print(record.message));

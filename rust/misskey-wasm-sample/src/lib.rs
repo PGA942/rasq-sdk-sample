@@ -224,11 +224,16 @@ fn post_tile(note: &Value, fallback_instance: &str) -> Value {
 fn timeline(args: &Value) -> Result<Value, Value> {
     let host = args["host"].as_str().unwrap_or("misskey.io");
     let limit = args["limit"].as_u64().unwrap_or(10).min(30);
+    // baseUrl override is for tests / self-hosted instances (default https).
+    let base = match args["baseUrl"].as_str() {
+        Some(b) => b.trim_end_matches('/').to_string(),
+        None => format!("https://{host}"),
+    };
     let response = host_call(
         "net.fetch",
         json!({
             "method": "POST",
-            "url": format!("https://{host}/api/notes/local-timeline"),
+            "url": format!("{base}/api/notes/local-timeline"),
             "headers": { "Content-Type": "application/json" },
             "body": json!({ "limit": limit }).to_string(),
         }),

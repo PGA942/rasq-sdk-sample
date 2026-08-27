@@ -22,6 +22,10 @@ pub type RasqHostFnCallback = extern "C" fn(request: *const c_char, user_data: *
 struct HostState {
     callback: Option<RasqHostFnCallback>,
     user_data: usize,
+    /// When true, `net.fetch` is served natively (blocking ureq on the
+    /// calling thread) instead of going through the embedder callback —
+    /// mobile hosts have no synchronous HTTP bridge (D-023).
+    native_fetch: bool,
 }
 
 pub struct RasqWasmInstance {
@@ -53,7 +57,7 @@ impl RasqWasmInstance {
     fn load(wasm_bytes: &[u8], callback: Option<RasqHostFnCallback>, user_data: usize) -> Result<Self, RasqWasmError> {
         let engine = Engine::default();
         let module = Module::new(&engine, wasm_bytes)?;
-        let mut store = Store::new(&engine, HostState { callback, user_data });
+        let mut store = Store::new(&engine, HostState { callback, user_data, native_fetch: false });
         let mut linker = Linker::new(&engine);
         // PROTOCOL.md §4.1: (import "rasq" "host_fn" (func (param i32 i32) (result i64))).
         // Always provided; without a registered callback it answers E00 so a
@@ -75,6 +79,11 @@ impl RasqWasmInstance {
     #[cfg(test)]
     fn load_plain(wasm_bytes: &[u8]) -> Result<Self, RasqWasmError> {
         Self::load(wasm_bytes, None, 0)
+    }
+
+    #[cfg(test)]
+    fn set_native_fetch(&mut self, enabled: bool) {
+        self.store.data_mut().native_fetch = enabled;
     }
 
     fn typed_func<Params, Results>(&mut self, name: &'static str) -> Result<TypedFunc<Params, Results>, RasqWasmError>
@@ -155,6 +164,17 @@ fn host_fn_impl(mut caller: Caller<'_, HostState>, ptr: u32, len: u32) -> Result
         .read(&caller, ptr as usize, &mut request)
         .map_err(|e| wasmi::Error::new(format!("host_fn: bad request buffer: {e}")))?;
 
+    // Native net.fetch short-circuit (D-023): parse the envelope; when the fn
+    // is net.fetch and native fetch is enabled, answer inside the runtime.
+    if caller.data().native_fetch {
+        if let Ok(req) = serde_json::from_slice::<serde_json::Value>(&request) {
+            if req["fn"] == "net.fetch" {
+                let response = native_fetch_response(&req);
+                return write_response(&mut caller, memory, response.to_string().as_bytes());
+            }
+        }
+    }
+
     let response: String = match caller.data().callback {
         None => r#"{"ok":false,"error":{"code":"E00","message":"no host_fn handler registered"}}"#.to_string(),
         Some(callback) => {
@@ -173,18 +193,66 @@ fn host_fn_impl(mut caller: Caller<'_, HostState>, ptr: u32, len: u32) -> Result
         }
     };
 
-    let bytes = response.as_bytes();
+    write_response(&mut caller, memory, response.as_bytes())
+}
+
+/// Allocates inside the plugin (via its `alloc`), writes [bytes] and returns
+/// the packed `(ptr << 32) | len`.
+fn write_response(caller: &mut Caller<'_, HostState>, memory: Memory, bytes: &[u8]) -> Result<i64, wasmi::Error> {
     let alloc = caller
         .get_export("alloc")
         .and_then(|e| e.into_func())
         .ok_or_else(|| wasmi::Error::new("plugin has no exported alloc"))?
-        .typed::<u32, u32>(&caller)
+        .typed::<u32, u32>(&*caller)
         .map_err(|e| wasmi::Error::new(format!("alloc signature mismatch: {e}")))?;
-    let out_ptr = alloc.call(&mut caller, bytes.len() as u32)?;
+    let out_ptr = alloc.call(&mut *caller, bytes.len() as u32)?;
     memory
-        .write(&mut caller, out_ptr as usize, bytes)
+        .write(&mut *caller, out_ptr as usize, bytes)
         .map_err(|e| wasmi::Error::new(format!("host_fn: write response failed: {e}")))?;
     Ok((((out_ptr as u64) << 32) | bytes.len() as u64) as i64)
+}
+
+/// Serves one `net.fetch` request with blocking ureq (host-fn schema:
+/// args {method, url, headers?, body?} → value {status, headers, bodyText}).
+fn native_fetch_response(req: &serde_json::Value) -> serde_json::Value {
+    let call_id = req["callId"].clone();
+    let args = &req["args"];
+    let method = args["method"].as_str().unwrap_or("GET").to_uppercase();
+    let url = args["url"].as_str().unwrap_or("");
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return serde_json::json!({"callId": call_id, "ok": false, "error": {"code": "B03", "message": format!("bad url: {url}")}});
+    }
+    let mut request = ureq::request(&method, url).timeout(std::time::Duration::from_secs(15));
+    if let Some(headers) = args["headers"].as_object() {
+        for (k, v) in headers {
+            if let Some(v) = v.as_str() {
+                request = request.set(k, v);
+            }
+        }
+    }
+    let result = match args["body"].as_str() {
+        Some(body) => request.send_string(body),
+        None => request.call(),
+    };
+    let http_response = match result {
+        Ok(r) => r,
+        // ureq treats HTTP >= 400 as Err(Status) — still a response for us.
+        Err(ureq::Error::Status(_, r)) => r,
+        Err(e) => {
+            return serde_json::json!({"callId": call_id, "ok": false, "error": {"code": "B01", "message": format!("fetch failed: {e}")}});
+        }
+    };
+    let status = http_response.status();
+    let mut headers = serde_json::Map::new();
+    for name in http_response.headers_names() {
+        if let Some(v) = http_response.header(&name) {
+            headers.insert(name.clone(), serde_json::Value::String(v.to_string()));
+        }
+    }
+    match http_response.into_string() {
+        Ok(body) => serde_json::json!({"callId": call_id, "ok": true, "value": {"status": status, "headers": headers, "bodyText": body}}),
+        Err(e) => serde_json::json!({"callId": call_id, "ok": false, "error": {"code": "B03", "message": format!("read body failed: {e}")}}),
+    }
 }
 
 fn result_to_c_string<T: Into<String>>(result: Result<T, RasqWasmError>) -> *mut c_char {
@@ -233,6 +301,20 @@ pub extern "C" fn rasq_wasm_instantiate_with_host(
         Ok(instance) => Box::into_raw(Box::new(instance)),
         Err(_) => std::ptr::null_mut(),
     }
+}
+
+/// Enables/disables the runtime-native `net.fetch` backend (D-023). When
+/// enabled, `net.fetch` never reaches the embedder callback: it is served by
+/// a blocking HTTP client inside the runtime (works on mobile, where the
+/// embedder has no synchronous HTTP). The calling thread blocks for the
+/// duration of the request — run plugin calls off the UI thread.
+#[no_mangle]
+pub extern "C" fn rasq_wasm_set_native_fetch(instance: *mut RasqWasmInstance, enabled: bool) {
+    if instance.is_null() {
+        return;
+    }
+    let instance = unsafe { &mut *instance };
+    instance.store.data_mut().native_fetch = enabled;
 }
 
 /// Copies a NUL-terminated string into this crate's allocator. Host-function
@@ -404,6 +486,48 @@ mod tests {
         assert!(after.contains(r#""instance":"misskey.example""#), "{after}"); // local user → fetch host
         assert!(after.contains(r#""instance":"other.example""#), "{after}"); // remote user → note host
         assert!(after.contains(r#""count":5"#), "{after}"); // renote count in ActionBar states
+    }
+
+    #[test]
+    fn native_fetch_serves_net_fetch_inside_the_runtime() {
+        use std::io::{Read, Write};
+        // Mini HTTP server: one request, fixed 2-note timeline response.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let body = serde_json::json!([
+            {"id": "n9", "text": "ネイティブfetchの投稿", "cw": null, "createdAt": "2026-08-25T12:00:00.000Z",
+             "user": {"username": "native", "name": "ネイティブ", "host": null, "avatarUrl": null},
+             "files": [], "repliesCount": 0, "renoteCount": 1, "reactions": {}}
+        ])
+        .to_string();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        let bytes = std::fs::read(WASM_PATH).expect("build misskey-wasm-sample first");
+        // No callback at all: net.fetch must be answered natively.
+        let mut instance = RasqWasmInstance::load_plain(&bytes).expect("instantiate");
+        instance.set_native_fetch(true);
+        let result = instance
+            .call(
+                "timeline",
+                &format!(r#"{{"host":"native.example","baseUrl":"http://127.0.0.1:{port}","limit":5}}"#),
+                "call-n",
+            )
+            .expect("call");
+        server.join().unwrap();
+        assert!(result.contains(r#""ok":true"#), "{result}");
+        assert!(result.contains(r#""count":1"#), "{result}");
+        let snapshot = instance.snapshot().expect("snapshot");
+        assert!(snapshot.contains("ネイティブfetchの投稿"), "{snapshot}");
     }
 
     #[test]

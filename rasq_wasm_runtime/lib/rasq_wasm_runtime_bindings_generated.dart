@@ -37,6 +37,16 @@ external ffi.Pointer<RasqWasmInstance> rasq_wasm_instantiate_with_host(
 @ffi.Native<ffi.Pointer<ffi.Char> Function(ffi.Pointer<ffi.Char>)>()
 external ffi.Pointer<ffi.Char> rasq_wasm_string_dup(ffi.Pointer<ffi.Char> s);
 
+/// Enables the runtime-native `net.fetch` backend (blocking HTTP inside the
+/// runtime; works on mobile where the embedder has no synchronous HTTP).
+/// While enabled, net.fetch never reaches the host-function callback. The
+/// calling thread blocks for the duration of each request.
+@ffi.Native<ffi.Void Function(ffi.Pointer<RasqWasmInstance>, ffi.Bool)>()
+external void rasq_wasm_set_native_fetch(
+  ffi.Pointer<RasqWasmInstance> instance,
+  bool enabled,
+);
+
 /// Frees an instance created by rasq_wasm_instantiate.
 @ffi.Native<ffi.Void Function(ffi.Pointer<RasqWasmInstance>)>()
 external void rasq_wasm_destroy(ffi.Pointer<RasqWasmInstance> instance);
