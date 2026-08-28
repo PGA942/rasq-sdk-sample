@@ -62,7 +62,12 @@ RAi の位置検索、タイムラインソート、リレーショナルTL(本�
 
 `RichText` の `p.source` は **生文字列**(ホストが plain/MFM/HTML を解析)または **スパン配列**(プラグインが解析済み)のどちらでも良い。スパンの JSON は [`schema/rsl-span.schema.json`](schema/rsl-span.schema.json)、例は [`examples/mfm-body.rsl.json`](examples/mfm-body.rsl.json)。
 
-**設定ページ (D-031)**: 設定第二階層以降は wasm 不要の**静的 RRL ドキュメント**([`schema/settings-page.schema.json`](schema/settings-page.schema.json)、`rasq.settings-page/1`)。値は Bind `$.settings.<key>`、タイルの `change` イベント(`on: {"change": "settings.set"}`、設定キー = ノードの `k`)をホストが KV 書き込みへ変換する。プラグインの設定ページも同じ形式・同じレンダラーで、永続化のみ `storage.safe`。
+**設定ページ (D-031/D-044)**: 設定第二階層以降は wasm 不要の**静的 RRL ドキュメント**([`schema/settings-page.schema.json`](schema/settings-page.schema.json)、`rasq.settings-page/1`)。値は Bind `$.settings.<key>`、タイルの `change` イベント(`on: {"change": "settings.set"}`、設定キー = ノードの `k`)をホストが書き込みへ変換する。SNS プラグインは同形式のページを `settingsPages` として提供する (D-044):
+
+- `area` は短名(`account` / `timeline` …)。ホストが `sns.<pluginId>.` を前置して名前空間を強制し、ルート `/settings/dsl/sns.<area>`・KV `sns.<pluginId>.<area>.v1`(`storage.safe` 相当)に割り当てる。
+- ローカル保存ページの値は、変更毎に `SnsSession.applySettings(area, values)`(defaults マージ済み)でプラグインへ即時反映される(例: Misskey の `timeline.withRenotes` → TL 取得パラメーター)。
+- `source: "remote"` のページは KV を使わず、ホストが `SnsSession.settingsRead(area)` / `settingsWrite(area, key, value)`(戻り値 = 最新値マップ)でサーバーに読み書きする(例: Misskey の `account` → `i` / `i/update`)。
+- `on: {"tap": "web.open"}` は `k` をパスとして接続先インスタンスの web 設定を開く(パスワードが要る操作の逃がし先)。
 
 - 種別: `text`(bold/italic/strike/small/code)/ `emoji` / `image` / `link` / `mention` / `hashtag` / `transform`
 - **`transform` = MFM 装飾関数**。`{s:"transform", fn, args, c:[...]}` で入れ子可。ホストが必ず描画するコアセット:
