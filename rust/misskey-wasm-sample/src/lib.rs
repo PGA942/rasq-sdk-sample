@@ -120,6 +120,8 @@ fn pick_reaction(args: &Value) -> Result<Value, Value> {
                 "cancelText": "閉じる"
             },
             "onClosed": "fowClosed",
+            // ✕(閉じる)は即クローズせず確認ポップアップ (D-066)。
+            "onCancel": "confirmCloseFow",
             "root": {
                 "t": "Column", "k": "fow-root", "c": [
                     { "t": "Text", "k": "fow-prompt", "p": { "text": format!("サンプルプラグインの FOW (postId: {})", args["postId"].as_str().unwrap_or("?")) } },
@@ -355,6 +357,47 @@ pub extern "C" fn call(
             };
             host_call("fow.close", json!({ "id": "reaction-picker", "result": emoji }));
             Ok(json!({ "picked": emoji }))
+        }
+        // ✕押下(fow.open の onCancel)→ 画面そのままで確認ポップアップ
+        // (確認 FOW)を出す (D-066)。ホストはまだ閉じていない。
+        "confirmCloseFow" => {
+            let response = host_call(
+                "fow.open",
+                json!({
+                    "id": "reaction-picker-confirm",
+                    "spec": {
+                        "type": "widget",
+                        "confirmMode": "confirm",
+                        "initialHeightFactor": 0.22,
+                        "title": "閉じますか?"
+                    },
+                    "root": {
+                        "t": "Column", "k": "confirm-root", "c": [
+                            { "t": "Text", "k": "confirm-msg", "p": { "text": "リアクションを選ばずに閉じますか?" } },
+                            { "t": "Row", "k": "confirm-actions", "c": [
+                                { "t": "Button", "k": "confirm-discard", "p": { "label": "破棄" }, "on": { "tap": "discardFow" } },
+                                { "t": "Button", "k": "confirm-keep", "p": { "label": "続ける" }, "on": { "tap": "keepFow" } }
+                            ] }
+                        ]
+                    }
+                }),
+            );
+            if response["ok"].as_bool() == Some(true) {
+                Ok(json!({ "opened": true }))
+            } else {
+                // 確認を出せない環境では素直に閉じる。
+                host_call("fow.close", json!({ "id": "reaction-picker", "reason": "discard" }));
+                Ok(json!({ "opened": false }))
+            }
+        }
+        "discardFow" => {
+            host_call("fow.close", json!({ "id": "reaction-picker-confirm" }));
+            host_call("fow.close", json!({ "id": "reaction-picker", "reason": "discard" }));
+            Ok(json!({}))
+        }
+        "keepFow" => {
+            host_call("fow.close", json!({ "id": "reaction-picker-confirm" }));
+            Ok(json!({}))
         }
         // ホストからの FOW クローズ通知(fow.open の onClosed)。
         "fowClosed" => {
