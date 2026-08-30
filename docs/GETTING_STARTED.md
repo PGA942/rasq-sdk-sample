@@ -33,7 +33,10 @@ cargo build --release --target wasm32-unknown-unknown -p hello-rasq-plugin
 
 rasq-client(Flutter)を起動し、カタログ → **「WASMプラグイン試験 (dev)」**:
 
-1. `.wasm のパスからインポート` にビルド成果物のパスを入れて **読み込み**
+1. **hello** ボタン(同梱アセット)を押す — ビルド不要で最小サンプルが動く。
+   自分でビルドしたものは `.wasm のパスからインポート` に**絶対パス(`~/` 可)**を入れて **読み込み**
+   (例: `~/Documents/rasq-sdk-sample/rust/target/wasm32-unknown-unknown/release/hello_rasq_plugin.wasm`。
+   相対パスはアプリの作業ディレクトリ基準になるため使えない — ホーム配下なら補完は効く)
 2. 初期 snapshot の RRL 画面が描画される(hello なら Text + ボタン 2 個)
 3. **挨拶する** → `call("greet")` → storage 往復 + 本体 patch で Text が更新される
 4. **パネルを開く** → `fow.open` で本物の FOW が開く。**+1** → surface patch で開いたまま差分更新
