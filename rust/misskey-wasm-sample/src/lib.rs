@@ -365,6 +365,9 @@ pub extern "C" fn call(
                 "fow.open",
                 json!({
                     "id": "reaction-picker-confirm",
+                    // 子 FOW (D-067): 親(ピッカー)の側に付き、親は子の
+                    // 高さぶん持ち上がって内容が被らない。
+                    "parentId": "reaction-picker",
                     "spec": {
                         "type": "widget",
                         "confirmMode": "confirm",
