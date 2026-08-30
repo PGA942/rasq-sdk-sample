@@ -295,24 +295,27 @@ fn post_tile(note: &Value, fallback_instance: &str) -> Value {
     })
 }
 
-/// `call("timeline", {host?, limit?})`: fetch the local timeline through the
-/// host's `net.fetch`, rebuild the tree, bump rev. The host then pulls the
-/// new `snapshot()` (result carries `treeUpdated: true`).
-fn timeline(args: &Value) -> Result<Value, Value> {
-    let host = args["host"].as_str().unwrap_or("misskey.io");
+/// Misskey local-timeline fetch through the host's `net.fetch`
+/// (`timeline` と `sns.timeline` で共用)。Returns (notes, host).
+fn fetch_local_notes(args: &Value) -> Result<(Vec<Value>, String), Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
     let limit = args["limit"].as_u64().unwrap_or(10).min(30);
     // baseUrl override is for tests / self-hosted instances (default https).
     let base = match args["baseUrl"].as_str() {
         Some(b) => b.trim_end_matches('/').to_string(),
         None => format!("https://{host}"),
     };
+    let mut body = json!({ "limit": limit });
+    if let Some(cursor) = args["cursor"].as_str() {
+        body["untilId"] = json!(cursor);
+    }
     let response = host_call(
         "net.fetch",
         json!({
             "method": "POST",
             "url": format!("{base}/api/notes/local-timeline"),
             "headers": { "Content-Type": "application/json" },
-            "body": json!({ "limit": limit }).to_string(),
+            "body": body.to_string(),
         }),
     );
     if response["ok"].as_bool() != Some(true) {
@@ -328,8 +331,80 @@ fn timeline(args: &Value) -> Result<Value, Value> {
     }
     let notes: Vec<Value> = serde_json::from_str(value["bodyText"].as_str().unwrap_or("[]"))
         .map_err(|e| json!({ "code": "D01", "message": format!("bad timeline JSON: {e}") }))?;
+    Ok((notes, host))
+}
 
-    let tiles: Vec<Value> = notes.iter().map(|n| post_tile(n, host)).collect();
+/// One Misskey note → `rasq.post/1` Post ワイヤ (D-074: SnsSession 契約の
+/// boundary 写像が返すデータ形。RRL snapshot とは別)。
+fn post_wire(note: &Value, fallback_instance: &str) -> Value {
+    let user = &note["user"];
+    let username = user["username"].as_str().unwrap_or("?");
+    let display = match user["name"].as_str() {
+        Some(n) if !n.is_empty() => n,
+        _ => username,
+    };
+    let media: Vec<Value> = note["files"]
+        .as_array()
+        .map(|files| {
+            files
+                .iter()
+                .filter_map(|f| {
+                    let url = f["url"].as_str()?;
+                    Some(json!({
+                        "id": f["id"],
+                        "type": media_type(f["type"].as_str().unwrap_or("")),
+                        "url": url,
+                        "thumbnailUrl": f["thumbnailUrl"],
+                        "sensitive": f["isSensitive"].as_bool().unwrap_or(false),
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let reaction_total: i64 = note["reactions"]
+        .as_object()
+        .map(|m| m.values().filter_map(Value::as_i64).sum())
+        .unwrap_or(0);
+    json!({
+        "id": note["id"],
+        "author": {
+            "id": user["id"],
+            "kind": "misskey",
+            "instance": user["host"].as_str().unwrap_or(fallback_instance),
+            "handle": username,
+            "displayName": display,
+            "avatarUrl": user["avatarUrl"],
+        },
+        "createdAt": note["createdAt"],
+        "body": note["text"].as_str().unwrap_or(""),
+        "bodyFormat": "mfm",
+        "cw": note["cw"],
+        "media": media,
+        "counts": {
+            "reply": note["repliesCount"],
+            "renote": note["renoteCount"],
+            "reaction": reaction_total,
+        },
+        "reactions": note["reactions"],
+        "visibility": note["visibility"],
+    })
+}
+
+/// `call("sns.timeline", {kind?, limit?, cursor?, host?, baseUrl?})` (D-074):
+/// SnsSession 契約の boundary 写像 — Post ワイヤの page を返す。
+fn sns_timeline(args: &Value) -> Result<Value, Value> {
+    let (notes, host) = fetch_local_notes(args)?;
+    let items: Vec<Value> = notes.iter().map(|n| post_wire(n, &host)).collect();
+    let next = notes.last().and_then(|n| n["id"].as_str());
+    Ok(json!({ "page": { "items": items, "nextCursor": next } }))
+}
+
+/// `call("timeline", {host?, limit?})`: fetch the local timeline through the
+/// host's `net.fetch`, rebuild the tree, bump rev. The host then pulls the
+/// new `snapshot()` (result carries `treeUpdated: true`).
+fn timeline(args: &Value) -> Result<Value, Value> {
+    let (notes, host) = fetch_local_notes(args)?;
+    let tiles: Vec<Value> = notes.iter().map(|n| post_tile(n, &host)).collect();
     let count = tiles.len();
     let root = json!({ "t": "Column", "k": "tl", "c": tiles });
     let rev = with_state(|state| {
@@ -368,6 +443,8 @@ pub extern "C" fn call(
                 Err(got.get("error").cloned().unwrap_or(json!({"code": "E00", "message": "host_fn failed"})))
             }
         }
+        // SnsSession 契約の boundary 写像 (D-074/M5d): Post ワイヤを返す。
+        "sns.timeline" => sns_timeline(&args_value),
         "pickReaction" => pick_reaction(&args_value),
         // FOW surface への差分更新デモ (D-073): カウンターを setProp する
         // surface patch を積み、`patch: true` でホストに引き取らせる。

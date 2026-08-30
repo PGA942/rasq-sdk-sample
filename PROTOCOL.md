@@ -138,6 +138,17 @@ RAi の位置検索、タイムラインソート、リレーショナルTL(本�
 - **seq2seq 生成(onnx)**: KV キャッシュ無しの単発 forward で export されたモデルは、`runtimes.onnx.generation`(`decoderStartTokenId` / `eosTokenId` / `padTokenId` / `maxNewTokens` / `strategy: greedy`)に従って**ホストがデコーダーループ**(semantic `decoder_token_ids` のテンソルを伸ばしながら再実行)を回す。サンプリング付き生成はサーバー側(vLLM)に任せる。
 - 例: [`examples/reaction-predictor.model.json`](examples/reaction-predictor.model.json)(onnx int8 + Triton)/ [`examples/astell-summarizer.model.json`](examples/astell-summarizer.model.json)(onnx fp32 単発 forward + generation / gguf + vLLM)。
 
+## 4.3 SNS 抽象関数(イベントハンドラーの boundary 写像、M5d / D-074)
+
+SNS プラグインのイベントハンドラー関数は「一定程度は抽象的な関数で共通化」
+(デバイス側の基本思想)— **既存 SnsSession 契約の boundary 写像**として、
+ホスト → プラグインの `call("sns.<fn>", args)` で呼ぶ。データは RRL では
+なく **Post ワイヤ(`rasq.post/1`)** で返す:
+
+- Post ワイヤ: `{id, author: {id, kind, instance, handle, displayName, avatarUrl?, bio?}, createdAt(ISO), body, bodyFormat, cw?, media?: [{id, type: image|video|gif|file, url, thumbnailUrl?, sensitive?, …}], poll?, quote?: Post, replyTo?: Post, replyToId?, repostedBy?, counts?, visibility?, localOnly?, directToIds?, reactions?, reactionEmojis?, myReaction?, url?}`。閲覧アカウントのキー付けはワイヤに含めない(取り込み時にホストが与える)。
+- v1 実装済み: `sns.timeline {kind, limit, cursor?}` → `{page: {items: [Post], nextCursor?}}`(ホスト側アダプター = `WasmSnsSession`。エラーは result.error のコードのまま `SnsApiException` へ写る)。
+- 以降(thread / createPost / performAction / userPosts …)は同じ形で 1 本ずつ追加する。未実装関数は C01 — ホストは該当 UI を隠す(SnsSession の UnsupportedError と同じ扱い)。
+
 ## 5. アクションと投稿ごとのアイコン(D-017)
 
 - 短押し `performAction(actionId, postId)`(引数なし)は**プラグインが中身を決める**(Misskey 本番: 予測モデルで最有力の絵文字をリアクション)。長押しは絵文字ピッカー FOW → `args.reaction`。
