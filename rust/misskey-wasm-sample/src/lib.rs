@@ -29,6 +29,10 @@ static HOST_CALL_SEQ: AtomicU64 = AtomicU64::new(0);
 /// `call("timeline")` replaces it.
 static STATE: Mutex<Option<(u64, Value)>> = Mutex::new(None);
 
+/// Last `fowClosed` notification (`{id, reason, result?}`) — queried back by
+/// the host/tests via `call("lastFowClosed")` (D-064 FOW surface demo).
+static LAST_FOW_CLOSED: Mutex<Value> = Mutex::new(Value::Null);
+
 fn with_state<R>(f: impl FnOnce(&mut (u64, Value)) -> R) -> R {
     let mut guard = STATE.lock().unwrap();
     let state = guard.get_or_insert_with(|| (1, initial_root()));
@@ -79,16 +83,63 @@ pub extern "C" fn dealloc(ptr: u32, len: u32) {
 /// `examples/post-tile.rrl.json` — shown until `timeline` is called.
 fn initial_root() -> Value {
     json!({
-        "t": "PostTile", "k": "post-sample-1", "role": "contentBody",
-        "p": { "post": "$.post", "variant": "normal" },
-        "c": [
-            { "t": "RichText", "k": "body", "tag": "main_text", "p": { "source": "$.post.bodyRSL" } },
+        "t": "Column", "k": "root", "c": [
             {
-                "t": "ActionBar", "k": "actions", "role": "actionBar",
-                "p": { "actions": "$.actions", "states": "$.actionStates[post.key]" }
-            }
+                "t": "PostTile", "k": "post-sample-1", "role": "contentBody",
+                "p": { "post": "$.post", "variant": "normal" },
+                "c": [
+                    { "t": "RichText", "k": "body", "tag": "main_text", "p": { "source": "$.post.bodyRSL" } },
+                    {
+                        "t": "ActionBar", "k": "actions", "role": "actionBar",
+                        "p": { "actions": "$.actions", "states": "$.actionStates[post.key]" }
+                    }
+                ]
+            },
+            // D-064: FOW surface デモの入口(タップで fow.open を要求する)。
+            { "t": "Button", "k": "fow-demo", "p": { "label": "FOWデモ" }, "on": { "tap": "pickReaction" } }
         ]
     })
+}
+
+/// `pickReaction`: リアクションピッカー FOW を `fow.open` で要求する
+/// (D-064 FOW の RRL surface 化)。中身は RRL ツリー(絵文字 Button ×3)。
+/// ホストが FOW を閉じると `onClosed` に指定した `fowClosed` が呼ばれる。
+fn pick_reaction(args: &Value) -> Result<Value, Value> {
+    let emoji_button = |key: &str, label: &str| {
+        json!({ "t": "Button", "k": key, "p": { "label": label }, "on": { "tap": "reactFromFow" } })
+    };
+    let response = host_call(
+        "fow.open",
+        json!({
+            "id": "reaction-picker",
+            "spec": {
+                "type": "widget",
+                "confirmMode": "immediate",
+                "initialHeightFactor": 0.35,
+                "title": "リアクション (wasm)",
+                "cancelText": "閉じる"
+            },
+            "onClosed": "fowClosed",
+            "root": {
+                "t": "Column", "k": "fow-root", "c": [
+                    { "t": "Text", "k": "fow-prompt", "p": { "text": format!("サンプルプラグインの FOW (postId: {})", args["postId"].as_str().unwrap_or("?")) } },
+                    { "t": "Row", "k": "fow-emoji", "c": [
+                        emoji_button("emoji-like", "👍"),
+                        emoji_button("emoji-heart", "❤️"),
+                        emoji_button("emoji-tada", "🎉")
+                    ] }
+                ]
+            }
+        }),
+    );
+    if response["ok"].as_bool() == Some(true) {
+        Ok(json!({ "opened": response["value"]["opened"] }))
+    } else {
+        Err(response
+            .get("error")
+            .cloned()
+            .unwrap_or(json!({ "code": "E00", "message": "fow.open failed" })))
+    }
 }
 
 /// Current `snapshot`.
@@ -291,7 +342,27 @@ pub extern "C" fn call(
                 Err(got.get("error").cloned().unwrap_or(json!({"code": "E00", "message": "host_fn failed"})))
             }
         }
-        "openThread" | "openUser" | "openViewer" | "performAction" | "pickReaction" => {
+        "pickReaction" => pick_reaction(&args_value),
+        // FOW 内の絵文字 Button のタップ: nodeId 末尾の key で絵文字を特定し、
+        // `fow.close`(result = 絵文字)で自分の FOW を閉じる。
+        "reactFromFow" => {
+            let node_id = args_value["nodeId"].as_str().unwrap_or("");
+            let emoji = match node_id.rsplit(':').next().unwrap_or("") {
+                "emoji-like" => "👍",
+                "emoji-heart" => "❤️",
+                "emoji-tada" => "🎉",
+                other => other,
+            };
+            host_call("fow.close", json!({ "id": "reaction-picker", "result": emoji }));
+            Ok(json!({ "picked": emoji }))
+        }
+        // ホストからの FOW クローズ通知(fow.open の onClosed)。
+        "fowClosed" => {
+            *LAST_FOW_CLOSED.lock().unwrap() = args_value.clone();
+            Ok(json!({}))
+        }
+        "lastFowClosed" => Ok(LAST_FOW_CLOSED.lock().unwrap().clone()),
+        "openThread" | "openUser" | "openViewer" | "performAction" => {
             Ok(json!({ "echo": { "fn": fn_name, "args": args_value } }))
         }
         other => Err(json!({ "code": "C01", "message": format!("unsupported fn: {other}") })),

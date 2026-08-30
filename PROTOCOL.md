@@ -104,7 +104,7 @@ RAi の位置検索、タイムラインソート、リレーショナルTL(本�
 
 | fn | args | 権限 |
 |---|---|---|
-| `fow.open` | `{ id, spec: FowSpec(type, confirmMode, initialHeightFactor, title, cancelText, confirmText), root: Node }` | `fow.widget` / `fow.interstitial` / `fow.system` |
+| `fow.open` | `{ id, spec: FowSpec(type, confirmMode, initialHeightFactor, title, cancelText, confirmText), root: Node, onClosed? }` — `onClosed` は閉時にホストが call する関数名(args `{id, reason, result?}`)。戻り `{opened:true}` は**受理**(表示は UI isolate 側で非同期)。同一 id の再要求 = root の差し替え | `fow.widget` / `fow.interstitial` / `fow.system` |
 | `fow.close` | `{ id, result?, reason? }` | 同上 |
 | `alert` | `{ title, message, confirmText, cancelText?, destructive? }` | — |
 | `storage.get/set/delete` | `{ ns: safe|unsafe, key, value? }`(`pluginId` で自動プレフィックス) | `storage.safe` / `storage.unsafe` |
