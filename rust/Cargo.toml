@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "hello-rasq-plugin",
     "misskey-wasm-sample",
     "rasq_wasm_runtime_core",
 ]

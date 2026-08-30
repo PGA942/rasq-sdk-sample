@@ -4,6 +4,20 @@ RASQ(プラグインベース SNS クライアント)の **プラグイン SDK �
 第一期はホスト側(`ORGATE-question/rasq-client` の `packages/rasq_plugin_api`)で Dart の契約を切り、
 Misskey アダプタ(`packages/sns_misskey`)で検証したものを、ここで言語非依存の契約として固めていく。
 
+## ガイド(まずここから)
+
+- [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) — プラグインの形・ビルド・rasq-client での試し方
+- [`docs/rrl.md`](docs/rrl.md) — RRL 画面(ノード/意味タグ/Bind/イベント/patch/設定ページ)
+- [`docs/host-functions.md`](docs/host-functions.md) — ホスト関数(storage / net.fetch / alert / fow.* / ml.infer)
+- [`docs/fow.md`](docs/fow.md) — FOW 拡張面(open/close・anchor・親子・surface patch・ライフサイクル)
+- [`docs/sns-boundary.md`](docs/sns-boundary.md) — SNS 抽象関数(`sns.*`)と Post ワイヤ `rasq.post/1`
+
+## サンプル
+
+- [`rust/hello-rasq-plugin`](rust/hello-rasq-plugin) — **最小サンプル**(約 200 行・オフライン)。
+  RRL 画面 / storage / patch / FOW + surface patch / sns.* canned を 1 つずつ最小の形で
+- [`rust/misskey-wasm-sample`](rust/misskey-wasm-sample) — フル参考実装(実 Misskey を net.fetch で叩く)
+
 - [`CONTRACT.md`](CONTRACT.md) — Host ⇄ SNS plugin 契約 draft v0.2(`rasq-client/docs/PLUGIN_CONTRACT.md` と同内容)
 - [`PROTOCOL.md`](PROTOCOL.md) — 境界プロトコル draft v0.1(Snapshot / Patch / Call / Lifecycle / ホスト関数 wasm ABI / RSL スパン / RRL ノードと意味タグ / 検証ゲート / ml.infer 配置解決)
 - [`schema/rrl-node.schema.json`](schema/rrl-node.schema.json) / [`schema/boundary.schema.json`](schema/boundary.schema.json) — RRL ノードと境界メッセージの JSON Schema
