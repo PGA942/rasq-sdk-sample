@@ -347,15 +347,28 @@ fn fetch_local_notes(args: &Value) -> Result<(Vec<Value>, String), Value> {
     Ok((notes.as_array().cloned().unwrap_or_default(), host))
 }
 
-/// One Misskey note → `rasq.post/1` Post ワイヤ (D-074: SnsSession 契約の
-/// boundary 写像が返すデータ形。RRL snapshot とは別)。
-fn post_wire(note: &Value, fallback_instance: &str) -> Value {
-    let user = &note["user"];
+/// One Misskey user → `rasq.post/1` の author/user ワイヤ。
+fn user_wire(user: &Value, fallback_instance: &str) -> Value {
     let username = user["username"].as_str().unwrap_or("?");
     let display = match user["name"].as_str() {
         Some(n) if !n.is_empty() => n,
         _ => username,
     };
+    json!({
+        "id": user["id"],
+        "kind": "misskey",
+        "instance": user["host"].as_str().unwrap_or(fallback_instance),
+        "handle": username,
+        "displayName": display,
+        "avatarUrl": user["avatarUrl"],
+        "bio": user["description"],
+    })
+}
+
+/// One Misskey note → `rasq.post/1` Post ワイヤ (D-074: SnsSession 契約の
+/// boundary 写像が返すデータ形。RRL snapshot とは別)。
+fn post_wire(note: &Value, fallback_instance: &str) -> Value {
+    let user = &note["user"];
     let media: Vec<Value> = note["files"]
         .as_array()
         .map(|files| {
@@ -378,27 +391,39 @@ fn post_wire(note: &Value, fallback_instance: &str) -> Value {
         .as_object()
         .map(|m| m.values().filter_map(Value::as_i64).sum())
         .unwrap_or(0);
+    let is_quote = note["renote"].is_object() && note["text"].as_str().is_some_and(|t| !t.is_empty());
     json!({
         "id": note["id"],
-        "author": {
-            "id": user["id"],
-            "kind": "misskey",
-            "instance": user["host"].as_str().unwrap_or(fallback_instance),
-            "handle": username,
-            "displayName": display,
-            "avatarUrl": user["avatarUrl"],
-        },
+        "author": user_wire(user, fallback_instance),
         "createdAt": note["createdAt"],
         "body": note["text"].as_str().unwrap_or(""),
         "bodyFormat": "mfm",
         "cw": note["cw"],
         "media": media,
+        // 引用 / リプライ元 (深さ 1 のみ — ワイヤの再帰は host 側 codec が対応済み)。
+        "quote": if is_quote { shallow_post_wire(&note["renote"], fallback_instance) } else { Value::Null },
+        "replyTo": if note["reply"].is_object() { shallow_post_wire(&note["reply"], fallback_instance) } else { Value::Null },
+        "replyToId": note["replyId"],
         "counts": {
             "reply": note["repliesCount"],
             "renote": note["renoteCount"],
             "reaction": reaction_total,
         },
         "reactions": note["reactions"],
+        "visibility": note["visibility"],
+        "myReaction": note["myReaction"],
+    })
+}
+
+/// 再帰を 1 段で止める浅い Post ワイヤ(quote/replyTo 用)。
+fn shallow_post_wire(note: &Value, fallback_instance: &str) -> Value {
+    json!({
+        "id": note["id"],
+        "author": user_wire(&note["user"], fallback_instance),
+        "createdAt": note["createdAt"],
+        "body": note["text"].as_str().unwrap_or(""),
+        "bodyFormat": "mfm",
+        "cw": note["cw"],
         "visibility": note["visibility"],
     })
 }
@@ -443,6 +468,156 @@ fn sns_perform_action(args: &Value) -> Result<Value, Value> {
         }
         other => Err(json!({ "code": "C01", "message": format!("unsupported action: {other}") })),
     }
+}
+
+/// `call("sns.createPost", {draft, host?, token?})` (D-076): NewPost ワイヤ →
+/// notes/create → 作成された Post ワイヤ。
+fn sns_create_post(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let d = &args["draft"];
+    let mut body = json!({});
+    if d["repostOfId"].is_null() {
+        body["text"] = d["text"].clone();
+    }
+    for (wire, api) in [("cw", "cw"), ("replyToId", "replyId"), ("visibility", "visibility"), ("reactionAcceptance", "reactionAcceptance")] {
+        if !d[wire].is_null() {
+            body[api] = d[wire].clone();
+        }
+    }
+    if let Some(id) = d["quoteOfId"].as_str().or(d["repostOfId"].as_str()) {
+        body["renoteId"] = json!(id);
+    }
+    if d["localOnly"].as_bool() == Some(true) {
+        body["localOnly"] = json!(true);
+    }
+    if let Some(ids) = d["directToIds"].as_array() {
+        body["visibleUserIds"] = json!(ids);
+    }
+    if let Some(ids) = d["mediaIds"].as_array() {
+        body["fileIds"] = json!(ids);
+    }
+    if d["poll"].is_object() {
+        let mut poll = json!({ "choices": d["poll"]["choices"] });
+        if d["poll"]["multiple"].as_bool() == Some(true) {
+            poll["multiple"] = json!(true);
+        }
+        if let Some(sec) = d["poll"]["expiresAfterSec"].as_u64() {
+            poll["expiredAfter"] = json!(sec * 1000);
+        }
+        body["poll"] = poll;
+    }
+    let created = misskey_fetch(args, "notes/create", body)?;
+    Ok(json!({ "post": post_wire(&created["createdNote"], &host) }))
+}
+
+/// `call("sns.user", {id | handle+host?})` (D-076): users/show → Profile ワイヤ。
+fn sns_user(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let body = if let Some(id) = args["id"].as_str() {
+        json!({ "userId": id })
+    } else {
+        let mut b = json!({ "username": args["handle"] });
+        if let Some(h) = args["userHost"].as_str() {
+            b["host"] = json!(h);
+        }
+        b
+    };
+    let u = misskey_fetch(args, "users/show", body)?;
+    let username = u["username"].as_str().unwrap_or("?");
+    Ok(json!({ "profile": {
+        "user": user_wire(&u, &host),
+        "bannerUrl": u["bannerUrl"],
+        "description": u["description"],
+        "followersCount": u["followersCount"],
+        "followingCount": u["followingCount"],
+        "postsCount": u["notesCount"],
+        "createdAt": u["createdAt"],
+        "location": u["location"],
+        "isLocked": u["isLocked"],
+        "isBot": u["isBot"],
+        "isSuspended": u["isSuspended"],
+        "fields": u["fields"],
+        "profileUrl": format!("https://{host}/@{username}"),
+    } }))
+}
+
+/// `call("sns.userPosts", {id, filter, limit, cursor?})` (D-076): 返信/引用の
+/// 振り分け (D-069) 込み。
+fn sns_user_posts(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let filter = args["filter"].as_str().unwrap_or("posts");
+    let limit = args["limit"].as_u64().unwrap_or(20).min(50);
+    let mut body = json!({
+        "userId": args["id"],
+        "limit": limit,
+        "withReplies": filter == "withReplies" || filter == "replies",
+        "withRenotes": filter != "media",
+    });
+    if filter == "media" {
+        body["withFiles"] = json!(true);
+    }
+    if let Some(cursor) = args["cursor"].as_str() {
+        body["untilId"] = json!(cursor);
+    }
+    let list = misskey_fetch(args, "users/notes", body)?;
+    let notes: Vec<Value> = list.as_array().cloned().unwrap_or_default();
+    let is_quote = |n: &Value| n["renote"].is_object() && n["text"].as_str().is_some_and(|t| !t.is_empty());
+    let is_reply = |n: &Value| n["reply"].is_object() || !n["replyId"].is_null();
+    let filtered: Vec<&Value> = notes
+        .iter()
+        .filter(|n| match filter {
+            "replies" => is_reply(n),
+            "quotes" => is_quote(n),
+            "posts" => !is_reply(n) && !is_quote(n),
+            _ => true,
+        })
+        .collect();
+    let next = notes.last().and_then(|n| n["id"].as_str());
+    Ok(json!({ "page": { "items": filtered.iter().map(|n| post_wire(n, &host)).collect::<Vec<Value>>(), "nextCursor": next } }))
+}
+
+/// `call("sns.reactions", {postId, type?, limit, cursor?})` (D-076)。
+fn sns_reactions(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let mut body = json!({ "noteId": args["postId"], "limit": args["limit"].as_u64().unwrap_or(30).min(100) });
+    if let Some(t) = args["type"].as_str() {
+        body["type"] = json!(t);
+    }
+    if let Some(cursor) = args["cursor"].as_str() {
+        body["untilId"] = json!(cursor);
+    }
+    let list = misskey_fetch(args, "notes/reactions", body)?;
+    let entries: Vec<Value> = list
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|r| json!({ "id": r["id"], "user": user_wire(&r["user"], &host), "reaction": r["type"], "createdAt": r["createdAt"] }))
+        .collect();
+    let next = list.as_array().and_then(|a| a.last()).and_then(|r| r["id"].as_str());
+    Ok(json!({ "page": { "items": entries, "nextCursor": next } }))
+}
+
+/// `call("sns.reposters" | "sns.quotes", {postId, limit, cursor?})` (D-076)。
+fn sns_renotes(args: &Value, quotes: bool) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let mut body = json!({ "noteId": args["postId"], "limit": args["limit"].as_u64().unwrap_or(30).min(100) });
+    if let Some(cursor) = args["cursor"].as_str() {
+        body["untilId"] = json!(cursor);
+    }
+    let list = misskey_fetch(args, "notes/renotes", body)?;
+    let notes: Vec<Value> = list.as_array().cloned().unwrap_or_default();
+    let next = notes.last().and_then(|n| n["id"].as_str());
+    let items: Vec<Value> = if quotes {
+        notes
+            .iter()
+            .filter(|n| n["text"].as_str().is_some_and(|t| !t.is_empty()) || n["cw"].is_string())
+            .map(|n| post_wire(n, &host))
+            .collect()
+    } else {
+        notes.iter().map(|n| user_wire(&n["user"], &host)).collect()
+    };
+    Ok(json!({ "page": { "items": items, "nextCursor": next } }))
 }
 
 /// `call("timeline", {host?, limit?})`: fetch the local timeline through the
@@ -493,6 +668,17 @@ pub extern "C" fn call(
         "sns.timeline" => sns_timeline(&args_value),
         "sns.thread" => sns_thread(&args_value),
         "sns.performAction" => sns_perform_action(&args_value),
+        "sns.createPost" => sns_create_post(&args_value),
+        "sns.deletePost" => misskey_fetch(&args_value, "notes/delete", json!({ "noteId": args_value["id"] })).map(|_| json!({})),
+        "sns.me" => misskey_fetch(&args_value, "i", json!({})).map(|me| {
+            let host = args_value["host"].as_str().unwrap_or("misskey.io");
+            json!({ "user": user_wire(&me, host) })
+        }),
+        "sns.user" => sns_user(&args_value),
+        "sns.userPosts" => sns_user_posts(&args_value),
+        "sns.reactions" => sns_reactions(&args_value),
+        "sns.reposters" => sns_renotes(&args_value, false),
+        "sns.quotes" => sns_renotes(&args_value, true),
         // アクションバー宣言(register_action と同形の JSON)。
         "sns.actions" => Ok(json!({ "actions": [
             { "id": "reply", "genreTag": "Reply", "label": "返信", "icon": "subdirectory_arrow_left" },

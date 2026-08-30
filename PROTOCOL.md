@@ -151,7 +151,13 @@ SNS プラグインのイベントハンドラー関数は「一定程度は抽�
   - `sns.thread {id}` → `{thread: {post, ancestors: [Post](古い順), descendants: [Post]}}` (D-075)
   - `sns.performAction {actionId, postId, args}` → `{result: {done, count?, message?}}` — 短押しの中身はプラグインが決める(CONTRACT §5)。未対応アクションは C01 (D-075)
   - `sns.actions {}` → `{actions: [ActionDescriptor JSON(register_action と同形)]}` — アクションバー宣言 (D-075)
-- 以降(createPost / userPosts / notifications …)は同じ形で 1 本ずつ追加する。未実装関数は C01 — ホストは該当 UI を隠す(SnsSession の UnsupportedError と同じ扱い)。
+  - `sns.createPost {draft: NewPost ワイヤ}` → `{post}` — draft = `{text, cw?, replyToId?, quoteOfId?, repostOfId?, visibility?, localOnly?, reactionAcceptance?, directToIds?, mediaIds?, poll?: {choices, multiple?, expiresAfterSec?}}` (D-076)
+  - `sns.deletePost {id}` → `{}` (D-076)
+  - `sns.me {}` → `{user}` / `sns.user {id | handle+userHost?}` → `{profile: {user, bannerUrl?, description?, followersCount?, followingCount?, postsCount?, fields?, createdAt?, location?, isLocked?, isBot?, isSuspended?, pinnedPosts?, profileUrl?}}`(`host` は接続先と衝突するため、ユーザーの所属ホストは `userHost`)(D-076)
+  - `sns.userPosts {id, filter: posts|withReplies|replies|media|quotes, limit, cursor?}` → `{page}` — 返信/引用の振り分け規約 (D-069) はプラグイン側で適用 (D-076)
+  - `sns.reactions {postId, type?, limit, cursor?}` → `{page: {items: [{id, user, reaction, createdAt, emojiUrl?}], nextCursor?}}` (D-076)
+  - `sns.reposters {postId, …}` → `{page: {items: [user]}}` / `sns.quotes {postId, …}` → `{page: {items: [Post]}}` (D-076)
+- 以降(notifications / follow 系 / DM …)は同じ形で 1 本ずつ追加する。未実装関数は C01 — ホストは該当 UI を隠す(SnsSession の UnsupportedError と同じ扱い)。認証トークンは v1 ではホストが `args.token` で毎回渡す(サンプルは `i` に積む)— 実セッション登録の口と同時に整備する。
 
 ## 5. アクションと投稿ごとのアイコン(D-017)
 
