@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rasq.example/schema/settings-page.schema.json",
-  "title": "RASQ settings page (rasq.settings-page/1, D-031)",
-  "description": "設定第二階層以降の 1 ページ。wasm 不要の静的 RRL ドキュメントで、値は Bind `$.settings.<key>` で解決し、タイルの change イベント(on: {\"change\": \"settings.set\"}、設定キー = ノードの k)をホストが KV 書き込みへ変換する。ホスト設定の保存先はアカウント毎 KV `<area>.v1`(D-035)、プラグイン設定ページの保存先は storage.safe。",
+  "title": "RASQ settings page (rasq.settings-page/1, D-031/D-044)",
+  "description": "設定第二階層以降の 1 ページ。wasm 不要の静的 RRL ドキュメントで、値は Bind `$.settings.<key>` で解決し、タイルの change イベント(on: {\"change\": \"settings.set\"}、設定キー = ノードの k)をホストが書き込みへ変換する。ホスト設定の保存先はアカウント毎 KV `<area>.v1`(D-035)。SNS プラグインは同形式のページを manifest とは別に settingsPages で提供し(D-044)、area は短名(account 等)・保存先はホスト管理の KV `sns.<pluginId>.<area>.v1`(storage.safe 相当)。source: \"remote\" のページは KV を使わず、ホストが SnsSession.settingsRead / settingsWrite(1 キー書き込み、戻り値 = 最新値マップ)でサーバーに読み書きする。on: {\"tap\": \"web.open\"} は k をパスとして接続先インスタンスの web 設定を開く(パスワードが要る操作の逃がし先)。",
   "type": "object",
   "required": ["schema", "area", "root"],
   "additionalProperties": false,
@@ -10,9 +10,14 @@
     "schema": { "const": "rasq.settings-page/1" },
     "area": {
       "type": "string",
-      "description": "設定領域 id(例: appearance.display)。KV キー `<area>.v1` とアセット名に使う。"
+      "description": "設定領域 id。ホストページは例: appearance.display(KV キー `<area>.v1` とアセット名に使う)。プラグインページは短名(例: account)で、ホストが `sns.<pluginId>.` を前置して名前空間を強制する。"
     },
     "title": { "type": "string", "description": "ページヘッダーの題。" },
+    "source": {
+      "enum": ["local", "remote"],
+      "default": "local",
+      "description": "local = KV 保存(既定)。remote = プラグイン経由でサーバー保存(SnsSession.settingsRead / settingsWrite)。remote は SNS プラグインページのみ有効。"
+    },
     "defaults": {
       "type": "object",
       "description": "未保存キーの既定値。Bind 解決前に保存値へマージされる。"

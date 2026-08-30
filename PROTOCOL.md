@@ -62,7 +62,12 @@ RAi の位置検索、タイムラインソート、リレーショナルTL(本�
 
 `RichText` の `p.source` は **生文字列**(ホストが plain/MFM/HTML を解析)または **スパン配列**(プラグインが解析済み)のどちらでも良い。スパンの JSON は [`schema/rsl-span.schema.json`](schema/rsl-span.schema.json)、例は [`examples/mfm-body.rsl.json`](examples/mfm-body.rsl.json)。
 
-**設定ページ (D-031)**: 設定第二階層以降は wasm 不要の**静的 RRL ドキュメント**([`schema/settings-page.schema.json`](schema/settings-page.schema.json)、`rasq.settings-page/1`)。値は Bind `$.settings.<key>`、タイルの `change` イベント(`on: {"change": "settings.set"}`、設定キー = ノードの `k`)をホストが KV 書き込みへ変換する。プラグインの設定ページも同じ形式・同じレンダラーで、永続化のみ `storage.safe`。
+**設定ページ (D-031/D-044)**: 設定第二階層以降は wasm 不要の**静的 RRL ドキュメント**([`schema/settings-page.schema.json`](schema/settings-page.schema.json)、`rasq.settings-page/1`)。値は Bind `$.settings.<key>`、タイルの `change` イベント(`on: {"change": "settings.set"}`、設定キー = ノードの `k`)をホストが書き込みへ変換する。SNS プラグインは同形式のページを `settingsPages` として提供する (D-044):
+
+- `area` は短名(`account` / `timeline` …)。ホストが `sns.<pluginId>.` を前置して名前空間を強制し、ルート `/settings/dsl/sns.<area>`・KV `sns.<pluginId>.<area>.v1`(`storage.safe` 相当)に割り当てる。
+- ローカル保存ページの値は、変更毎に `SnsSession.applySettings(area, values)`(defaults マージ済み)でプラグインへ即時反映される(例: Misskey の `timeline.withRenotes` → TL 取得パラメーター)。
+- `source: "remote"` のページは KV を使わず、ホストが `SnsSession.settingsRead(area)` / `settingsWrite(area, key, value)`(戻り値 = 最新値マップ)でサーバーに読み書きする(例: Misskey の `account` → `i` / `i/update`)。
+- `on: {"tap": "web.open"}` は `k` をパスとして接続先インスタンスの web 設定を開く(パスワードが要る操作の逃がし先)。
 
 - 種別: `text`(bold/italic/strike/small/code)/ `emoji` / `image` / `link` / `mention` / `hashtag` / `transform`
 - **`transform` = MFM 装飾関数**。`{s:"transform", fn, args, c:[...]}` で入れ子可。ホストが必ず描画するコアセット:
@@ -78,7 +83,7 @@ RAi の位置検索、タイムラインソート、リレーショナルTL(本�
 | type | 内容 | 備考 |
 |---|---|---|
 | `snapshot` | `{ rev, root: Node }` | 初期ツリー全体。読み取り専用。ZeroCopy 対象(将来) |
-| `patch` | `{ rev, baseRev, ops: [ {op: insert|remove|setProp|replaceSubtree|move, target: nodeId, index?, node?, prop?, value?} ] }` | **原子バッチ**。`baseRev` がホストの現行 rev と不一致 → 拒否 → `resync` を返す。サイズ/頻度上限超過は異常として記録(B系) |
+| `patch` | `{ rev, baseRev, surface?, ops: [ {op: insert|remove|setProp|replaceSubtree|move, target: nodeId, index?, node?, prop?, value?} ] }` | **原子バッチ**。`baseRev` がホストの現行 rev と不一致 → 拒否 → `resync` を返す。**`surface` = FOW surface の id**(D-073: FOW ドキュメントへの適用。rev 系列は `fow.open` 時に 1 から。不一致/未知 surface は破棄 — 再 `fow.open` で resync)。v1 では `result.value.patch: true` を返すとホストが `patch()` を引き取る。サイズ/頻度上限超過は異常として記録(B系) |
 | `hostFn` | `{ callId, fn, args }` | §4 ホスト関数。戻りは `hostFnResult{callId, ok, value|error}` |
 | `result` | `{ callId, ok, value|error }` | ホストからの `call` への応答 |
 | `emit` | `{ name, payload }` | 同一インスタンス内の ephemeral UI 状態(開閉・フォーカス)。ビジネス状態は Store へ |
@@ -87,7 +92,7 @@ RAi の位置検索、タイムラインソート、リレーショナルTL(本�
 | type | 内容 | 備考 |
 |---|---|---|
 | `event` | `{ nodeId, kind: tap|longPress|pointerDown|pointerMove|pointerUp|confirm, payload }` | `Canvas` は raw pointer を必ず転送 |
-| `lifecycle` | `{ kind: mount|unmount|visible|hidden|cancel, streamId? }` | `mount` は論理マウントで一度だけ。可視性は `visible/hidden` で分離(仮想化TL) |
+| `lifecycle` | `{ kind: mount|unmount|visible|hidden|cancel, streamId? }` | `mount` は論理マウントで一度だけ。可視性は `visible/hidden` で分離(仮想化TL)。**v1 wasm ABI では `call("lifecycle", {kind, surface?})` として届く**(FOW surface の mount/unmount 実装済み、D-072。未対応プラグインは C01 を返してよく、ホストは無視する) |
 | `call` | `{ callId, fn, args }` | `CONTRACT.md` §5 の各操作(function.json で宣言した関数) |
 | `resync` | `{ reason }` | スナップショットの再送要求 |
 
@@ -99,7 +104,7 @@ RAi の位置検索、タイムラインソート、リレーショナルTL(本�
 
 | fn | args | 権限 |
 |---|---|---|
-| `fow.open` | `{ id, spec: FowSpec(type, confirmMode, initialHeightFactor, title, cancelText, confirmText), root: Node }` | `fow.widget` / `fow.interstitial` / `fow.system` |
+| `fow.open` | `{ id, spec: FowSpec(type, confirmMode, initialHeightFactor, title, cancelText, confirmText), root: Node, onClosed?, onCancel? }` — `onClosed` は閉時にホストが call する関数名(args `{id, reason, result?}`)。`onCancel` は **✕/キャンセル押下時**に call する関数名(args `{id}`): 指定時ホストは閉じず、プラグインが画面そのまま確認ポップアップ(確認 FOW 等)を出して自分で `fow.close` する。`spec.attachTop` = アプリヘッダーに下付き。`anchor {node?|role?}` = **自ドキュメントの実物ノードへアンカー**(例: 自分のアクションバー。ホストが role 付きノードのジオメトリ登録簿から現在矩形を解決。基本下付き・余白不足で上付き、別カラムへ動かすと壁付き表示)。`parentId` は**親 FOW の id**(同プラグイン内): 子 FOW は親の付く方向・カラムに追従(方向は親側指定 — 親が動けば更新)し、親は子の高さと方向をリアルタイムに受けて**入力部が被らないよう伸縮**する。親のクローズ/スイッチャーの親選択で子は連動クローズ。戻り `{opened:true}` は**受理**(表示は UI isolate 側で非同期)。同一 id の再要求 = root の差し替え | `fow.widget` / `fow.interstitial` / `fow.system` |
 | `fow.close` | `{ id, result?, reason? }` | 同上 |
 | `alert` | `{ title, message, confirmText, cancelText?, destructive? }` | — |
 | `storage.get/set/delete` | `{ ns: safe|unsafe, key, value? }`(`pluginId` で自動プレフィックス) | `storage.safe` / `storage.unsafe` |
@@ -132,6 +137,21 @@ RAi の位置検索、タイムラインソート、リレーショナルTL(本�
 - onnx 実行時のテンソル詰め替え・トークナイズはマニフェストの `inputs[].semantic` / `tokenizer` に従ってホストが行う。
 - **seq2seq 生成(onnx)**: KV キャッシュ無しの単発 forward で export されたモデルは、`runtimes.onnx.generation`(`decoderStartTokenId` / `eosTokenId` / `padTokenId` / `maxNewTokens` / `strategy: greedy`)に従って**ホストがデコーダーループ**(semantic `decoder_token_ids` のテンソルを伸ばしながら再実行)を回す。サンプリング付き生成はサーバー側(vLLM)に任せる。
 - 例: [`examples/reaction-predictor.model.json`](examples/reaction-predictor.model.json)(onnx int8 + Triton)/ [`examples/astell-summarizer.model.json`](examples/astell-summarizer.model.json)(onnx fp32 単発 forward + generation / gguf + vLLM)。
+
+## 4.3 SNS 抽象関数(イベントハンドラーの boundary 写像、M5d / D-074)
+
+SNS プラグインのイベントハンドラー関数は「一定程度は抽象的な関数で共通化」
+(デバイス側の基本思想)— **既存 SnsSession 契約の boundary 写像**として、
+ホスト → プラグインの `call("sns.<fn>", args)` で呼ぶ。データは RRL では
+なく **Post ワイヤ(`rasq.post/1`)** で返す:
+
+- Post ワイヤ: `{id, author: {id, kind, instance, handle, displayName, avatarUrl?, bio?}, createdAt(ISO), body, bodyFormat, cw?, media?: [{id, type: image|video|gif|file, url, thumbnailUrl?, sensitive?, …}], poll?, quote?: Post, replyTo?: Post, replyToId?, repostedBy?, counts?, visibility?, localOnly?, directToIds?, reactions?, reactionEmojis?, myReaction?, url?}`。閲覧アカウントのキー付けはワイヤに含めない(取り込み時にホストが与える)。
+- v1 実装済み(ホスト側アダプター = `WasmSnsSession`。エラーは result.error のコードのまま `SnsApiException` へ写る):
+  - `sns.timeline {kind, limit, cursor?}` → `{page: {items: [Post], nextCursor?}}`
+  - `sns.thread {id}` → `{thread: {post, ancestors: [Post](古い順), descendants: [Post]}}` (D-075)
+  - `sns.performAction {actionId, postId, args}` → `{result: {done, count?, message?}}` — 短押しの中身はプラグインが決める(CONTRACT §5)。未対応アクションは C01 (D-075)
+  - `sns.actions {}` → `{actions: [ActionDescriptor JSON(register_action と同形)]}` — アクションバー宣言 (D-075)
+- 以降(createPost / userPosts / notifications …)は同じ形で 1 本ずつ追加する。未実装関数は C01 — ホストは該当 UI を隠す(SnsSession の UnsupportedError と同じ扱い)。
 
 ## 5. アクションと投稿ごとのアイコン(D-017)
 

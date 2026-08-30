@@ -29,6 +29,19 @@ static HOST_CALL_SEQ: AtomicU64 = AtomicU64::new(0);
 /// `call("timeline")` replaces it.
 static STATE: Mutex<Option<(u64, Value)>> = Mutex::new(None);
 
+/// Last `fowClosed` notification (`{id, reason, result?}`) — queried back by
+/// the host/tests via `call("lastFowClosed")` (D-064 FOW surface demo).
+static LAST_FOW_CLOSED: Mutex<Value> = Mutex::new(Value::Null);
+
+/// Last `lifecycle` call (`{kind, surface?}`) — queried via
+/// `call("lastLifecycle")` (D-072).
+static LAST_LIFECYCLE: Mutex<Value> = Mutex::new(Value::Null);
+
+/// FOW surface 更新デモ (D-073): +1 ボタンのカウンターと、ホストが
+/// `patch()` で引き取る保留パッチ(surface 指定)。
+static FOW_COUNT: AtomicU64 = AtomicU64::new(0);
+static PENDING_PATCH: Mutex<Value> = Mutex::new(Value::Null);
+
 fn with_state<R>(f: impl FnOnce(&mut (u64, Value)) -> R) -> R {
     let mut guard = STATE.lock().unwrap();
     let state = guard.get_or_insert_with(|| (1, initial_root()));
@@ -79,16 +92,73 @@ pub extern "C" fn dealloc(ptr: u32, len: u32) {
 /// `examples/post-tile.rrl.json` — shown until `timeline` is called.
 fn initial_root() -> Value {
     json!({
-        "t": "PostTile", "k": "post-sample-1", "role": "contentBody",
-        "p": { "post": "$.post", "variant": "normal" },
-        "c": [
-            { "t": "RichText", "k": "body", "tag": "main_text", "p": { "source": "$.post.bodyRSL" } },
+        "t": "Column", "k": "root", "c": [
             {
-                "t": "ActionBar", "k": "actions", "role": "actionBar",
-                "p": { "actions": "$.actions", "states": "$.actionStates[post.key]" }
-            }
+                "t": "PostTile", "k": "post-sample-1", "role": "contentBody",
+                "p": { "post": "$.post", "variant": "normal" },
+                "c": [
+                    { "t": "RichText", "k": "body", "tag": "main_text", "p": { "source": "$.post.bodyRSL" } },
+                    {
+                        "t": "ActionBar", "k": "actions", "role": "actionBar",
+                        "p": { "actions": "$.actions", "states": "$.actionStates[post.key]" }
+                    }
+                ]
+            },
+            // D-064: FOW surface デモの入口(タップで fow.open を要求する)。
+            { "t": "Button", "k": "fow-demo", "p": { "label": "FOWデモ" }, "on": { "tap": "pickReaction" } }
         ]
     })
+}
+
+/// `pickReaction`: リアクションピッカー FOW を `fow.open` で要求する
+/// (D-064 FOW の RRL surface 化)。中身は RRL ツリー(絵文字 Button ×3)。
+/// ホストが FOW を閉じると `onClosed` に指定した `fowClosed` が呼ばれる。
+fn pick_reaction(args: &Value) -> Result<Value, Value> {
+    let emoji_button = |key: &str, label: &str| {
+        json!({ "t": "Button", "k": key, "p": { "label": label }, "on": { "tap": "reactFromFow" } })
+    };
+    // 実物ノードへのアンカー (D-072): 呼び出し元(アクションバー)の
+    // nodeId 末尾 key に張り付く。ホスト側で解決できなければ通常ドック。
+    let anchor_key = args["nodeId"].as_str().and_then(|s| s.rsplit(':').next()).unwrap_or("");
+    FOW_COUNT.store(0, Ordering::Relaxed); // surface rev は open で 1 に戻る (D-073)
+    let response = host_call(
+        "fow.open",
+        json!({
+            "id": "reaction-picker",
+            "anchor": { "node": anchor_key },
+            "spec": {
+                "type": "widget",
+                "confirmMode": "immediate",
+                "initialHeightFactor": 0.35,
+                "title": "リアクション (wasm)",
+                "cancelText": "閉じる"
+            },
+            "onClosed": "fowClosed",
+            // ✕(閉じる)は即クローズせず確認ポップアップ (D-066)。
+            "onCancel": "confirmCloseFow",
+            "root": {
+                "t": "Column", "k": "fow-root", "c": [
+                    { "t": "Text", "k": "fow-prompt", "p": { "text": format!("サンプルプラグインの FOW (postId: {})", args["postId"].as_str().unwrap_or("?")) } },
+                    { "t": "Row", "k": "fow-emoji", "c": [
+                        emoji_button("emoji-like", "👍"),
+                        emoji_button("emoji-heart", "❤️"),
+                        emoji_button("emoji-tada", "🎉")
+                    ] },
+                    // surface patch のデモ (D-073): +1 でカウンターだけ差分更新。
+                    { "t": "Text", "k": "fow-count", "p": { "text": "タップ 0 回" } },
+                    { "t": "Button", "k": "fow-plus", "p": { "label": "+1" }, "on": { "tap": "fowPlus" } }
+                ]
+            }
+        }),
+    );
+    if response["ok"].as_bool() == Some(true) {
+        Ok(json!({ "opened": response["value"]["opened"] }))
+    } else {
+        Err(response
+            .get("error")
+            .cloned()
+            .unwrap_or(json!({ "code": "E00", "message": "fow.open failed" })))
+    }
 }
 
 /// Current `snapshot`.
@@ -106,9 +176,14 @@ pub extern "C" fn snapshot() -> u64 {
     pack(msg.to_string().into_bytes())
 }
 
-/// Demo `patch` (baseRev 1 -> rev 2): only meaningful on the initial tree.
+/// Pending surface patch (D-073) if any, else the demo `patch`
+/// (baseRev 1 -> rev 2, only meaningful on the initial tree).
 #[no_mangle]
 pub extern "C" fn patch() -> u64 {
+    let pending = mem::replace(&mut *PENDING_PATCH.lock().unwrap(), Value::Null);
+    if !pending.is_null() {
+        return pack(pending.to_string().into_bytes());
+    }
     let msg = json!({
         "schema": "rasq.boundary/1",
         "scope": SCOPE,
@@ -181,7 +256,9 @@ fn post_tile(note: &Value, fallback_instance: &str) -> Value {
         }));
     }
     children.push(json!({
-        "t": "ActionBar", "k": "actions", "role": "actionBar",
+        // key はタイル毎に一意化 (D-072: ジオメトリ登録簿の nodeId 衝突回避
+        // — アンカー解決で「その投稿のバー」を特定できるように)。
+        "t": "ActionBar", "k": format!("actions-{id}"), "role": "actionBar",
         "p": {
             "actions": [
                 { "id": "reply", "label": "返信", "icon": "subdirectory_arrow_left" },
@@ -218,24 +295,26 @@ fn post_tile(note: &Value, fallback_instance: &str) -> Value {
     })
 }
 
-/// `call("timeline", {host?, limit?})`: fetch the local timeline through the
-/// host's `net.fetch`, rebuild the tree, bump rev. The host then pulls the
-/// new `snapshot()` (result carries `treeUpdated: true`).
-fn timeline(args: &Value) -> Result<Value, Value> {
+/// Misskey API を `net.fetch` 経由で叩く共通口(SNS 抽象関数で共用、D-075)。
+/// `args.host`/`args.baseUrl` で接続先、`args.token` があれば `i` を積む。
+/// 2xx 以外はエラー、204/空ボディは Null を返す。
+fn misskey_fetch(args: &Value, endpoint: &str, mut body: Value) -> Result<Value, Value> {
     let host = args["host"].as_str().unwrap_or("misskey.io");
-    let limit = args["limit"].as_u64().unwrap_or(10).min(30);
     // baseUrl override is for tests / self-hosted instances (default https).
     let base = match args["baseUrl"].as_str() {
         Some(b) => b.trim_end_matches('/').to_string(),
         None => format!("https://{host}"),
     };
+    if let Some(token) = args["token"].as_str() {
+        body["i"] = json!(token);
+    }
     let response = host_call(
         "net.fetch",
         json!({
             "method": "POST",
-            "url": format!("{base}/api/notes/local-timeline"),
+            "url": format!("{base}/api/{endpoint}"),
             "headers": { "Content-Type": "application/json" },
-            "body": json!({ "limit": limit }).to_string(),
+            "body": body.to_string(),
         }),
     );
     if response["ok"].as_bool() != Some(true) {
@@ -246,13 +325,132 @@ fn timeline(args: &Value) -> Result<Value, Value> {
     }
     let value = &response["value"];
     let status = value["status"].as_u64().unwrap_or(0);
-    if status != 200 {
-        return Err(json!({ "code": "B03", "message": format!("HTTP {status} from {host}") }));
+    if !(200..300).contains(&status) {
+        return Err(json!({ "code": "B03", "message": format!("HTTP {status} from {endpoint}") }));
     }
-    let notes: Vec<Value> = serde_json::from_str(value["bodyText"].as_str().unwrap_or("[]"))
-        .map_err(|e| json!({ "code": "D01", "message": format!("bad timeline JSON: {e}") }))?;
+    let text = value["bodyText"].as_str().unwrap_or("");
+    if text.trim().is_empty() {
+        return Ok(Value::Null); // 204 等
+    }
+    serde_json::from_str(text).map_err(|e| json!({ "code": "D01", "message": format!("bad JSON from {endpoint}: {e}") }))
+}
 
-    let tiles: Vec<Value> = notes.iter().map(|n| post_tile(n, host)).collect();
+/// Misskey local-timeline fetch(`timeline` と `sns.timeline` で共用)。
+fn fetch_local_notes(args: &Value) -> Result<(Vec<Value>, String), Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let limit = args["limit"].as_u64().unwrap_or(10).min(30);
+    let mut body = json!({ "limit": limit });
+    if let Some(cursor) = args["cursor"].as_str() {
+        body["untilId"] = json!(cursor);
+    }
+    let notes = misskey_fetch(args, "notes/local-timeline", body)?;
+    Ok((notes.as_array().cloned().unwrap_or_default(), host))
+}
+
+/// One Misskey note → `rasq.post/1` Post ワイヤ (D-074: SnsSession 契約の
+/// boundary 写像が返すデータ形。RRL snapshot とは別)。
+fn post_wire(note: &Value, fallback_instance: &str) -> Value {
+    let user = &note["user"];
+    let username = user["username"].as_str().unwrap_or("?");
+    let display = match user["name"].as_str() {
+        Some(n) if !n.is_empty() => n,
+        _ => username,
+    };
+    let media: Vec<Value> = note["files"]
+        .as_array()
+        .map(|files| {
+            files
+                .iter()
+                .filter_map(|f| {
+                    let url = f["url"].as_str()?;
+                    Some(json!({
+                        "id": f["id"],
+                        "type": media_type(f["type"].as_str().unwrap_or("")),
+                        "url": url,
+                        "thumbnailUrl": f["thumbnailUrl"],
+                        "sensitive": f["isSensitive"].as_bool().unwrap_or(false),
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let reaction_total: i64 = note["reactions"]
+        .as_object()
+        .map(|m| m.values().filter_map(Value::as_i64).sum())
+        .unwrap_or(0);
+    json!({
+        "id": note["id"],
+        "author": {
+            "id": user["id"],
+            "kind": "misskey",
+            "instance": user["host"].as_str().unwrap_or(fallback_instance),
+            "handle": username,
+            "displayName": display,
+            "avatarUrl": user["avatarUrl"],
+        },
+        "createdAt": note["createdAt"],
+        "body": note["text"].as_str().unwrap_or(""),
+        "bodyFormat": "mfm",
+        "cw": note["cw"],
+        "media": media,
+        "counts": {
+            "reply": note["repliesCount"],
+            "renote": note["renoteCount"],
+            "reaction": reaction_total,
+        },
+        "reactions": note["reactions"],
+        "visibility": note["visibility"],
+    })
+}
+
+/// `call("sns.timeline", {kind?, limit?, cursor?, host?, baseUrl?})` (D-074):
+/// SnsSession 契約の boundary 写像 — Post ワイヤの page を返す。
+fn sns_timeline(args: &Value) -> Result<Value, Value> {
+    let (notes, host) = fetch_local_notes(args)?;
+    let items: Vec<Value> = notes.iter().map(|n| post_wire(n, &host)).collect();
+    let next = notes.last().and_then(|n| n["id"].as_str());
+    Ok(json!({ "page": { "items": items, "nextCursor": next } }))
+}
+
+/// `call("sns.thread", {id, host?, baseUrl?})` (D-075): notes/show +
+/// conversation + children → Thread ワイヤ(ancestors は古い順)。
+fn sns_thread(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let id = args["id"].as_str().unwrap_or("");
+    let target = misskey_fetch(args, "notes/show", json!({ "noteId": id }))?;
+    let conv = misskey_fetch(args, "notes/conversation", json!({ "noteId": id, "limit": 30 })).unwrap_or(json!([]));
+    let children = misskey_fetch(args, "notes/children", json!({ "noteId": id, "limit": 30 })).unwrap_or(json!([]));
+    let mut ancestors: Vec<Value> = conv.as_array().cloned().unwrap_or_default().iter().map(|n| post_wire(n, &host)).collect();
+    ancestors.reverse(); // Misskey conversation は近い順 → 古い順へ
+    let descendants: Vec<Value> = children.as_array().cloned().unwrap_or_default().iter().map(|n| post_wire(n, &host)).collect();
+    Ok(json!({ "thread": { "post": post_wire(&target, &host), "ancestors": ancestors, "descendants": descendants } }))
+}
+
+/// `call("sns.performAction", {actionId, postId, args, host?, token?})`
+/// (D-075): 短押しの中身はプラグインが決める(CONTRACT §5)。
+fn sns_perform_action(args: &Value) -> Result<Value, Value> {
+    let action = args["actionId"].as_str().unwrap_or("");
+    let post_id = args["postId"].as_str().unwrap_or("");
+    match action {
+        "reaction" => {
+            let reaction = args["args"]["reaction"].as_str().unwrap_or("👍");
+            misskey_fetch(args, "notes/reactions/create", json!({ "noteId": post_id, "reaction": reaction }))?;
+            Ok(json!({ "result": { "done": true } }))
+        }
+        "renote" => {
+            misskey_fetch(args, "notes/create", json!({ "renoteId": post_id }))?;
+            Ok(json!({ "result": { "done": true } }))
+        }
+        other => Err(json!({ "code": "C01", "message": format!("unsupported action: {other}") })),
+    }
+}
+
+/// `call("timeline", {host?, limit?})`: fetch the local timeline through the
+/// host's `net.fetch`, rebuild the tree, bump rev. The host then pulls the
+/// new `snapshot()` (result carries `treeUpdated: true`).
+fn timeline(args: &Value) -> Result<Value, Value> {
+    let (notes, host) = fetch_local_notes(args)?;
+    let tiles: Vec<Value> = notes.iter().map(|n| post_tile(n, &host)).collect();
     let count = tiles.len();
     let root = json!({ "t": "Column", "k": "tl", "c": tiles });
     let rev = with_state(|state| {
@@ -291,7 +489,104 @@ pub extern "C" fn call(
                 Err(got.get("error").cloned().unwrap_or(json!({"code": "E00", "message": "host_fn failed"})))
             }
         }
-        "openThread" | "openUser" | "openViewer" | "performAction" | "pickReaction" => {
+        // SnsSession 契約の boundary 写像 (D-074/D-075, M5d): Post ワイヤを返す。
+        "sns.timeline" => sns_timeline(&args_value),
+        "sns.thread" => sns_thread(&args_value),
+        "sns.performAction" => sns_perform_action(&args_value),
+        // アクションバー宣言(register_action と同形の JSON)。
+        "sns.actions" => Ok(json!({ "actions": [
+            { "id": "reply", "genreTag": "Reply", "label": "返信", "icon": "subdirectory_arrow_left" },
+            { "id": "renote", "genreTag": "Repost", "label": "リノート", "icon": "repeat", "doneIcon": "repeat_on" },
+            { "id": "reaction", "genreTag": "Reaction", "label": "リアクション", "icon": "add_reaction_outlined", "doneIcon": "add_reaction" }
+        ] })),
+        "pickReaction" => pick_reaction(&args_value),
+        // FOW surface への差分更新デモ (D-073): カウンターを setProp する
+        // surface patch を積み、`patch: true` でホストに引き取らせる。
+        "fowPlus" => {
+            let n = FOW_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+            *PENDING_PATCH.lock().unwrap() = json!({
+                "schema": "rasq.boundary/1",
+                "scope": SCOPE,
+                "type": "patch",
+                "surface": "reaction-picker",
+                "rev": n + 1,
+                "baseRev": n,
+                "ops": [
+                    { "op": "setProp", "target": format!("{SCOPE}:fow-count"), "prop": "text", "value": format!("タップ {n} 回") }
+                ]
+            });
+            Ok(json!({ "patch": true, "count": n }))
+        }
+        // FOW 内の絵文字 Button のタップ: nodeId 末尾の key で絵文字を特定し、
+        // `fow.close`(result = 絵文字)で自分の FOW を閉じる。
+        "reactFromFow" => {
+            let node_id = args_value["nodeId"].as_str().unwrap_or("");
+            let emoji = match node_id.rsplit(':').next().unwrap_or("") {
+                "emoji-like" => "👍",
+                "emoji-heart" => "❤️",
+                "emoji-tada" => "🎉",
+                other => other,
+            };
+            host_call("fow.close", json!({ "id": "reaction-picker", "result": emoji }));
+            Ok(json!({ "picked": emoji }))
+        }
+        // ✕押下(fow.open の onCancel)→ 画面そのままで確認ポップアップ
+        // (確認 FOW)を出す (D-066)。ホストはまだ閉じていない。
+        "confirmCloseFow" => {
+            let response = host_call(
+                "fow.open",
+                json!({
+                    "id": "reaction-picker-confirm",
+                    // 子 FOW (D-067): 親(ピッカー)の側に付き、親は子の
+                    // 高さぶん持ち上がって内容が被らない。
+                    "parentId": "reaction-picker",
+                    "spec": {
+                        "type": "widget",
+                        "confirmMode": "confirm",
+                        "initialHeightFactor": 0.22,
+                        "title": "閉じますか?"
+                    },
+                    "root": {
+                        "t": "Column", "k": "confirm-root", "c": [
+                            { "t": "Text", "k": "confirm-msg", "p": { "text": "リアクションを選ばずに閉じますか?" } },
+                            { "t": "Row", "k": "confirm-actions", "c": [
+                                { "t": "Button", "k": "confirm-discard", "p": { "label": "破棄" }, "on": { "tap": "discardFow" } },
+                                { "t": "Button", "k": "confirm-keep", "p": { "label": "続ける" }, "on": { "tap": "keepFow" } }
+                            ] }
+                        ]
+                    }
+                }),
+            );
+            if response["ok"].as_bool() == Some(true) {
+                Ok(json!({ "opened": true }))
+            } else {
+                // 確認を出せない環境では素直に閉じる。
+                host_call("fow.close", json!({ "id": "reaction-picker", "reason": "discard" }));
+                Ok(json!({ "opened": false }))
+            }
+        }
+        "discardFow" => {
+            host_call("fow.close", json!({ "id": "reaction-picker-confirm" }));
+            host_call("fow.close", json!({ "id": "reaction-picker", "reason": "discard" }));
+            Ok(json!({}))
+        }
+        "keepFow" => {
+            host_call("fow.close", json!({ "id": "reaction-picker-confirm" }));
+            Ok(json!({}))
+        }
+        // ホストからの FOW クローズ通知(fow.open の onClosed)。
+        "fowClosed" => {
+            *LAST_FOW_CLOSED.lock().unwrap() = args_value.clone();
+            Ok(json!({}))
+        }
+        "lastFowClosed" => Ok(LAST_FOW_CLOSED.lock().unwrap().clone()),
+        // ホストからのライフサイクル (D-072、v1 は call("lifecycle") で届く)。
+        "lifecycle" => {
+            *LAST_LIFECYCLE.lock().unwrap() = args_value.clone();
+            Ok(json!({}))
+        }
+        "lastLifecycle" => Ok(LAST_LIFECYCLE.lock().unwrap().clone()),
+        "openThread" | "openUser" | "openViewer" | "performAction" => {
             Ok(json!({ "echo": { "fn": fn_name, "args": args_value } }))
         }
         other => Err(json!({ "code": "C01", "message": format!("unsupported fn: {other}") })),
