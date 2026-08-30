@@ -295,25 +295,24 @@ fn post_tile(note: &Value, fallback_instance: &str) -> Value {
     })
 }
 
-/// Misskey local-timeline fetch through the host's `net.fetch`
-/// (`timeline` と `sns.timeline` で共用)。Returns (notes, host).
-fn fetch_local_notes(args: &Value) -> Result<(Vec<Value>, String), Value> {
-    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
-    let limit = args["limit"].as_u64().unwrap_or(10).min(30);
+/// Misskey API を `net.fetch` 経由で叩く共通口(SNS 抽象関数で共用、D-075)。
+/// `args.host`/`args.baseUrl` で接続先、`args.token` があれば `i` を積む。
+/// 2xx 以外はエラー、204/空ボディは Null を返す。
+fn misskey_fetch(args: &Value, endpoint: &str, mut body: Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io");
     // baseUrl override is for tests / self-hosted instances (default https).
     let base = match args["baseUrl"].as_str() {
         Some(b) => b.trim_end_matches('/').to_string(),
         None => format!("https://{host}"),
     };
-    let mut body = json!({ "limit": limit });
-    if let Some(cursor) = args["cursor"].as_str() {
-        body["untilId"] = json!(cursor);
+    if let Some(token) = args["token"].as_str() {
+        body["i"] = json!(token);
     }
     let response = host_call(
         "net.fetch",
         json!({
             "method": "POST",
-            "url": format!("{base}/api/notes/local-timeline"),
+            "url": format!("{base}/api/{endpoint}"),
             "headers": { "Content-Type": "application/json" },
             "body": body.to_string(),
         }),
@@ -326,12 +325,26 @@ fn fetch_local_notes(args: &Value) -> Result<(Vec<Value>, String), Value> {
     }
     let value = &response["value"];
     let status = value["status"].as_u64().unwrap_or(0);
-    if status != 200 {
-        return Err(json!({ "code": "B03", "message": format!("HTTP {status} from {host}") }));
+    if !(200..300).contains(&status) {
+        return Err(json!({ "code": "B03", "message": format!("HTTP {status} from {endpoint}") }));
     }
-    let notes: Vec<Value> = serde_json::from_str(value["bodyText"].as_str().unwrap_or("[]"))
-        .map_err(|e| json!({ "code": "D01", "message": format!("bad timeline JSON: {e}") }))?;
-    Ok((notes, host))
+    let text = value["bodyText"].as_str().unwrap_or("");
+    if text.trim().is_empty() {
+        return Ok(Value::Null); // 204 等
+    }
+    serde_json::from_str(text).map_err(|e| json!({ "code": "D01", "message": format!("bad JSON from {endpoint}: {e}") }))
+}
+
+/// Misskey local-timeline fetch(`timeline` と `sns.timeline` で共用)。
+fn fetch_local_notes(args: &Value) -> Result<(Vec<Value>, String), Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let limit = args["limit"].as_u64().unwrap_or(10).min(30);
+    let mut body = json!({ "limit": limit });
+    if let Some(cursor) = args["cursor"].as_str() {
+        body["untilId"] = json!(cursor);
+    }
+    let notes = misskey_fetch(args, "notes/local-timeline", body)?;
+    Ok((notes.as_array().cloned().unwrap_or_default(), host))
 }
 
 /// One Misskey note → `rasq.post/1` Post ワイヤ (D-074: SnsSession 契約の
@@ -399,6 +412,39 @@ fn sns_timeline(args: &Value) -> Result<Value, Value> {
     Ok(json!({ "page": { "items": items, "nextCursor": next } }))
 }
 
+/// `call("sns.thread", {id, host?, baseUrl?})` (D-075): notes/show +
+/// conversation + children → Thread ワイヤ(ancestors は古い順)。
+fn sns_thread(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let id = args["id"].as_str().unwrap_or("");
+    let target = misskey_fetch(args, "notes/show", json!({ "noteId": id }))?;
+    let conv = misskey_fetch(args, "notes/conversation", json!({ "noteId": id, "limit": 30 })).unwrap_or(json!([]));
+    let children = misskey_fetch(args, "notes/children", json!({ "noteId": id, "limit": 30 })).unwrap_or(json!([]));
+    let mut ancestors: Vec<Value> = conv.as_array().cloned().unwrap_or_default().iter().map(|n| post_wire(n, &host)).collect();
+    ancestors.reverse(); // Misskey conversation は近い順 → 古い順へ
+    let descendants: Vec<Value> = children.as_array().cloned().unwrap_or_default().iter().map(|n| post_wire(n, &host)).collect();
+    Ok(json!({ "thread": { "post": post_wire(&target, &host), "ancestors": ancestors, "descendants": descendants } }))
+}
+
+/// `call("sns.performAction", {actionId, postId, args, host?, token?})`
+/// (D-075): 短押しの中身はプラグインが決める(CONTRACT §5)。
+fn sns_perform_action(args: &Value) -> Result<Value, Value> {
+    let action = args["actionId"].as_str().unwrap_or("");
+    let post_id = args["postId"].as_str().unwrap_or("");
+    match action {
+        "reaction" => {
+            let reaction = args["args"]["reaction"].as_str().unwrap_or("👍");
+            misskey_fetch(args, "notes/reactions/create", json!({ "noteId": post_id, "reaction": reaction }))?;
+            Ok(json!({ "result": { "done": true } }))
+        }
+        "renote" => {
+            misskey_fetch(args, "notes/create", json!({ "renoteId": post_id }))?;
+            Ok(json!({ "result": { "done": true } }))
+        }
+        other => Err(json!({ "code": "C01", "message": format!("unsupported action: {other}") })),
+    }
+}
+
 /// `call("timeline", {host?, limit?})`: fetch the local timeline through the
 /// host's `net.fetch`, rebuild the tree, bump rev. The host then pulls the
 /// new `snapshot()` (result carries `treeUpdated: true`).
@@ -443,8 +489,16 @@ pub extern "C" fn call(
                 Err(got.get("error").cloned().unwrap_or(json!({"code": "E00", "message": "host_fn failed"})))
             }
         }
-        // SnsSession 契約の boundary 写像 (D-074/M5d): Post ワイヤを返す。
+        // SnsSession 契約の boundary 写像 (D-074/D-075, M5d): Post ワイヤを返す。
         "sns.timeline" => sns_timeline(&args_value),
+        "sns.thread" => sns_thread(&args_value),
+        "sns.performAction" => sns_perform_action(&args_value),
+        // アクションバー宣言(register_action と同形の JSON)。
+        "sns.actions" => Ok(json!({ "actions": [
+            { "id": "reply", "genreTag": "Reply", "label": "返信", "icon": "subdirectory_arrow_left" },
+            { "id": "renote", "genreTag": "Repost", "label": "リノート", "icon": "repeat", "doneIcon": "repeat_on" },
+            { "id": "reaction", "genreTag": "Reaction", "label": "リアクション", "icon": "add_reaction_outlined", "doneIcon": "add_reaction" }
+        ] })),
         "pickReaction" => pick_reaction(&args_value),
         // FOW surface への差分更新デモ (D-073): カウンターを setProp する
         // surface patch を積み、`patch: true` でホストに引き取らせる。

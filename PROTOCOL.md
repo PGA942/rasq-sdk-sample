@@ -146,8 +146,12 @@ SNS プラグインのイベントハンドラー関数は「一定程度は抽�
 なく **Post ワイヤ(`rasq.post/1`)** で返す:
 
 - Post ワイヤ: `{id, author: {id, kind, instance, handle, displayName, avatarUrl?, bio?}, createdAt(ISO), body, bodyFormat, cw?, media?: [{id, type: image|video|gif|file, url, thumbnailUrl?, sensitive?, …}], poll?, quote?: Post, replyTo?: Post, replyToId?, repostedBy?, counts?, visibility?, localOnly?, directToIds?, reactions?, reactionEmojis?, myReaction?, url?}`。閲覧アカウントのキー付けはワイヤに含めない(取り込み時にホストが与える)。
-- v1 実装済み: `sns.timeline {kind, limit, cursor?}` → `{page: {items: [Post], nextCursor?}}`(ホスト側アダプター = `WasmSnsSession`。エラーは result.error のコードのまま `SnsApiException` へ写る)。
-- 以降(thread / createPost / performAction / userPosts …)は同じ形で 1 本ずつ追加する。未実装関数は C01 — ホストは該当 UI を隠す(SnsSession の UnsupportedError と同じ扱い)。
+- v1 実装済み(ホスト側アダプター = `WasmSnsSession`。エラーは result.error のコードのまま `SnsApiException` へ写る):
+  - `sns.timeline {kind, limit, cursor?}` → `{page: {items: [Post], nextCursor?}}`
+  - `sns.thread {id}` → `{thread: {post, ancestors: [Post](古い順), descendants: [Post]}}` (D-075)
+  - `sns.performAction {actionId, postId, args}` → `{result: {done, count?, message?}}` — 短押しの中身はプラグインが決める(CONTRACT §5)。未対応アクションは C01 (D-075)
+  - `sns.actions {}` → `{actions: [ActionDescriptor JSON(register_action と同形)]}` — アクションバー宣言 (D-075)
+- 以降(createPost / userPosts / notifications …)は同じ形で 1 本ずつ追加する。未実装関数は C01 — ホストは該当 UI を隠す(SnsSession の UnsupportedError と同じ扱い)。
 
 ## 5. アクションと投稿ごとのアイコン(D-017)
 
