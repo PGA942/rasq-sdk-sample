@@ -37,6 +37,11 @@ static LAST_FOW_CLOSED: Mutex<Value> = Mutex::new(Value::Null);
 /// `call("lastLifecycle")` (D-072).
 static LAST_LIFECYCLE: Mutex<Value> = Mutex::new(Value::Null);
 
+/// FOW surface 更新デモ (D-073): +1 ボタンのカウンターと、ホストが
+/// `patch()` で引き取る保留パッチ(surface 指定)。
+static FOW_COUNT: AtomicU64 = AtomicU64::new(0);
+static PENDING_PATCH: Mutex<Value> = Mutex::new(Value::Null);
+
 fn with_state<R>(f: impl FnOnce(&mut (u64, Value)) -> R) -> R {
     let mut guard = STATE.lock().unwrap();
     let state = guard.get_or_insert_with(|| (1, initial_root()));
@@ -115,6 +120,7 @@ fn pick_reaction(args: &Value) -> Result<Value, Value> {
     // 実物ノードへのアンカー (D-072): 呼び出し元(アクションバー)の
     // nodeId 末尾 key に張り付く。ホスト側で解決できなければ通常ドック。
     let anchor_key = args["nodeId"].as_str().and_then(|s| s.rsplit(':').next()).unwrap_or("");
+    FOW_COUNT.store(0, Ordering::Relaxed); // surface rev は open で 1 に戻る (D-073)
     let response = host_call(
         "fow.open",
         json!({
@@ -137,7 +143,10 @@ fn pick_reaction(args: &Value) -> Result<Value, Value> {
                         emoji_button("emoji-like", "👍"),
                         emoji_button("emoji-heart", "❤️"),
                         emoji_button("emoji-tada", "🎉")
-                    ] }
+                    ] },
+                    // surface patch のデモ (D-073): +1 でカウンターだけ差分更新。
+                    { "t": "Text", "k": "fow-count", "p": { "text": "タップ 0 回" } },
+                    { "t": "Button", "k": "fow-plus", "p": { "label": "+1" }, "on": { "tap": "fowPlus" } }
                 ]
             }
         }),
@@ -167,9 +176,14 @@ pub extern "C" fn snapshot() -> u64 {
     pack(msg.to_string().into_bytes())
 }
 
-/// Demo `patch` (baseRev 1 -> rev 2): only meaningful on the initial tree.
+/// Pending surface patch (D-073) if any, else the demo `patch`
+/// (baseRev 1 -> rev 2, only meaningful on the initial tree).
 #[no_mangle]
 pub extern "C" fn patch() -> u64 {
+    let pending = mem::replace(&mut *PENDING_PATCH.lock().unwrap(), Value::Null);
+    if !pending.is_null() {
+        return pack(pending.to_string().into_bytes());
+    }
     let msg = json!({
         "schema": "rasq.boundary/1",
         "scope": SCOPE,
@@ -355,6 +369,23 @@ pub extern "C" fn call(
             }
         }
         "pickReaction" => pick_reaction(&args_value),
+        // FOW surface への差分更新デモ (D-073): カウンターを setProp する
+        // surface patch を積み、`patch: true` でホストに引き取らせる。
+        "fowPlus" => {
+            let n = FOW_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+            *PENDING_PATCH.lock().unwrap() = json!({
+                "schema": "rasq.boundary/1",
+                "scope": SCOPE,
+                "type": "patch",
+                "surface": "reaction-picker",
+                "rev": n + 1,
+                "baseRev": n,
+                "ops": [
+                    { "op": "setProp", "target": format!("{SCOPE}:fow-count"), "prop": "text", "value": format!("タップ {n} 回") }
+                ]
+            });
+            Ok(json!({ "patch": true, "count": n }))
+        }
         // FOW 内の絵文字 Button のタップ: nodeId 末尾の key で絵文字を特定し、
         // `fow.close`(result = 絵文字)で自分の FOW を閉じる。
         "reactFromFow" => {

@@ -83,7 +83,7 @@ RAi の位置検索、タイムラインソート、リレーショナルTL(本�
 | type | 内容 | 備考 |
 |---|---|---|
 | `snapshot` | `{ rev, root: Node }` | 初期ツリー全体。読み取り専用。ZeroCopy 対象(将来) |
-| `patch` | `{ rev, baseRev, ops: [ {op: insert|remove|setProp|replaceSubtree|move, target: nodeId, index?, node?, prop?, value?} ] }` | **原子バッチ**。`baseRev` がホストの現行 rev と不一致 → 拒否 → `resync` を返す。サイズ/頻度上限超過は異常として記録(B系) |
+| `patch` | `{ rev, baseRev, surface?, ops: [ {op: insert|remove|setProp|replaceSubtree|move, target: nodeId, index?, node?, prop?, value?} ] }` | **原子バッチ**。`baseRev` がホストの現行 rev と不一致 → 拒否 → `resync` を返す。**`surface` = FOW surface の id**(D-073: FOW ドキュメントへの適用。rev 系列は `fow.open` 時に 1 から。不一致/未知 surface は破棄 — 再 `fow.open` で resync)。v1 では `result.value.patch: true` を返すとホストが `patch()` を引き取る。サイズ/頻度上限超過は異常として記録(B系) |
 | `hostFn` | `{ callId, fn, args }` | §4 ホスト関数。戻りは `hostFnResult{callId, ok, value|error}` |
 | `result` | `{ callId, ok, value|error }` | ホストからの `call` への応答 |
 | `emit` | `{ name, payload }` | 同一インスタンス内の ephemeral UI 状態(開閉・フォーカス)。ビジネス状態は Store へ |
