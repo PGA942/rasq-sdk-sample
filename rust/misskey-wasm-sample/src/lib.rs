@@ -33,6 +33,10 @@ static STATE: Mutex<Option<(u64, Value)>> = Mutex::new(None);
 /// the host/tests via `call("lastFowClosed")` (D-064 FOW surface demo).
 static LAST_FOW_CLOSED: Mutex<Value> = Mutex::new(Value::Null);
 
+/// Last `lifecycle` call (`{kind, surface?}`) — queried via
+/// `call("lastLifecycle")` (D-072).
+static LAST_LIFECYCLE: Mutex<Value> = Mutex::new(Value::Null);
+
 fn with_state<R>(f: impl FnOnce(&mut (u64, Value)) -> R) -> R {
     let mut guard = STATE.lock().unwrap();
     let state = guard.get_or_insert_with(|| (1, initial_root()));
@@ -108,10 +112,14 @@ fn pick_reaction(args: &Value) -> Result<Value, Value> {
     let emoji_button = |key: &str, label: &str| {
         json!({ "t": "Button", "k": key, "p": { "label": label }, "on": { "tap": "reactFromFow" } })
     };
+    // 実物ノードへのアンカー (D-072): 呼び出し元(アクションバー)の
+    // nodeId 末尾 key に張り付く。ホスト側で解決できなければ通常ドック。
+    let anchor_key = args["nodeId"].as_str().and_then(|s| s.rsplit(':').next()).unwrap_or("");
     let response = host_call(
         "fow.open",
         json!({
             "id": "reaction-picker",
+            "anchor": { "node": anchor_key },
             "spec": {
                 "type": "widget",
                 "confirmMode": "immediate",
@@ -234,7 +242,9 @@ fn post_tile(note: &Value, fallback_instance: &str) -> Value {
         }));
     }
     children.push(json!({
-        "t": "ActionBar", "k": "actions", "role": "actionBar",
+        // key はタイル毎に一意化 (D-072: ジオメトリ登録簿の nodeId 衝突回避
+        // — アンカー解決で「その投稿のバー」を特定できるように)。
+        "t": "ActionBar", "k": format!("actions-{id}"), "role": "actionBar",
         "p": {
             "actions": [
                 { "id": "reply", "label": "返信", "icon": "subdirectory_arrow_left" },
@@ -408,6 +418,12 @@ pub extern "C" fn call(
             Ok(json!({}))
         }
         "lastFowClosed" => Ok(LAST_FOW_CLOSED.lock().unwrap().clone()),
+        // ホストからのライフサイクル (D-072、v1 は call("lifecycle") で届く)。
+        "lifecycle" => {
+            *LAST_LIFECYCLE.lock().unwrap() = args_value.clone();
+            Ok(json!({}))
+        }
+        "lastLifecycle" => Ok(LAST_LIFECYCLE.lock().unwrap().clone()),
         "openThread" | "openUser" | "openViewer" | "performAction" => {
             Ok(json!({ "echo": { "fn": fn_name, "args": args_value } }))
         }

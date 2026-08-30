@@ -92,7 +92,7 @@ RAi の位置検索、タイムラインソート、リレーショナルTL(本�
 | type | 内容 | 備考 |
 |---|---|---|
 | `event` | `{ nodeId, kind: tap|longPress|pointerDown|pointerMove|pointerUp|confirm, payload }` | `Canvas` は raw pointer を必ず転送 |
-| `lifecycle` | `{ kind: mount|unmount|visible|hidden|cancel, streamId? }` | `mount` は論理マウントで一度だけ。可視性は `visible/hidden` で分離(仮想化TL) |
+| `lifecycle` | `{ kind: mount|unmount|visible|hidden|cancel, streamId? }` | `mount` は論理マウントで一度だけ。可視性は `visible/hidden` で分離(仮想化TL)。**v1 wasm ABI では `call("lifecycle", {kind, surface?})` として届く**(FOW surface の mount/unmount 実装済み、D-072。未対応プラグインは C01 を返してよく、ホストは無視する) |
 | `call` | `{ callId, fn, args }` | `CONTRACT.md` §5 の各操作(function.json で宣言した関数) |
 | `resync` | `{ reason }` | スナップショットの再送要求 |
 
@@ -104,7 +104,7 @@ RAi の位置検索、タイムラインソート、リレーショナルTL(本�
 
 | fn | args | 権限 |
 |---|---|---|
-| `fow.open` | `{ id, spec: FowSpec(type, confirmMode, initialHeightFactor, title, cancelText, confirmText), root: Node, onClosed?, onCancel? }` — `onClosed` は閉時にホストが call する関数名(args `{id, reason, result?}`)。`onCancel` は **✕/キャンセル押下時**に call する関数名(args `{id}`): 指定時ホストは閉じず、プラグインが画面そのまま確認ポップアップ(確認 FOW 等)を出して自分で `fow.close` する。`parentId` は**親 FOW の id**(同プラグイン内): 子 FOW は親の付く方向・カラムに追従(方向は親側指定 — 親が動けば更新)し、親は子の高さと方向をリアルタイムに受けて**入力部が被らないよう伸縮**する。親のクローズ/スイッチャーの親選択で子は連動クローズ。戻り `{opened:true}` は**受理**(表示は UI isolate 側で非同期)。同一 id の再要求 = root の差し替え | `fow.widget` / `fow.interstitial` / `fow.system` |
+| `fow.open` | `{ id, spec: FowSpec(type, confirmMode, initialHeightFactor, title, cancelText, confirmText), root: Node, onClosed?, onCancel? }` — `onClosed` は閉時にホストが call する関数名(args `{id, reason, result?}`)。`onCancel` は **✕/キャンセル押下時**に call する関数名(args `{id}`): 指定時ホストは閉じず、プラグインが画面そのまま確認ポップアップ(確認 FOW 等)を出して自分で `fow.close` する。`spec.attachTop` = アプリヘッダーに下付き。`anchor {node?|role?}` = **自ドキュメントの実物ノードへアンカー**(例: 自分のアクションバー。ホストが role 付きノードのジオメトリ登録簿から現在矩形を解決。基本下付き・余白不足で上付き、別カラムへ動かすと壁付き表示)。`parentId` は**親 FOW の id**(同プラグイン内): 子 FOW は親の付く方向・カラムに追従(方向は親側指定 — 親が動けば更新)し、親は子の高さと方向をリアルタイムに受けて**入力部が被らないよう伸縮**する。親のクローズ/スイッチャーの親選択で子は連動クローズ。戻り `{opened:true}` は**受理**(表示は UI isolate 側で非同期)。同一 id の再要求 = root の差し替え | `fow.widget` / `fow.interstitial` / `fow.system` |
 | `fow.close` | `{ id, result?, reason? }` | 同上 |
 | `alert` | `{ title, message, confirmText, cancelText?, destructive? }` | — |
 | `storage.get/set/delete` | `{ ns: safe|unsafe, key, value? }`(`pluginId` で自動プレフィックス) | `storage.safe` / `storage.unsafe` |

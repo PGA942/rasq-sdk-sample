@@ -27,7 +27,7 @@
     },
     "fns": {
       "fow.open": {
-        "args": { "id": "string", "spec": "{type: widget|interstitial|system, confirmMode, initialHeightFactor?, title?, cancelText?, confirmText?}", "root": "rrl-node.schema.json", "onClosed": "string? — 閉時にホストが call する関数名 (args: {id, reason, result?})", "onCancel": "string? — ✕/キャンセル押下時にホストが call する関数名 (args: {id})。指定時ホストは閉じない — プラグインが確認ポップアップ(確認FOW等)を出し、自分で fow.close する", "parentId": "string? — 親 FOW の id(同プラグイン内)。子 FOW は親の付く方向・カラムに追従し、親は子の高さぶん伸縮して入力部が被らない。親のクローズ/スイッチャーでの親選択で子は連動クローズ" },
+        "args": { "id": "string", "spec": "{type: widget|interstitial|system, confirmMode, initialHeightFactor?, title?, cancelText?, confirmText?, attachTop?: boolean — アプリヘッダーに下付き}", "root": "rrl-node.schema.json", "anchor": "{node?: '<k>', role?: '<role>'}? — 自ドキュメントの実物ノードへアンカー(基本下付き・余白不足で上付き。矩形はホストのジオメトリ登録簿(role 付きノード)から解決、不可なら通常ドック)", "onClosed": "string? — 閉時にホストが call する関数名 (args: {id, reason, result?})", "onCancel": "string? — ✕/キャンセル押下時にホストが call する関数名 (args: {id})。指定時ホストは閉じない — プラグインが確認ポップアップ(確認FOW等)を出し、自分で fow.close する", "parentId": "string? — 親 FOW の id(同プラグイン内)。子 FOW は親の付く方向・カラムに追従し、親は子の高さぶん伸縮して入力部が被らない。親のクローズ/スイッチャーでの親選択で子は連動クローズ" },
         "value": { "opened": "boolean — v1 は受理を意味する(表示は UI isolate 側で非同期に行われる)。同一 id での再要求は中身(root)の差し替え" },
         "permission": "fow.widget | fow.interstitial | fow.system"
       },
