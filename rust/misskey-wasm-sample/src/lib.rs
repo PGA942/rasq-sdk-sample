@@ -367,7 +367,26 @@ fn user_wire(user: &Value, fallback_instance: &str) -> Value {
 
 /// One Misskey note → `rasq.post/1` Post ワイヤ (D-074: SnsSession 契約の
 /// boundary 写像が返すデータ形。RRL snapshot とは別)。
+///
+/// **純リノート**(text 空・添付なし・投票なし)はホストのマッパーと同じ規則で
+/// 中身のノートに展開し、`repostedBy` に外側の投稿者を載せる(D-100:
+/// 展開しないと本文もquoteも無い「内容のない投稿」になる)。
 fn post_wire(note: &Value, fallback_instance: &str) -> Value {
+    post_wire_at(note, fallback_instance, 0)
+}
+
+fn post_wire_at(note: &Value, fallback_instance: &str, depth: usize) -> Value {
+    let text_empty = note["text"].as_str().is_none_or(|t| t.is_empty());
+    let files_empty = note["fileIds"].as_array().is_none_or(|a| a.is_empty());
+    let is_pure_renote = note["renote"].is_object() && text_empty && files_empty && note["poll"].is_null();
+    if is_pure_renote && depth == 0 {
+        // 「◯◯がリノートしました」— id/時刻は外側、内容は中身のノート。
+        let mut inner = post_wire_at(&note["renote"], fallback_instance, depth + 1);
+        inner["id"] = note["id"].clone();
+        inner["createdAt"] = note["createdAt"].clone();
+        inner["repostedBy"] = user_wire(&note["user"], fallback_instance);
+        return inner;
+    }
     let user = &note["user"];
     let media: Vec<Value> = note["files"]
         .as_array()
@@ -934,5 +953,70 @@ fn read_str(ptr: u32, len: u32) -> String {
     unsafe {
         let slice = std::slice::from_raw_parts(ptr as *const u8, len as usize);
         String::from_utf8_lossy(slice).into_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// D-100: 純リノートは中身のノートへ展開し repostedBy を載せる
+    /// (展開しないと本文も quote も無い「内容のない投稿」になる)。
+    #[test]
+    fn pure_renote_unwraps_with_reposted_by() {
+        let note = json!({
+            "id": "outer1",
+            "createdAt": "2026-08-31T00:00:00Z",
+            "text": null,
+            "fileIds": [],
+            "poll": null,
+            "user": { "id": "u2", "username": "renoter", "name": "リノートする人" },
+            "renote": {
+                "id": "inner1",
+                "createdAt": "2026-08-30T00:00:00Z",
+                "text": "中身の本文",
+                "fileIds": [],
+                "user": { "id": "u1", "username": "author", "name": "元の人" },
+            },
+        });
+        let wire = post_wire(&note, "example.test");
+        assert_eq!(wire["id"], "outer1"); // アクションは外側の id へ
+        assert_eq!(wire["body"], "中身の本文");
+        assert_eq!(wire["author"]["handle"], "author");
+        assert_eq!(wire["repostedBy"]["handle"], "renoter");
+    }
+
+    /// 引用リノート(text あり)は従来どおり body + quote。
+    #[test]
+    fn quote_renote_keeps_body_and_quote() {
+        let note = json!({
+            "id": "q1",
+            "text": "これすごい",
+            "fileIds": [],
+            "user": { "id": "u2", "username": "quoter" },
+            "renote": { "id": "inner1", "text": "元ネタ", "user": { "id": "u1", "username": "author" } },
+        });
+        let wire = post_wire(&note, "example.test");
+        assert_eq!(wire["body"], "これすごい");
+        assert_eq!(wire["quote"]["body"], "元ネタ");
+        assert!(wire["repostedBy"].is_null());
+    }
+
+    /// 添付だけのリノート(text 空 + files)は純リノートではない。
+    #[test]
+    fn renote_with_files_is_not_pure() {
+        let note = json!({
+            "id": "m1",
+            "text": null,
+            "fileIds": ["f1"],
+            "files": [{ "id": "f1", "url": "https://x.invalid/1.png", "type": "image/png" }],
+            "user": { "id": "u2", "username": "quoter" },
+            "renote": { "id": "inner1", "text": "元ネタ", "user": { "id": "u1", "username": "author" } },
+        });
+        let wire = post_wire(&note, "example.test");
+        assert_eq!(wire["id"], "m1");
+        assert!(wire["repostedBy"].is_null());
+        assert_eq!(wire["media"].as_array().unwrap().len(), 1);
     }
 }
