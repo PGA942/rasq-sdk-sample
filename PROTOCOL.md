@@ -172,9 +172,10 @@ TL プラグイン = 「Widget コンポーネント + ソートアルゴリズ�
 - `tl.customize {id, posts: [Post ワイヤ]}` → `{tiles: {postId: RRL Node}}` — **投稿カスタマイザ(完全置き換えタイル、replace_tile)** (D-082)。**V5 検証**: タイルは必須ロール `contentBody` を含むこと — 欠けるとホストが破棄して通常タイルに縮退。**スレッドナビはホスト保証**(置き換えタイルでもタップでスレッド展開)。タイル内のイベントはプラグイン関数へ戻る。
 - **可視性 lifecycle** (D-082): 仮想化 TL で行が生成/破棄されると `call("lifecycle", {kind: visible|hidden, surface: "tl:<id>", post})` が届く(置き換えタイル行)。
 
+- `post.transform {posts: [Post ワイヤ]}` → `{posts: {postId: {body?, cw?}}}` — **投稿加工プラグイン(transform_content)** (D-083)。**全 TL 共通**で表示前に本文/注釈を差し替える(タイル構造は変えない — 構造は `tl.customize` の領分)。未実装/失敗は無加工。
+
 v1 の口は SNS プラグイン自身のモジュール(実登録セッション)に付く — 独立 TL
-プラグインの常設はストア統合後。投稿加工プラグイン(transform_content、通常 TL
-の本文加工)は別種として次段。
+/加工プラグインの常設インストールはストア統合後。
 
 ## 5. アクションと投稿ごとのアイコン(D-017)
 

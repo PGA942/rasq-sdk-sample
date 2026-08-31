@@ -775,6 +775,21 @@ pub extern "C" fn call(
             }
             other => Err(json!({ "code": "C01", "message": format!("unknown timeline: {other:?}") })),
         },
+        // 投稿加工プラグイン (D-083 transform_content): 表示前の本文加工。
+        // タイル構造は変えない(構造は tl.customize の領分)。デモ:
+        // 「打ち上げ」を含む本文に 🚀 を前置。
+        "post.transform" => {
+            let posts = args_value["posts"].as_array().cloned().unwrap_or_default();
+            let mut patches = serde_json::Map::new();
+            for p in &posts {
+                if let (Some(id), Some(body)) = (p["id"].as_str(), p["body"].as_str()) {
+                    if body.contains("打ち上げ") && !body.starts_with("🚀") {
+                        patches.insert(id.to_string(), json!({ "body": format!("🚀 {body}") }));
+                    }
+                }
+            }
+            Ok(json!({ "posts": patches }))
+        }
         // 投稿カスタマイザ (D-082): 完全置き換えタイル(replace_tile)。
         // 必須ロール contentBody を含めること(V5 検証 — 欠けるとホストが
         // 破棄して通常タイルに縮退する)。デモ: リアクション 1 位に王冠。
