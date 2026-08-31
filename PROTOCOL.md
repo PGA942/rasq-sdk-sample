@@ -169,7 +169,7 @@ TL プラグイン = 「Widget コンポーネント + ソートアルゴリズ�
 - `tl.timelines {}` → `{timelines: [{id, label, base}]}` — カスタム TL の宣言。`base` はホストが餌にする基礎 TL(`home`/`local` …)。ホストはホーム TL のタブに `custom:<id>` として出す。
 - `tl.sort {id, posts: [Post ワイヤ]}` → `{order: [postId…]}` — **表示順の id 列**。載っていない投稿は除外。`order` 無し = そのまま。未知の id は C01。
 
-- `tl.customize {id, posts: [Post ワイヤ]}` → `{tiles: {postId: RRL Node}}` — **投稿カスタマイザ(完全置き換えタイル、replace_tile)** (D-082)。**V5 検証**: タイルは必須ロール `contentBody` を含むこと — 欠けるとホストが破棄して通常タイルに縮退。**スレッドナビはホスト保証**(置き換えタイルでもタップでスレッド展開)。タイル内のイベントはプラグイン関数へ戻る。
+- `tl.customize {id, posts: [Post ワイヤ]}` → `{tiles: {postId: RRL Node}, badges: {postId: {icon?, text}}}` — **投稿カスタマイザ** (D-082/D-085)。`tiles` = 完全置き換えタイル(replace_tile)。`badges` = **上付きバナー行**(RT の「♻︎ 〇〇がリノートしました」と同スタイル): 通常タイルのままアイコン名 + テキストだけ足す軽量な口(アイコン名はホストのアイコンレジストリで解決)。完全置き換えタイル側は L2 `PostTile` の Props `bannerIcon`/`bannerText` で同じ行を出せる。**V5 検証**: タイルは必須ロール `contentBody` を含むこと — 欠けるとホストが破棄して通常タイルに縮退。**スレッドナビはホスト保証**(置き換えタイルでもタップでスレッド展開)。タイル内のイベントはプラグイン関数へ戻る。
 - **可視性 lifecycle** (D-082): 仮想化 TL で行が生成/破棄されると `call("lifecycle", {kind: visible|hidden, surface: "tl:<id>", post})` が届く(置き換えタイル行)。
 
 - `post.transform {posts: [Post ワイヤ]}` → `{posts: {postId: {body?, cw?}}}` — **投稿加工プラグイン(transform_content)** (D-083)。**全 TL 共通**で表示前に本文/注釈を差し替える(タイル構造は変えない — 構造は `tl.customize` の領分)。未実装/失敗は無加工。
@@ -190,7 +190,9 @@ SNS プラグインが RRL の icon/body に**タグ付け必須**なのはこ�
 - `call("relational.build", {posts, guests, settings?, communities?, nowMs, lookbackMinutes?})` → `{events: [{postKeys(時系列順), lastActivityMs}]}`
 
 中身は rasq-client の会話イベント方式 (D-027) ルールベース部の忠実な移植
-(パリティテストで Dart エンジンと束ね一致を検証)。SigLIP / Louvain は
+(パリティテストで Dart エンジンと束ね一致を検証)。ホストは**バンドルの
+全ログインアカウントの HTL** を混ぜて供給し (D-086)、**V11 検証ゲート**
+(§2.2 の付与先違反タグは取り込み時に剥がす)でタグの読取りを守る。SigLIP / Louvain は
 ホスト側資産のため、ML が効くときはホストが Dart エンジンを使う —
 カルクレーター統合後に wasm 側から `ml.infer` を呼ぶ形へ置換する。
 

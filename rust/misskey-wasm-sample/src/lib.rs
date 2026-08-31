@@ -804,7 +804,16 @@ pub extern "C" fn call(
                         }
                     }
                 }
-                Ok(json!({ "tiles": tiles }))
+                // 上付きバナー行 (D-085): 2 位は通常タイルのまま、RT の
+                // 「♻︎ 〇〇がリノートしました」と同スタイルのバッジだけ足す。
+                let mut badges = serde_json::Map::new();
+                if let Some(second) = posts.get(1) {
+                    if let Some(id) = second["id"].as_str() {
+                        let n = second["counts"]["reaction"].as_i64().unwrap_or(0);
+                        badges.insert(id.to_string(), json!({ "icon": "star", "text": format!("リアクション2位 ({n}件)") }));
+                    }
+                }
+                Ok(json!({ "tiles": tiles, "badges": badges }))
             }
             other => Err(json!({ "code": "C01", "message": format!("unknown timeline: {other:?}") })),
         },
