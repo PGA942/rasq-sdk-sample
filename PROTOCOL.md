@@ -177,6 +177,23 @@ TL プラグイン = 「Widget コンポーネント + ソートアルゴリズ�
 v1 の口は SNS プラグイン自身のモジュール(実登録セッション)に付く — 独立 TL
 /加工プラグインの常設インストールはストア統合後。
 
+## 4.5 関連TL エンジン(特別枠、M5f / D-084)
+
+リレーショナルTL は **TL プラグインではない特別枠**: ストア配布物ではなく
+RASQ 同梱の公式 wasm モジュール(`relational-wasm`)で、アカウントバンドルに
+含まれる**全アカウントの TL 系**を見る(v1 は現在アカウントの HTL + ゲスト)。
+SNS プラグインが RRL の icon/body に**タグ付け必須**なのはこのため — ホストが
+タグ規約(§2.2)経由で本文/引用/リンクを抽出し、SNS 非依存の最小ワイヤ
+(`rasq.relational-post/1`)にしてエンジンへ渡す:
+
+- 入力 post: `{key, authorKey, repostedByKey?, createdAtMs, body, quoteBody?, linkUrl?, quoteKey?}`
+- `call("relational.build", {posts, guests, settings?, communities?, nowMs, lookbackMinutes?})` → `{events: [{postKeys(時系列順), lastActivityMs}]}`
+
+中身は rasq-client の会話イベント方式 (D-027) ルールベース部の忠実な移植
+(パリティテストで Dart エンジンと束ね一致を検証)。SigLIP / Louvain は
+ホスト側資産のため、ML が効くときはホストが Dart エンジンを使う —
+カルクレーター統合後に wasm 側から `ml.infer` を呼ぶ形へ置換する。
+
 ## 5. アクションと投稿ごとのアイコン(D-017)
 
 - 短押し `performAction(actionId, postId)`(引数なし)は**プラグインが中身を決める**(Misskey 本番: 予測モデルで最有力の絵文字をリアクション)。長押しは絵文字ピッカー FOW → `args.reaction`。

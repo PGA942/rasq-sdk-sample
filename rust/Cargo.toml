@@ -4,6 +4,7 @@ members = [
     "hello-rasq-plugin",
     "misskey-wasm-sample",
     "rasq_wasm_runtime_core",
+    "relational-wasm",
 ]
 
 [profile.release]
