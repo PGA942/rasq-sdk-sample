@@ -169,9 +169,12 @@ TL プラグイン = 「Widget コンポーネント + ソートアルゴリズ�
 - `tl.timelines {}` → `{timelines: [{id, label, base}]}` — カスタム TL の宣言。`base` はホストが餌にする基礎 TL(`home`/`local` …)。ホストはホーム TL のタブに `custom:<id>` として出す。
 - `tl.sort {id, posts: [Post ワイヤ]}` → `{order: [postId…]}` — **表示順の id 列**。載っていない投稿は除外。`order` 無し = そのまま。未知の id は C01。
 
-投稿カスタマイザ(`tl.customize` — replace_tile の RRL、V5 の必須 role 検証込み)と
-lifecycle `visible/hidden`(仮想化 TL)は次段。v1 の口は SNS プラグイン自身の
-モジュール(実登録セッション)に付く — 独立 TL プラグインの常設はストア統合後。
+- `tl.customize {id, posts: [Post ワイヤ]}` → `{tiles: {postId: RRL Node}}` — **投稿カスタマイザ(完全置き換えタイル、replace_tile)** (D-082)。**V5 検証**: タイルは必須ロール `contentBody` を含むこと — 欠けるとホストが破棄して通常タイルに縮退。**スレッドナビはホスト保証**(置き換えタイルでもタップでスレッド展開)。タイル内のイベントはプラグイン関数へ戻る。
+- **可視性 lifecycle** (D-082): 仮想化 TL で行が生成/破棄されると `call("lifecycle", {kind: visible|hidden, surface: "tl:<id>", post})` が届く(置き換えタイル行)。
+
+v1 の口は SNS プラグイン自身のモジュール(実登録セッション)に付く — 独立 TL
+プラグインの常設はストア統合後。投稿加工プラグイン(transform_content、通常 TL
+の本文加工)は別種として次段。
 
 ## 5. アクションと投稿ごとのアイコン(D-017)
 

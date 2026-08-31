@@ -437,6 +437,38 @@ fn sns_timeline(args: &Value) -> Result<Value, Value> {
     Ok(json!({ "page": { "items": items, "nextCursor": next } }))
 }
 
+/// リアクション 1 位の置き換えタイル (D-082 デモ)。入力は Post ワイヤ。
+/// PostTile(role contentBody)を含む = V5 検証を満たす。
+fn top_reaction_tile(post: &Value) -> Value {
+    let author = &post["author"];
+    let id = post["id"].as_str().unwrap_or("x");
+    json!({
+        "t": "Column", "k": format!("top-{id}"), "c": [
+            { "t": "Text", "k": format!("crown-{id}"), "p": { "text": format!("👑 リアクション1位 ({}件)", post["counts"]["reaction"].as_i64().unwrap_or(0)) } },
+            {
+                "t": "PostTile", "k": format!("post-{id}"), "role": "contentBody",
+                "p": {
+                    "post": {
+                        "id": post["id"],
+                        "author": {
+                            "displayName": author["displayName"],
+                            "handle": author["handle"],
+                            "kind": author["kind"],
+                            "instance": author["instance"],
+                            "avatarUrl": author["avatarUrl"],
+                        },
+                        "createdAt": post["createdAt"],
+                    },
+                    "variant": "normal"
+                },
+                "c": [
+                    { "t": "RichText", "k": format!("body-{id}"), "tag": "main_text", "p": { "source": post["body"] } }
+                ]
+            }
+        ]
+    })
+}
+
 /// `call("sns.thread", {id, host?, baseUrl?})` (D-075): notes/show +
 /// conversation + children → Thread ワイヤ(ancestors は古い順)。
 fn sns_thread(args: &Value) -> Result<Value, Value> {
@@ -740,6 +772,24 @@ pub extern "C" fn call(
                 idx.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
                 let order: Vec<Value> = idx.iter().filter_map(|(i, _)| posts[*i]["id"].as_str().map(|s| json!(s))).collect();
                 Ok(json!({ "order": order }))
+            }
+            other => Err(json!({ "code": "C01", "message": format!("unknown timeline: {other:?}") })),
+        },
+        // 投稿カスタマイザ (D-082): 完全置き換えタイル(replace_tile)。
+        // 必須ロール contentBody を含めること(V5 検証 — 欠けるとホストが
+        // 破棄して通常タイルに縮退する)。デモ: リアクション 1 位に王冠。
+        "tl.customize" => match args_value["id"].as_str() {
+            Some("reaction-rank") => {
+                let posts = args_value["posts"].as_array().cloned().unwrap_or_default();
+                let mut tiles = serde_json::Map::new();
+                if let Some(top) = posts.first() {
+                    if top["counts"]["reaction"].as_i64().unwrap_or(0) > 0 {
+                        if let Some(id) = top["id"].as_str() {
+                            tiles.insert(id.to_string(), top_reaction_tile(top));
+                        }
+                    }
+                }
+                Ok(json!({ "tiles": tiles }))
             }
             other => Err(json!({ "code": "C01", "message": format!("unknown timeline: {other:?}") })),
         },
