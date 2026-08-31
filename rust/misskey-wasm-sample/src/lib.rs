@@ -679,6 +679,50 @@ pub extern "C" fn call(
         "sns.reactions" => sns_reactions(&args_value),
         "sns.reposters" => sns_renotes(&args_value, false),
         "sns.quotes" => sns_renotes(&args_value, true),
+        // gpu.compute デモ (D-081): f32 配列を GPU(WGSL compute)で 2 倍。
+        // カスタム TL の重いソートやメディア編集フィルターの下地 — GPU が
+        // 無い環境は E01 で返るので、その時はクラウドカルクレーター
+        // (ml.infer)へ逃がすのが規約。
+        "gpuDouble" => {
+            use base64::Engine as _;
+            let values: Vec<f32> = args_value["values"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                .collect();
+            if values.is_empty() {
+                Err(json!({ "code": "D01", "message": "values required" }))
+            } else {
+                let bytes: Vec<u8> = values.iter().flat_map(|f| f.to_le_bytes()).collect();
+                let wgsl = "@group(0) @binding(0) var<storage, read> input: array<f32>;\n@group(0) @binding(1) var<storage, read_write> output: array<f32>;\n@compute @workgroup_size(64)\nfn main(@builtin(global_invocation_id) id: vec3<u32>) {\n  let i = id.x;\n  if (i < arrayLength(&input)) { output[i] = input[i] * 2.0; }\n}";
+                let response = host_call(
+                    "gpu.compute",
+                    json!({
+                        "wgsl": wgsl,
+                        "entry": "main",
+                        "input": base64::engine::general_purpose::STANDARD.encode(&bytes),
+                        "outputSize": bytes.len(),
+                        "workgroups": [values.len().div_ceil(64), 1, 1],
+                    }),
+                );
+                if response["ok"].as_bool() == Some(true) {
+                    match base64::engine::general_purpose::STANDARD.decode(response["value"]["output"].as_str().unwrap_or("")) {
+                        Ok(out) => {
+                            let doubled: Vec<f64> = out
+                                .chunks_exact(4)
+                                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f64)
+                                .collect();
+                            Ok(json!({ "values": doubled, "placement": response["value"]["placement"] }))
+                        }
+                        Err(e) => Err(json!({ "code": "D01", "message": format!("bad output base64: {e}") })),
+                    }
+                } else {
+                    Err(response.get("error").cloned().unwrap_or(json!({ "code": "E01", "message": "gpu.compute failed" })))
+                }
+            }
+        }
         // タイムラインレンダラー契約 v1 (M5e/D-080): TL プラグイン =
         // 宣言 + ソートアルゴリズム。データ取得はホスト(基礎 TL)。
         "tl.timelines" => Ok(json!({ "timelines": [

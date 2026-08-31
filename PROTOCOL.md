@@ -110,6 +110,7 @@ RAi の位置検索、タイムラインソート、リレーショナルTL(本�
 | `storage.get/set/delete` | `{ ns: safe|unsafe, key, value? }`(`pluginId` で自動プレフィックス) | `storage.safe` / `storage.unsafe` |
 | `net.fetch` | `{ method, url, headers, body }`(ホスト代理・dedupe・キャッシュ) | `network`(審査済み) |
 | `ml.infer` | `{ backend: onnx|llama, model, input }` | `gpu_ml`(審査済み) |
+| `gpu.compute` | `{ wgsl, entry?, input(base64 → binding0 read-only storage), outputSize(binding1 read_write storage), workgroups? }` → `{ output(base64), placement: "device" }` — **WGSL compute 専用の狭い GPU 口** (D-081)。カスタム TL の重いソート・メディア編集フィルター向け。ネイティブは wgpu(Metal/Vulkan)でランタイム内短絡、Web ビルドは WebGPU にそのまま写る想定。アダプター無し/検証エラーは E01 — その時プラグインは**クラウドカルクレーター(`ml.infer`)へバイパス**する | `gpu_ml`(審査済み) |
 | `wasm.call` | `{ pluginId, fn, args }`(子プラグイン呼び出し) | 構成で許可された子のみ |
 | `store.read` | `{ kind: actionState|followState|readState, key }` | — |
 | `geometry.lookup` | `{ tag? , role?, nodeId? }` → 画面上の矩形(RAi 位置検索・アクセシビリティ共用) | `fow.system` |
