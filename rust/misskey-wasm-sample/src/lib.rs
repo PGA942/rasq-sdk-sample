@@ -679,6 +679,26 @@ pub extern "C" fn call(
         "sns.reactions" => sns_reactions(&args_value),
         "sns.reposters" => sns_renotes(&args_value, false),
         "sns.quotes" => sns_renotes(&args_value, true),
+        // タイムラインレンダラー契約 v1 (M5e/D-080): TL プラグイン =
+        // 宣言 + ソートアルゴリズム。データ取得はホスト(基礎 TL)。
+        "tl.timelines" => Ok(json!({ "timelines": [
+            { "id": "reaction-rank", "label": "リアクション順", "base": "local" }
+        ] })),
+        "tl.sort" => match args_value["id"].as_str() {
+            Some("reaction-rank") => {
+                let posts = args_value["posts"].as_array().cloned().unwrap_or_default();
+                // リアクション合計の降順(同数は元の順を保つ)。
+                let mut idx: Vec<(usize, i64)> = posts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| (i, p["counts"]["reaction"].as_i64().unwrap_or(0)))
+                    .collect();
+                idx.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                let order: Vec<Value> = idx.iter().filter_map(|(i, _)| posts[*i]["id"].as_str().map(|s| json!(s))).collect();
+                Ok(json!({ "order": order }))
+            }
+            other => Err(json!({ "code": "C01", "message": format!("unknown timeline: {other:?}") })),
+        },
         // アクションバー宣言(register_action と同形の JSON)。
         "sns.actions" => Ok(json!({ "actions": [
             { "id": "reply", "genreTag": "Reply", "label": "返信", "icon": "subdirectory_arrow_left" },

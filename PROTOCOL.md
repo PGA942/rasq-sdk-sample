@@ -159,6 +159,19 @@ SNS プラグインのイベントハンドラー関数は「一定程度は抽�
   - `sns.reposters {postId, …}` → `{page: {items: [user]}}` / `sns.quotes {postId, …}` → `{page: {items: [Post]}}` (D-076)
 - 以降(notifications / follow 系 / DM …)は同じ形で 1 本ずつ追加する。未実装関数は C01 — ホストは該当 UI を隠す(SnsSession の UnsupportedError と同じ扱い)。認証トークンは v1 ではホストが `args.token` で毎回渡す(サンプルは `i` に積む)— 実セッション登録の口と同時に整備する。
 
+## 4.4 タイムラインレンダラー契約 v1(M5e / D-080)
+
+TL プラグイン = 「Widget コンポーネント + ソートアルゴリズム + 投稿カスタマイザ」
+(デバイス側の基本思想)。v1 は**宣言とソートアルゴリズム**を提供する。
+**データ取得はホスト(SNS セッション)の仕事** — プラグインは並べ替えと除外だけ:
+
+- `tl.timelines {}` → `{timelines: [{id, label, base}]}` — カスタム TL の宣言。`base` はホストが餌にする基礎 TL(`home`/`local` …)。ホストはホーム TL のタブに `custom:<id>` として出す。
+- `tl.sort {id, posts: [Post ワイヤ]}` → `{order: [postId…]}` — **表示順の id 列**。載っていない投稿は除外。`order` 無し = そのまま。未知の id は C01。
+
+投稿カスタマイザ(`tl.customize` — replace_tile の RRL、V5 の必須 role 検証込み)と
+lifecycle `visible/hidden`(仮想化 TL)は次段。v1 の口は SNS プラグイン自身の
+モジュール(実登録セッション)に付く — 独立 TL プラグインの常設はストア統合後。
+
 ## 5. アクションと投稿ごとのアイコン(D-017)
 
 - 短押し `performAction(actionId, postId)`(引数なし)は**プラグインが中身を決める**(Misskey 本番: 予測モデルで最有力の絵文字をリアクション)。長押しは絵文字ピッカー FOW → `args.reaction`。
