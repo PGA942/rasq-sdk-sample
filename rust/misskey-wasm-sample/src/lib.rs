@@ -650,6 +650,13 @@ fn sns_reactions(args: &Value) -> Result<Value, Value> {
 }
 
 /// `call("sns.reposters" | "sns.quotes", {postId, limit, cursor?})` (D-076)。
+/// `call("sns.emojis")` (D-111): カスタム絵文字一覧。TL 内の :shortcode: と
+/// 絵文字ピッカーにホストが使う。
+fn sns_emojis(args: &Value) -> Result<Value, Value> {
+    let res = misskey_fetch(args, "emojis", json!({}))?;
+    Ok(json!({ "emojis": res["emojis"] }))
+}
+
 fn sns_renotes(args: &Value, quotes: bool) -> Result<Value, Value> {
     let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
     let mut body = json!({ "noteId": args["postId"], "limit": args["limit"].as_u64().unwrap_or(30).min(100) });
@@ -730,6 +737,7 @@ pub extern "C" fn call(
         "sns.reactions" => sns_reactions(&args_value),
         "sns.reposters" => sns_renotes(&args_value, false),
         "sns.quotes" => sns_renotes(&args_value, true),
+        "sns.emojis" => sns_emojis(&args_value),
         // gpu.compute デモ (D-081): f32 配列を GPU(WGSL compute)で 2 倍。
         // カスタム TL の重いソートやメディア編集フィルターの下地 — GPU が
         // 無い環境は E01 で返るので、その時はクラウドカルクレーター
