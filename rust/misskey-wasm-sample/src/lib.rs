@@ -381,10 +381,14 @@ fn post_wire_at(note: &Value, fallback_instance: &str, depth: usize) -> Value {
     let is_pure_renote = note["renote"].is_object() && text_empty && files_empty && note["poll"].is_null();
     if is_pure_renote && depth == 0 {
         // 「◯◯がリノートしました」— id/時刻は外側、内容は中身のノート。
+        // repostTargetId (D-112): アクション/スレッド/各欄はこの id(中身の
+        // ノート)へ読み替える(公式クライアントの appearNote と同じ)。
         let mut inner = post_wire_at(&note["renote"], fallback_instance, depth + 1);
+        let target = inner["id"].clone();
         inner["id"] = note["id"].clone();
         inner["createdAt"] = note["createdAt"].clone();
         inner["repostedBy"] = user_wire(&note["user"], fallback_instance);
+        inner["repostTargetId"] = target;
         return inner;
     }
     let user = &note["user"];
@@ -411,6 +415,25 @@ fn post_wire_at(note: &Value, fallback_instance: &str, depth: usize) -> Value {
         .map(|m| m.values().filter_map(Value::as_i64).sum())
         .unwrap_or(0);
     let is_quote = note["renote"].is_object() && note["text"].as_str().is_some_and(|t| !t.is_empty());
+    // リアクション絵文字 URL (D-112): チップ表示用。キーはリアクション文字列
+    // そのもの。ローカルカスタム(:name@.:)は reactionEmojis に URL が来ない
+    // → /emoji/<name>.webp を補完(ホストの D-041 と同じ規則)。
+    let mut reaction_emojis = serde_json::Map::new();
+    if let Some(re) = note["reactions"].as_object() {
+        for k in re.keys() {
+            if k.starts_with(':') && k.ends_with("@.:") {
+                let name = &k[1..k.len() - 3];
+                reaction_emojis.insert(k.clone(), json!(format!("https://{fallback_instance}/emoji/{name}.webp")));
+            }
+        }
+    }
+    if let Some(re) = note["reactionEmojis"].as_object() {
+        for (k, v) in re {
+            if v.is_string() {
+                reaction_emojis.insert(format!(":{k}:"), v.clone());
+            }
+        }
+    }
     json!({
         "id": note["id"],
         "author": user_wire(user, fallback_instance),
@@ -429,6 +452,7 @@ fn post_wire_at(note: &Value, fallback_instance: &str, depth: usize) -> Value {
             "reaction": reaction_total,
         },
         "reactions": note["reactions"],
+        "reactionEmojis": reaction_emojis,
         "visibility": note["visibility"],
         "myReaction": note["myReaction"],
     })

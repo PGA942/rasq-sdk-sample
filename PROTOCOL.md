@@ -146,7 +146,10 @@ SNS プラグインのイベントハンドラー関数は「一定程度は抽�
 ホスト → プラグインの `call("sns.<fn>", args)` で呼ぶ。データは RRL では
 なく **Post ワイヤ(`rasq.post/1`)** で返す:
 
-- Post ワイヤ: `{id, author: {id, kind, instance, handle, displayName, avatarUrl?, bio?}, createdAt(ISO), body, bodyFormat, cw?, media?: [{id, type: image|video|gif|file, url, thumbnailUrl?, sensitive?, …}], poll?, quote?: Post, replyTo?: Post, replyToId?, repostedBy?, counts?, visibility?, localOnly?, directToIds?, reactions?, reactionEmojis?, myReaction?, url?}`。閲覧アカウントのキー付けはワイヤに含めない(取り込み時にホストが与える)。
+- Post ワイヤ: `{id, author: {id, kind, instance, handle, displayName, avatarUrl?, bio?}, createdAt(ISO), body, bodyFormat, cw?, media?: [{id, type: image|video|gif|file, url, thumbnailUrl?, sensitive?, …}], poll?, quote?: Post, replyTo?: Post, replyToId?, repostedBy?, repostTargetId?, counts?, visibility?, localOnly?, directToIds?, reactions?, reactionEmojis?, myReaction?, url?}`。閲覧アカウントのキー付けはワイヤに含めない(取り込み時にホストが与える)。
+  - **純リノートの展開 (D-100/D-112)**: text 空・添付なし・投票なしのリノートは中身のノートに展開して返す(`repostedBy` = 外側の投稿者、`id`/`createdAt` は外側)。`repostTargetId` に**中身のノート id** を載せること — ホストはアクション/スレッド/リアクション一覧等をこの id へ読み替える(公式クライアントの appearNote と同じ)。
+  - **reactionEmojis (D-112)**: キーはリアクション文字列そのもの(`:name@host:` / `:name@.:`)。ローカルカスタム(`:name@.:`)はサーバーの reactionEmojis に URL が来ないため、`https://<host>/emoji/<name>.webp` を補完して載せる。
+- `call("sns.emojis")` (D-111) → `{emojis: [{name, url, category?, aliases?}]}`: カスタム絵文字一覧。TL 内の `:shortcode:` 描画と絵文字ピッカーにホストが使う。
 - v1 実装済み(ホスト側アダプター = `WasmSnsSession`。エラーは result.error のコードのまま `SnsApiException` へ写る):
   - `sns.timeline {kind, limit, cursor?}` → `{page: {items: [Post], nextCursor?}}`
   - `sns.thread {id}` → `{thread: {post, ancestors: [Post](古い順), descendants: [Post]}}` (D-075)
