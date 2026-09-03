@@ -347,15 +347,51 @@ fn fetch_local_notes(args: &Value) -> Result<(Vec<Value>, String), Value> {
     Ok((notes.as_array().cloned().unwrap_or_default(), host))
 }
 
-/// One Misskey note → `rasq.post/1` Post ワイヤ (D-074: SnsSession 契約の
-/// boundary 写像が返すデータ形。RRL snapshot とは別)。
-fn post_wire(note: &Value, fallback_instance: &str) -> Value {
-    let user = &note["user"];
+/// One Misskey user → `rasq.post/1` の author/user ワイヤ。
+fn user_wire(user: &Value, fallback_instance: &str) -> Value {
     let username = user["username"].as_str().unwrap_or("?");
     let display = match user["name"].as_str() {
         Some(n) if !n.is_empty() => n,
         _ => username,
     };
+    json!({
+        "id": user["id"],
+        "kind": "misskey",
+        "instance": user["host"].as_str().unwrap_or(fallback_instance),
+        "handle": username,
+        "displayName": display,
+        "avatarUrl": user["avatarUrl"],
+        "bio": user["description"],
+    })
+}
+
+/// One Misskey note → `rasq.post/1` Post ワイヤ (D-074: SnsSession 契約の
+/// boundary 写像が返すデータ形。RRL snapshot とは別)。
+///
+/// **純リノート**(text 空・添付なし・投票なし)はホストのマッパーと同じ規則で
+/// 中身のノートに展開し、`repostedBy` に外側の投稿者を載せる(D-100:
+/// 展開しないと本文もquoteも無い「内容のない投稿」になる)。
+fn post_wire(note: &Value, fallback_instance: &str) -> Value {
+    post_wire_at(note, fallback_instance, 0)
+}
+
+fn post_wire_at(note: &Value, fallback_instance: &str, depth: usize) -> Value {
+    let text_empty = note["text"].as_str().is_none_or(|t| t.is_empty());
+    let files_empty = note["fileIds"].as_array().is_none_or(|a| a.is_empty());
+    let is_pure_renote = note["renote"].is_object() && text_empty && files_empty && note["poll"].is_null();
+    if is_pure_renote && depth == 0 {
+        // 「◯◯がリノートしました」— id/時刻は外側、内容は中身のノート。
+        // repostTargetId (D-112): アクション/スレッド/各欄はこの id(中身の
+        // ノート)へ読み替える(公式クライアントの appearNote と同じ)。
+        let mut inner = post_wire_at(&note["renote"], fallback_instance, depth + 1);
+        let target = inner["id"].clone();
+        inner["id"] = note["id"].clone();
+        inner["createdAt"] = note["createdAt"].clone();
+        inner["repostedBy"] = user_wire(&note["user"], fallback_instance);
+        inner["repostTargetId"] = target;
+        return inner;
+    }
+    let user = &note["user"];
     let media: Vec<Value> = note["files"]
         .as_array()
         .map(|files| {
@@ -378,27 +414,59 @@ fn post_wire(note: &Value, fallback_instance: &str) -> Value {
         .as_object()
         .map(|m| m.values().filter_map(Value::as_i64).sum())
         .unwrap_or(0);
+    let is_quote = note["renote"].is_object() && note["text"].as_str().is_some_and(|t| !t.is_empty());
+    // リアクション絵文字 URL (D-112): チップ表示用。キーはリアクション文字列
+    // そのもの。ローカルカスタム(:name@.:)は reactionEmojis に URL が来ない
+    // → /emoji/<name>.webp を補完(ホストの D-041 と同じ規則)。
+    let mut reaction_emojis = serde_json::Map::new();
+    if let Some(re) = note["reactions"].as_object() {
+        for k in re.keys() {
+            if k.starts_with(':') && k.ends_with("@.:") {
+                let name = &k[1..k.len() - 3];
+                reaction_emojis.insert(k.clone(), json!(format!("https://{fallback_instance}/emoji/{name}.webp")));
+            }
+        }
+    }
+    if let Some(re) = note["reactionEmojis"].as_object() {
+        for (k, v) in re {
+            if v.is_string() {
+                reaction_emojis.insert(format!(":{k}:"), v.clone());
+            }
+        }
+    }
     json!({
         "id": note["id"],
-        "author": {
-            "id": user["id"],
-            "kind": "misskey",
-            "instance": user["host"].as_str().unwrap_or(fallback_instance),
-            "handle": username,
-            "displayName": display,
-            "avatarUrl": user["avatarUrl"],
-        },
+        "author": user_wire(user, fallback_instance),
         "createdAt": note["createdAt"],
         "body": note["text"].as_str().unwrap_or(""),
         "bodyFormat": "mfm",
         "cw": note["cw"],
         "media": media,
+        // 引用 / リプライ元 (深さ 1 のみ — ワイヤの再帰は host 側 codec が対応済み)。
+        "quote": if is_quote { shallow_post_wire(&note["renote"], fallback_instance) } else { Value::Null },
+        "replyTo": if note["reply"].is_object() { shallow_post_wire(&note["reply"], fallback_instance) } else { Value::Null },
+        "replyToId": note["replyId"],
         "counts": {
             "reply": note["repliesCount"],
             "renote": note["renoteCount"],
             "reaction": reaction_total,
         },
         "reactions": note["reactions"],
+        "reactionEmojis": reaction_emojis,
+        "visibility": note["visibility"],
+        "myReaction": note["myReaction"],
+    })
+}
+
+/// 再帰を 1 段で止める浅い Post ワイヤ(quote/replyTo 用)。
+fn shallow_post_wire(note: &Value, fallback_instance: &str) -> Value {
+    json!({
+        "id": note["id"],
+        "author": user_wire(&note["user"], fallback_instance),
+        "createdAt": note["createdAt"],
+        "body": note["text"].as_str().unwrap_or(""),
+        "bodyFormat": "mfm",
+        "cw": note["cw"],
         "visibility": note["visibility"],
     })
 }
@@ -410,6 +478,38 @@ fn sns_timeline(args: &Value) -> Result<Value, Value> {
     let items: Vec<Value> = notes.iter().map(|n| post_wire(n, &host)).collect();
     let next = notes.last().and_then(|n| n["id"].as_str());
     Ok(json!({ "page": { "items": items, "nextCursor": next } }))
+}
+
+/// リアクション 1 位の置き換えタイル (D-082 デモ)。入力は Post ワイヤ。
+/// PostTile(role contentBody)を含む = V5 検証を満たす。
+fn top_reaction_tile(post: &Value) -> Value {
+    let author = &post["author"];
+    let id = post["id"].as_str().unwrap_or("x");
+    json!({
+        "t": "Column", "k": format!("top-{id}"), "c": [
+            { "t": "Text", "k": format!("crown-{id}"), "p": { "text": format!("👑 リアクション1位 ({}件)", post["counts"]["reaction"].as_i64().unwrap_or(0)) } },
+            {
+                "t": "PostTile", "k": format!("post-{id}"), "role": "contentBody",
+                "p": {
+                    "post": {
+                        "id": post["id"],
+                        "author": {
+                            "displayName": author["displayName"],
+                            "handle": author["handle"],
+                            "kind": author["kind"],
+                            "instance": author["instance"],
+                            "avatarUrl": author["avatarUrl"],
+                        },
+                        "createdAt": post["createdAt"],
+                    },
+                    "variant": "normal"
+                },
+                "c": [
+                    { "t": "RichText", "k": format!("body-{id}"), "tag": "main_text", "p": { "source": post["body"] } }
+                ]
+            }
+        ]
+    })
 }
 
 /// `call("sns.thread", {id, host?, baseUrl?})` (D-075): notes/show +
@@ -443,6 +543,163 @@ fn sns_perform_action(args: &Value) -> Result<Value, Value> {
         }
         other => Err(json!({ "code": "C01", "message": format!("unsupported action: {other}") })),
     }
+}
+
+/// `call("sns.createPost", {draft, host?, token?})` (D-076): NewPost ワイヤ →
+/// notes/create → 作成された Post ワイヤ。
+fn sns_create_post(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let d = &args["draft"];
+    let mut body = json!({});
+    if d["repostOfId"].is_null() {
+        body["text"] = d["text"].clone();
+    }
+    for (wire, api) in [("cw", "cw"), ("replyToId", "replyId"), ("visibility", "visibility"), ("reactionAcceptance", "reactionAcceptance")] {
+        if !d[wire].is_null() {
+            body[api] = d[wire].clone();
+        }
+    }
+    if let Some(id) = d["quoteOfId"].as_str().or(d["repostOfId"].as_str()) {
+        body["renoteId"] = json!(id);
+    }
+    if d["localOnly"].as_bool() == Some(true) {
+        body["localOnly"] = json!(true);
+    }
+    if let Some(ids) = d["directToIds"].as_array() {
+        body["visibleUserIds"] = json!(ids);
+    }
+    if let Some(ids) = d["mediaIds"].as_array() {
+        body["fileIds"] = json!(ids);
+    }
+    if d["poll"].is_object() {
+        let mut poll = json!({ "choices": d["poll"]["choices"] });
+        if d["poll"]["multiple"].as_bool() == Some(true) {
+            poll["multiple"] = json!(true);
+        }
+        if let Some(sec) = d["poll"]["expiresAfterSec"].as_u64() {
+            poll["expiredAfter"] = json!(sec * 1000);
+        }
+        body["poll"] = poll;
+    }
+    let created = misskey_fetch(args, "notes/create", body)?;
+    Ok(json!({ "post": post_wire(&created["createdNote"], &host) }))
+}
+
+/// `call("sns.user", {id | handle+host?})` (D-076): users/show → Profile ワイヤ。
+fn sns_user(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let body = if let Some(id) = args["id"].as_str() {
+        json!({ "userId": id })
+    } else {
+        let mut b = json!({ "username": args["handle"] });
+        if let Some(h) = args["userHost"].as_str() {
+            b["host"] = json!(h);
+        }
+        b
+    };
+    let u = misskey_fetch(args, "users/show", body)?;
+    let username = u["username"].as_str().unwrap_or("?");
+    Ok(json!({ "profile": {
+        "user": user_wire(&u, &host),
+        "bannerUrl": u["bannerUrl"],
+        "description": u["description"],
+        "followersCount": u["followersCount"],
+        "followingCount": u["followingCount"],
+        "postsCount": u["notesCount"],
+        "createdAt": u["createdAt"],
+        "location": u["location"],
+        "isLocked": u["isLocked"],
+        "isBot": u["isBot"],
+        "isSuspended": u["isSuspended"],
+        "fields": u["fields"],
+        "profileUrl": format!("https://{host}/@{username}"),
+    } }))
+}
+
+/// `call("sns.userPosts", {id, filter, limit, cursor?})` (D-076): 返信/引用の
+/// 振り分け (D-069) 込み。
+fn sns_user_posts(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let filter = args["filter"].as_str().unwrap_or("posts");
+    let limit = args["limit"].as_u64().unwrap_or(20).min(50);
+    let mut body = json!({
+        "userId": args["id"],
+        "limit": limit,
+        "withReplies": filter == "withReplies" || filter == "replies",
+        "withRenotes": filter != "media",
+    });
+    if filter == "media" {
+        body["withFiles"] = json!(true);
+    }
+    if let Some(cursor) = args["cursor"].as_str() {
+        body["untilId"] = json!(cursor);
+    }
+    let list = misskey_fetch(args, "users/notes", body)?;
+    let notes: Vec<Value> = list.as_array().cloned().unwrap_or_default();
+    let is_quote = |n: &Value| n["renote"].is_object() && n["text"].as_str().is_some_and(|t| !t.is_empty());
+    let is_reply = |n: &Value| n["reply"].is_object() || !n["replyId"].is_null();
+    let filtered: Vec<&Value> = notes
+        .iter()
+        .filter(|n| match filter {
+            "replies" => is_reply(n),
+            "quotes" => is_quote(n),
+            "posts" => !is_reply(n) && !is_quote(n),
+            _ => true,
+        })
+        .collect();
+    let next = notes.last().and_then(|n| n["id"].as_str());
+    Ok(json!({ "page": { "items": filtered.iter().map(|n| post_wire(n, &host)).collect::<Vec<Value>>(), "nextCursor": next } }))
+}
+
+/// `call("sns.reactions", {postId, type?, limit, cursor?})` (D-076)。
+fn sns_reactions(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let mut body = json!({ "noteId": args["postId"], "limit": args["limit"].as_u64().unwrap_or(30).min(100) });
+    if let Some(t) = args["type"].as_str() {
+        body["type"] = json!(t);
+    }
+    if let Some(cursor) = args["cursor"].as_str() {
+        body["untilId"] = json!(cursor);
+    }
+    let list = misskey_fetch(args, "notes/reactions", body)?;
+    let entries: Vec<Value> = list
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|r| json!({ "id": r["id"], "user": user_wire(&r["user"], &host), "reaction": r["type"], "createdAt": r["createdAt"] }))
+        .collect();
+    let next = list.as_array().and_then(|a| a.last()).and_then(|r| r["id"].as_str());
+    Ok(json!({ "page": { "items": entries, "nextCursor": next } }))
+}
+
+/// `call("sns.reposters" | "sns.quotes", {postId, limit, cursor?})` (D-076)。
+/// `call("sns.emojis")` (D-111): カスタム絵文字一覧。TL 内の :shortcode: と
+/// 絵文字ピッカーにホストが使う。
+fn sns_emojis(args: &Value) -> Result<Value, Value> {
+    let res = misskey_fetch(args, "emojis", json!({}))?;
+    Ok(json!({ "emojis": res["emojis"] }))
+}
+
+fn sns_renotes(args: &Value, quotes: bool) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let mut body = json!({ "noteId": args["postId"], "limit": args["limit"].as_u64().unwrap_or(30).min(100) });
+    if let Some(cursor) = args["cursor"].as_str() {
+        body["untilId"] = json!(cursor);
+    }
+    let list = misskey_fetch(args, "notes/renotes", body)?;
+    let notes: Vec<Value> = list.as_array().cloned().unwrap_or_default();
+    let next = notes.last().and_then(|n| n["id"].as_str());
+    let items: Vec<Value> = if quotes {
+        notes
+            .iter()
+            .filter(|n| n["text"].as_str().is_some_and(|t| !t.is_empty()) || n["cw"].is_string())
+            .map(|n| post_wire(n, &host))
+            .collect()
+    } else {
+        notes.iter().map(|n| user_wire(&n["user"], &host)).collect()
+    };
+    Ok(json!({ "page": { "items": items, "nextCursor": next } }))
 }
 
 /// `call("timeline", {host?, limit?})`: fetch the local timeline through the
@@ -493,6 +750,124 @@ pub extern "C" fn call(
         "sns.timeline" => sns_timeline(&args_value),
         "sns.thread" => sns_thread(&args_value),
         "sns.performAction" => sns_perform_action(&args_value),
+        "sns.createPost" => sns_create_post(&args_value),
+        "sns.deletePost" => misskey_fetch(&args_value, "notes/delete", json!({ "noteId": args_value["id"] })).map(|_| json!({})),
+        "sns.me" => misskey_fetch(&args_value, "i", json!({})).map(|me| {
+            let host = args_value["host"].as_str().unwrap_or("misskey.io");
+            json!({ "user": user_wire(&me, host) })
+        }),
+        "sns.user" => sns_user(&args_value),
+        "sns.userPosts" => sns_user_posts(&args_value),
+        "sns.reactions" => sns_reactions(&args_value),
+        "sns.reposters" => sns_renotes(&args_value, false),
+        "sns.quotes" => sns_renotes(&args_value, true),
+        "sns.emojis" => sns_emojis(&args_value),
+        // gpu.compute デモ (D-081): f32 配列を GPU(WGSL compute)で 2 倍。
+        // カスタム TL の重いソートやメディア編集フィルターの下地 — GPU が
+        // 無い環境は E01 で返るので、その時はクラウドカルクレーター
+        // (ml.infer)へ逃がすのが規約。
+        "gpuDouble" => {
+            use base64::Engine as _;
+            let values: Vec<f32> = args_value["values"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                .collect();
+            if values.is_empty() {
+                Err(json!({ "code": "D01", "message": "values required" }))
+            } else {
+                let bytes: Vec<u8> = values.iter().flat_map(|f| f.to_le_bytes()).collect();
+                let wgsl = "@group(0) @binding(0) var<storage, read> input: array<f32>;\n@group(0) @binding(1) var<storage, read_write> output: array<f32>;\n@compute @workgroup_size(64)\nfn main(@builtin(global_invocation_id) id: vec3<u32>) {\n  let i = id.x;\n  if (i < arrayLength(&input)) { output[i] = input[i] * 2.0; }\n}";
+                let response = host_call(
+                    "gpu.compute",
+                    json!({
+                        "wgsl": wgsl,
+                        "entry": "main",
+                        "input": base64::engine::general_purpose::STANDARD.encode(&bytes),
+                        "outputSize": bytes.len(),
+                        "workgroups": [values.len().div_ceil(64), 1, 1],
+                    }),
+                );
+                if response["ok"].as_bool() == Some(true) {
+                    match base64::engine::general_purpose::STANDARD.decode(response["value"]["output"].as_str().unwrap_or("")) {
+                        Ok(out) => {
+                            let doubled: Vec<f64> = out
+                                .chunks_exact(4)
+                                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f64)
+                                .collect();
+                            Ok(json!({ "values": doubled, "placement": response["value"]["placement"] }))
+                        }
+                        Err(e) => Err(json!({ "code": "D01", "message": format!("bad output base64: {e}") })),
+                    }
+                } else {
+                    Err(response.get("error").cloned().unwrap_or(json!({ "code": "E01", "message": "gpu.compute failed" })))
+                }
+            }
+        }
+        // タイムラインレンダラー契約 v1 (M5e/D-080): TL プラグイン =
+        // 宣言 + ソートアルゴリズム。データ取得はホスト(基礎 TL)。
+        "tl.timelines" => Ok(json!({ "timelines": [
+            { "id": "reaction-rank", "label": "リアクション順", "base": "local" }
+        ] })),
+        "tl.sort" => match args_value["id"].as_str() {
+            Some("reaction-rank") => {
+                let posts = args_value["posts"].as_array().cloned().unwrap_or_default();
+                // リアクション合計の降順(同数は元の順を保つ)。
+                let mut idx: Vec<(usize, i64)> = posts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| (i, p["counts"]["reaction"].as_i64().unwrap_or(0)))
+                    .collect();
+                idx.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                let order: Vec<Value> = idx.iter().filter_map(|(i, _)| posts[*i]["id"].as_str().map(|s| json!(s))).collect();
+                Ok(json!({ "order": order }))
+            }
+            other => Err(json!({ "code": "C01", "message": format!("unknown timeline: {other:?}") })),
+        },
+        // 投稿加工プラグイン (D-083 transform_content): 表示前の本文加工。
+        // タイル構造は変えない(構造は tl.customize の領分)。デモ:
+        // 「打ち上げ」を含む本文に 🚀 を前置。
+        "post.transform" => {
+            let posts = args_value["posts"].as_array().cloned().unwrap_or_default();
+            let mut patches = serde_json::Map::new();
+            for p in &posts {
+                if let (Some(id), Some(body)) = (p["id"].as_str(), p["body"].as_str()) {
+                    if body.contains("打ち上げ") && !body.starts_with("🚀") {
+                        patches.insert(id.to_string(), json!({ "body": format!("🚀 {body}") }));
+                    }
+                }
+            }
+            Ok(json!({ "posts": patches }))
+        }
+        // 投稿カスタマイザ (D-082): 完全置き換えタイル(replace_tile)。
+        // 必須ロール contentBody を含めること(V5 検証 — 欠けるとホストが
+        // 破棄して通常タイルに縮退する)。デモ: リアクション 1 位に王冠。
+        "tl.customize" => match args_value["id"].as_str() {
+            Some("reaction-rank") => {
+                let posts = args_value["posts"].as_array().cloned().unwrap_or_default();
+                let mut tiles = serde_json::Map::new();
+                if let Some(top) = posts.first() {
+                    if top["counts"]["reaction"].as_i64().unwrap_or(0) > 0 {
+                        if let Some(id) = top["id"].as_str() {
+                            tiles.insert(id.to_string(), top_reaction_tile(top));
+                        }
+                    }
+                }
+                // 上付きバナー行 (D-085): 2 位は通常タイルのまま、RT の
+                // 「♻︎ 〇〇がリノートしました」と同スタイルのバッジだけ足す。
+                let mut badges = serde_json::Map::new();
+                if let Some(second) = posts.get(1) {
+                    if let Some(id) = second["id"].as_str() {
+                        let n = second["counts"]["reaction"].as_i64().unwrap_or(0);
+                        badges.insert(id.to_string(), json!({ "icon": "star", "text": format!("リアクション2位 ({n}件)") }));
+                    }
+                }
+                Ok(json!({ "tiles": tiles, "badges": badges }))
+            }
+            other => Err(json!({ "code": "C01", "message": format!("unknown timeline: {other:?}") })),
+        },
         // アクションバー宣言(register_action と同形の JSON)。
         "sns.actions" => Ok(json!({ "actions": [
             { "id": "reply", "genreTag": "Reply", "label": "返信", "icon": "subdirectory_arrow_left" },
@@ -610,5 +985,70 @@ fn read_str(ptr: u32, len: u32) -> String {
     unsafe {
         let slice = std::slice::from_raw_parts(ptr as *const u8, len as usize);
         String::from_utf8_lossy(slice).into_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// D-100: 純リノートは中身のノートへ展開し repostedBy を載せる
+    /// (展開しないと本文も quote も無い「内容のない投稿」になる)。
+    #[test]
+    fn pure_renote_unwraps_with_reposted_by() {
+        let note = json!({
+            "id": "outer1",
+            "createdAt": "2026-08-31T00:00:00Z",
+            "text": null,
+            "fileIds": [],
+            "poll": null,
+            "user": { "id": "u2", "username": "renoter", "name": "リノートする人" },
+            "renote": {
+                "id": "inner1",
+                "createdAt": "2026-08-30T00:00:00Z",
+                "text": "中身の本文",
+                "fileIds": [],
+                "user": { "id": "u1", "username": "author", "name": "元の人" },
+            },
+        });
+        let wire = post_wire(&note, "example.test");
+        assert_eq!(wire["id"], "outer1"); // アクションは外側の id へ
+        assert_eq!(wire["body"], "中身の本文");
+        assert_eq!(wire["author"]["handle"], "author");
+        assert_eq!(wire["repostedBy"]["handle"], "renoter");
+    }
+
+    /// 引用リノート(text あり)は従来どおり body + quote。
+    #[test]
+    fn quote_renote_keeps_body_and_quote() {
+        let note = json!({
+            "id": "q1",
+            "text": "これすごい",
+            "fileIds": [],
+            "user": { "id": "u2", "username": "quoter" },
+            "renote": { "id": "inner1", "text": "元ネタ", "user": { "id": "u1", "username": "author" } },
+        });
+        let wire = post_wire(&note, "example.test");
+        assert_eq!(wire["body"], "これすごい");
+        assert_eq!(wire["quote"]["body"], "元ネタ");
+        assert!(wire["repostedBy"].is_null());
+    }
+
+    /// 添付だけのリノート(text 空 + files)は純リノートではない。
+    #[test]
+    fn renote_with_files_is_not_pure() {
+        let note = json!({
+            "id": "m1",
+            "text": null,
+            "fileIds": ["f1"],
+            "files": [{ "id": "f1", "url": "https://x.invalid/1.png", "type": "image/png" }],
+            "user": { "id": "u2", "username": "quoter" },
+            "renote": { "id": "inner1", "text": "元ネタ", "user": { "id": "u1", "username": "author" } },
+        });
+        let wire = post_wire(&note, "example.test");
+        assert_eq!(wire["id"], "m1");
+        assert!(wire["repostedBy"].is_null());
+        assert_eq!(wire["media"].as_array().unwrap().len(), 1);
     }
 }

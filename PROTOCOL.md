@@ -110,6 +110,7 @@ RAi の位置検索、タイムラインソート、リレーショナルTL(本�
 | `storage.get/set/delete` | `{ ns: safe|unsafe, key, value? }`(`pluginId` で自動プレフィックス) | `storage.safe` / `storage.unsafe` |
 | `net.fetch` | `{ method, url, headers, body }`(ホスト代理・dedupe・キャッシュ) | `network`(審査済み) |
 | `ml.infer` | `{ backend: onnx|llama, model, input }` | `gpu_ml`(審査済み) |
+| `gpu.compute` | `{ wgsl, entry?, input(base64 → binding0 read-only storage), outputSize(binding1 read_write storage), workgroups? }` → `{ output(base64), placement: "device" }` — **WGSL compute 専用の狭い GPU 口** (D-081)。カスタム TL の重いソート・メディア編集フィルター向け。ネイティブは wgpu(Metal/Vulkan)でランタイム内短絡、Web ビルドは WebGPU にそのまま写る想定。アダプター無し/検証エラーは E01 — その時プラグインは**クラウドカルクレーター(`ml.infer`)へバイパス**する | `gpu_ml`(審査済み) |
 | `wasm.call` | `{ pluginId, fn, args }`(子プラグイン呼び出し) | 構成で許可された子のみ |
 | `store.read` | `{ kind: actionState|followState|readState, key }` | — |
 | `geometry.lookup` | `{ tag? , role?, nodeId? }` → 画面上の矩形(RAi 位置検索・アクセシビリティ共用) | `fow.system` |
@@ -145,13 +146,58 @@ SNS プラグインのイベントハンドラー関数は「一定程度は抽�
 ホスト → プラグインの `call("sns.<fn>", args)` で呼ぶ。データは RRL では
 なく **Post ワイヤ(`rasq.post/1`)** で返す:
 
-- Post ワイヤ: `{id, author: {id, kind, instance, handle, displayName, avatarUrl?, bio?}, createdAt(ISO), body, bodyFormat, cw?, media?: [{id, type: image|video|gif|file, url, thumbnailUrl?, sensitive?, …}], poll?, quote?: Post, replyTo?: Post, replyToId?, repostedBy?, counts?, visibility?, localOnly?, directToIds?, reactions?, reactionEmojis?, myReaction?, url?}`。閲覧アカウントのキー付けはワイヤに含めない(取り込み時にホストが与える)。
+- Post ワイヤ: `{id, author: {id, kind, instance, handle, displayName, avatarUrl?, bio?}, createdAt(ISO), body, bodyFormat, cw?, media?: [{id, type: image|video|gif|file, url, thumbnailUrl?, sensitive?, …}], poll?, quote?: Post, replyTo?: Post, replyToId?, repostedBy?, repostTargetId?, counts?, visibility?, localOnly?, directToIds?, reactions?, reactionEmojis?, myReaction?, url?}`。閲覧アカウントのキー付けはワイヤに含めない(取り込み時にホストが与える)。
+  - **純リノートの展開 (D-100/D-112)**: text 空・添付なし・投票なしのリノートは中身のノートに展開して返す(`repostedBy` = 外側の投稿者、`id`/`createdAt` は外側)。`repostTargetId` に**中身のノート id** を載せること — ホストはアクション/スレッド/リアクション一覧等をこの id へ読み替える(公式クライアントの appearNote と同じ)。
+  - **reactionEmojis (D-112)**: キーはリアクション文字列そのもの(`:name@host:` / `:name@.:`)。ローカルカスタム(`:name@.:`)はサーバーの reactionEmojis に URL が来ないため、`https://<host>/emoji/<name>.webp` を補完して載せる。
+- `call("sns.emojis")` (D-111) → `{emojis: [{name, url, category?, aliases?}]}`: カスタム絵文字一覧。TL 内の `:shortcode:` 描画と絵文字ピッカーにホストが使う。
 - v1 実装済み(ホスト側アダプター = `WasmSnsSession`。エラーは result.error のコードのまま `SnsApiException` へ写る):
   - `sns.timeline {kind, limit, cursor?}` → `{page: {items: [Post], nextCursor?}}`
   - `sns.thread {id}` → `{thread: {post, ancestors: [Post](古い順), descendants: [Post]}}` (D-075)
   - `sns.performAction {actionId, postId, args}` → `{result: {done, count?, message?}}` — 短押しの中身はプラグインが決める(CONTRACT §5)。未対応アクションは C01 (D-075)
   - `sns.actions {}` → `{actions: [ActionDescriptor JSON(register_action と同形)]}` — アクションバー宣言 (D-075)
-- 以降(createPost / userPosts / notifications …)は同じ形で 1 本ずつ追加する。未実装関数は C01 — ホストは該当 UI を隠す(SnsSession の UnsupportedError と同じ扱い)。
+  - `sns.createPost {draft: NewPost ワイヤ}` → `{post}` — draft = `{text, cw?, replyToId?, quoteOfId?, repostOfId?, visibility?, localOnly?, reactionAcceptance?, directToIds?, mediaIds?, poll?: {choices, multiple?, expiresAfterSec?}}` (D-076)
+  - `sns.deletePost {id}` → `{}` (D-076)
+  - `sns.me {}` → `{user}` / `sns.user {id | handle+userHost?}` → `{profile: {user, bannerUrl?, description?, followersCount?, followingCount?, postsCount?, fields?, createdAt?, location?, isLocked?, isBot?, isSuspended?, pinnedPosts?, profileUrl?}}`(`host` は接続先と衝突するため、ユーザーの所属ホストは `userHost`)(D-076)
+  - `sns.userPosts {id, filter: posts|withReplies|replies|media|quotes, limit, cursor?}` → `{page}` — 返信/引用の振り分け規約 (D-069) はプラグイン側で適用 (D-076)
+  - `sns.reactions {postId, type?, limit, cursor?}` → `{page: {items: [{id, user, reaction, createdAt, emojiUrl?}], nextCursor?}}` (D-076)
+  - `sns.reposters {postId, …}` → `{page: {items: [user]}}` / `sns.quotes {postId, …}` → `{page: {items: [Post]}}` (D-076)
+- 以降(notifications / follow 系 / DM …)は同じ形で 1 本ずつ追加する。未実装関数は C01 — ホストは該当 UI を隠す(SnsSession の UnsupportedError と同じ扱い)。認証トークンは v1 ではホストが `args.token` で毎回渡す(サンプルは `i` に積む)— 実セッション登録の口と同時に整備する。
+
+## 4.4 タイムラインレンダラー契約 v1(M5e / D-080)
+
+TL プラグイン = 「Widget コンポーネント + ソートアルゴリズム + 投稿カスタマイザ」
+(デバイス側の基本思想)。v1 は**宣言とソートアルゴリズム**を提供する。
+**データ取得はホスト(SNS セッション)の仕事** — プラグインは並べ替えと除外だけ:
+
+- `tl.timelines {}` → `{timelines: [{id, label, base}]}` — カスタム TL の宣言。`base` はホストが餌にする基礎 TL(`home`/`local` …)。ホストはホーム TL のタブに `custom:<id>` として出す。
+- `tl.sort {id, posts: [Post ワイヤ]}` → `{order: [postId…]}` — **表示順の id 列**。載っていない投稿は除外。`order` 無し = そのまま。未知の id は C01。
+
+- `tl.customize {id, posts: [Post ワイヤ]}` → `{tiles: {postId: RRL Node}, badges: {postId: {icon?, text}}}` — **投稿カスタマイザ** (D-082/D-085)。`tiles` = 完全置き換えタイル(replace_tile)。`badges` = **上付きバナー行**(RT の「♻︎ 〇〇がリノートしました」と同スタイル): 通常タイルのままアイコン名 + テキストだけ足す軽量な口(アイコン名はホストのアイコンレジストリで解決)。完全置き換えタイル側は L2 `PostTile` の Props `bannerIcon`/`bannerText` で同じ行を出せる。**V5 検証**: タイルは必須ロール `contentBody` を含むこと — 欠けるとホストが破棄して通常タイルに縮退。**スレッドナビはホスト保証**(置き換えタイルでもタップでスレッド展開)。タイル内のイベントはプラグイン関数へ戻る。
+- **可視性 lifecycle** (D-082): 仮想化 TL で行が生成/破棄されると `call("lifecycle", {kind: visible|hidden, surface: "tl:<id>", post})` が届く(置き換えタイル行)。
+
+- `post.transform {posts: [Post ワイヤ]}` → `{posts: {postId: {body?, cw?}}}` — **投稿加工プラグイン(transform_content)** (D-083)。**全 TL 共通**で表示前に本文/注釈を差し替える(タイル構造は変えない — 構造は `tl.customize` の領分)。未実装/失敗は無加工。**ノード定義を持たないプラグインでもストア審査は通り**、その場合ホストは基礎 TL に加えて**ノードグラフの取得ノードが投稿を出す直前**にもこの加工を適用する(D-118 — リスト/検索/DM/リアクション済み等、グラフ経由の取得すべて)。ノード定義(入出力宣言)を持つプラグインはユーザーがノードとして配置した位置で実行される(ストア統合 M4 で拡張)。
+
+v1 の口は SNS プラグイン自身のモジュール(実登録セッション)に付く — 独立 TL
+/加工プラグインの常設インストールはストア統合後。
+
+## 4.5 関連TL エンジン(特別枠、M5f / D-084)
+
+リレーショナルTL は **TL プラグインではない特別枠**: ストア配布物ではなく
+RASQ 同梱の公式 wasm モジュール(`relational-wasm`)で、アカウントバンドルに
+含まれる**全アカウントの TL 系**を見る(v1 は現在アカウントの HTL + ゲスト)。
+SNS プラグインが RRL の icon/body に**タグ付け必須**なのはこのため — ホストが
+タグ規約(§2.2)経由で本文/引用/リンクを抽出し、SNS 非依存の最小ワイヤ
+(`rasq.relational-post/1`)にしてエンジンへ渡す:
+
+- 入力 post: `{key, authorKey, repostedByKey?, createdAtMs, body, quoteBody?, linkUrl?, quoteKey?}`
+- `call("relational.build", {posts, guests, settings?, communities?, nowMs, lookbackMinutes?})` → `{events: [{postKeys(時系列順), lastActivityMs}]}`
+
+中身は rasq-client の会話イベント方式 (D-027) ルールベース部の忠実な移植
+(パリティテストで Dart エンジンと束ね一致を検証)。ホストは**バンドルの
+全ログインアカウントの HTL** を混ぜて供給し (D-086)、**V11 検証ゲート**
+(§2.2 の付与先違反タグは取り込み時に剥がす)でタグの読取りを守る。SigLIP / Louvain は
+ホスト側資産のため、ML が効くときはホストが Dart エンジンを使う —
+カルクレーター統合後に wasm 側から `ml.infer` を呼ぶ形へ置換する。
 
 ## 5. アクションと投稿ごとのアイコン(D-017)
 

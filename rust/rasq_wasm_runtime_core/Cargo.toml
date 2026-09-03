@@ -14,5 +14,13 @@ serde_json = "1"
 # runtime so mobile hosts don't need a synchronous Dart HTTP bridge. Pure
 # Rust TLS (rustls) so it cross-compiles to iOS/Android untouched.
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
+# gpu.compute (D-081): WGSL compute 専用の狭い GPU 口。ネイティブは wgpu
+# (macOS/iOS = Metal, Android = Vulkan)、Web ビルドでは WebGPU にそのまま
+# 写る想定。フル WebGPU(レンダーパイプライン)は出さない — 重い/非対応の
+# ときはエラーで返し、プラグインはクラウドカルクレーター(ml.infer)へ
+# フォールバックする。
+wgpu = "22"
+pollster = "0.3"
+base64 = "0.22"
 
 [dev-dependencies]

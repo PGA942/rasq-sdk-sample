@@ -46,6 +46,11 @@
         "permission": "network (審査済み)",
         "notes": "Host-proxied: dedupe, cache, cookie/credential isolation. Plugins never open sockets."
       },
+      "gpu.compute": {
+        "args": { "wgsl": "string — compute シェーダー(WGSL)", "entry": "string? = main", "input": "base64 — binding(0) read-only storage の中身", "outputSize": "number — binding(1) read_write storage のバイト数", "workgroups": "[x, y, z]?" },
+        "value": { "output": "base64", "placement": "device" },
+        "permission": "gpu_ml — WGSL compute 専用の狭い口(フル WebGPU は出さない)。ランタイム内 wgpu で短絡処理。アダプター無し/検証エラーは E01 → プラグインはクラウドカルクレーター (ml.infer) へフォールバック (D-081)"
+      },
       "ml.infer": {
         "args": {
           "model": "string — model manifest id (model-manifest.schema.json). The manifest declares which runtimes exist (onnx / llama / server); the HOST resolves placement (D-018) — plugins cannot pick endpoints.",

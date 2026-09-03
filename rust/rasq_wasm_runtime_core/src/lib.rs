@@ -175,6 +175,16 @@ fn host_fn_impl(mut caller: Caller<'_, HostState>, ptr: u32, len: u32) -> Result
         }
     }
 
+    // Native gpu.compute short-circuit (D-081): WGSL compute 専用の狭い
+    // GPU 口。常にランタイム内で処理する(Dart 側に同期 GPU ブリッジは
+    // 無い)。gpu_ml 権限の審査ゲートはマニフェスト/ストア側 (M4)。
+    if let Ok(req) = serde_json::from_slice::<serde_json::Value>(&request) {
+        if req["fn"] == "gpu.compute" {
+            let response = gpu_compute_response(&req);
+            return write_response(&mut caller, memory, response.to_string().as_bytes());
+        }
+    }
+
     let response: String = match caller.data().callback {
         None => r#"{"ok":false,"error":{"code":"E00","message":"no host_fn handler registered"}}"#.to_string(),
         Some(callback) => {
@@ -214,6 +224,155 @@ fn write_response(caller: &mut Caller<'_, HostState>, memory: Memory, bytes: &[u
 
 /// Serves one `net.fetch` request with blocking ureq (host-fn schema:
 /// args {method, url, headers?, body?} → value {status, headers, bodyText}).
+// ---- gpu.compute (D-081) --------------------------------------------------
+// WGSL compute 専用の狭い GPU 口: 入力 1 バッファ(binding 0, read-only
+// storage)→ 出力 1 バッファ(binding 1, read_write storage)の 1 パス。
+// カスタム TL の重いソートやメディア編集フィルターの下地。アダプター無し・
+// 検証エラーは E01 で返し、プラグインはクラウドカルクレーターへ逃がす。
+
+struct GpuCtx {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+}
+
+static GPU: std::sync::OnceLock<Option<GpuCtx>> = std::sync::OnceLock::new();
+
+fn gpu_ctx() -> Option<&'static GpuCtx> {
+    GPU.get_or_init(|| {
+        let instance = wgpu::Instance::default();
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None)).ok()?;
+        Some(GpuCtx { device, queue })
+    })
+    .as_ref()
+}
+
+fn gpu_compute_response(req: &serde_json::Value) -> serde_json::Value {
+    use base64::Engine as _;
+    use wgpu::util::DeviceExt as _;
+    let call_id = req["callId"].clone();
+    let err = |code: &str, message: String| {
+        serde_json::json!({"callId": call_id, "ok": false, "error": {"code": code, "message": message}})
+    };
+    let args = &req["args"];
+    let Some(ctx) = gpu_ctx() else {
+        return err("E01", "no gpu adapter — fall back to the cloud calculator (ml.infer)".to_string());
+    };
+    let wgsl = args["wgsl"].as_str().unwrap_or("");
+    if wgsl.is_empty() {
+        return err("D01", "gpu.compute: wgsl required".to_string());
+    }
+    let entry = args["entry"].as_str().unwrap_or("main");
+    let input = match base64::engine::general_purpose::STANDARD.decode(args["input"].as_str().unwrap_or("")) {
+        Ok(b) => b,
+        Err(e) => return err("D01", format!("gpu.compute: bad input base64: {e}")),
+    };
+    let output_size = args["outputSize"].as_u64().unwrap_or(0);
+    if output_size == 0 || output_size > 64 * 1024 * 1024 {
+        return err("D01", format!("gpu.compute: outputSize out of range: {output_size}"));
+    }
+    let wg: Vec<u32> = args["workgroups"]
+        .as_array()
+        .map(|a| a.iter().map(|v| v.as_u64().unwrap_or(1).max(1) as u32).collect())
+        .unwrap_or_else(|| vec![1, 1, 1]);
+    let (wx, wy, wz) = (
+        *wg.first().unwrap_or(&1),
+        *wg.get(1).unwrap_or(&1),
+        *wg.get(2).unwrap_or(&1),
+    );
+
+    let device = &ctx.device;
+    // 検証エラー(WGSL の文法・バインド不一致)はエラースコープで拾う。
+    device.push_error_scope(wgpu::ErrorFilter::Validation);
+
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("rasq gpu.compute"),
+        source: wgpu::ShaderSource::Wgsl(wgsl.into()),
+    });
+    let in_bytes: &[u8] = if input.is_empty() { &[0, 0, 0, 0] } else { &input };
+    let in_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: in_bytes,
+        usage: wgpu::BufferUsages::STORAGE,
+    });
+    let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: output_size,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    });
+    let read_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: output_size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None },
+                count: None,
+            },
+        ],
+    });
+    let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: in_buf.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
+        ],
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[&layout],
+        push_constant_ranges: &[],
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: None,
+        layout: Some(&pipeline_layout),
+        module: &module,
+        entry_point: entry,
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    if let Some(e) = pollster::block_on(device.pop_error_scope()) {
+        return err("E01", format!("gpu.compute: validation failed: {e}"));
+    }
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &bind, &[]);
+        pass.dispatch_workgroups(wx, wy, wz);
+    }
+    encoder.copy_buffer_to_buffer(&out_buf, 0, &read_buf, 0, output_size);
+    ctx.queue.submit([encoder.finish()]);
+
+    let slice = read_buf.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    device.poll(wgpu::Maintain::Wait);
+    match rx.recv() {
+        Ok(Ok(())) => {}
+        other => return err("E01", format!("gpu.compute: readback failed: {other:?}")),
+    }
+    let output = base64::engine::general_purpose::STANDARD.encode(slice.get_mapped_range().as_ref());
+    serde_json::json!({"callId": call_id, "ok": true, "value": {"output": output, "placement": "device"}})
+}
+
 fn native_fetch_response(req: &serde_json::Value) -> serde_json::Value {
     let call_id = req["callId"].clone();
     let args = &req["args"];
