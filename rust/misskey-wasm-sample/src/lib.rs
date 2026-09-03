@@ -368,11 +368,13 @@ fn fetch_notes(args: &Value, default_kind: &str) -> Result<(Vec<Value>, String),
     if let Some(cursor) = args["cursor"].as_str() {
         body["untilId"] = json!(cursor);
     }
-    // TL 設定 (D-044): ローカル保存ページの値がホストから届いていれば反映。
-    if let Some(with_renotes) = args["withRenotes"].as_bool() {
+    // TL 設定 (D-044): ホストは設定ページの値を毎呼び出しの `settings` に
+    // area ごと入れ子で載せてくる。知っているキーだけ読む。
+    let tl_settings = &args["settings"]["timeline"];
+    if let Some(with_renotes) = tl_settings["withRenotes"].as_bool() {
         body["withRenotes"] = json!(with_renotes);
     }
-    if let Some(with_replies) = args["withReplies"].as_bool() {
+    if let Some(with_replies) = tl_settings["withReplies"].as_bool() {
         body["withReplies"] = json!(with_replies);
     }
     let notes = misskey_fetch(args, endpoint, body)?;
@@ -755,6 +757,38 @@ fn sns_inspect_server(args: &Value) -> Result<Value, Value> {
         "registrationOpen": meta["disableRegistration"].as_bool().map(|d| !d),
         "maintainer": meta["maintainerName"],
     } }))
+}
+
+/// `call("sns.settingsRead", {area})` / `sns.settingsWrite` (D-044):
+/// `source: "remote"` の設定ページはサーバーが真実なので、KV ではなく
+/// ここを通す。Misskey は `account` ページを `i` / `i/update` に写す。
+fn sns_settings_read(args: &Value) -> Result<Value, Value> {
+    if args["area"].as_str() != Some("account") {
+        return Err(json!({ "code": "C01", "message": "no such remote settings area" }));
+    }
+    let me = misskey_fetch(args, "i", json!({}))?;
+    Ok(json!({ "values": {
+        "isLocked": me["isLocked"],
+        "isExplorable": me["isExplorable"],
+        "hideOnlineStatus": me["hideOnlineStatus"],
+        "noCrawle": me["noCrawle"],
+        "alwaysMarkNsfw": me["alwaysMarkNsfw"],
+        "autoAcceptFollowed": me["autoAcceptFollowed"],
+    } }))
+}
+
+fn sns_settings_write(args: &Value) -> Result<Value, Value> {
+    if args["area"].as_str() != Some("account") {
+        return Err(json!({ "code": "C01", "message": "no such remote settings area" }));
+    }
+    let Some(key) = args["key"].as_str() else {
+        return Err(json!({ "code": "D01", "message": "key required" }));
+    };
+    let mut body = json!({});
+    body[key] = args["value"].clone();
+    misskey_fetch(args, "i/update", body)?;
+    // 書き込み後の最新値を返す(サーバーが弾いた変更も見えるように)。
+    sns_settings_read(args)
 }
 
 /// `call("sns.timelines")`: このアカウントで出せる基本 TL の宣言。
@@ -1451,6 +1485,8 @@ pub extern "C" fn call(
         // 通知 / 関係 / DM / 検索 (D-134): 残りの SnsSession 契約を写した分。
         "sns.inspectServer" => sns_inspect_server(&args_value),
         "sns.timelines" => sns_timelines(&args_value),
+        "sns.settingsRead" => sns_settings_read(&args_value),
+        "sns.settingsWrite" => sns_settings_write(&args_value),
         "sns.notifications" => sns_notifications(&args_value),
         "sns.markNotificationsRead" => misskey_fetch(&args_value, "notifications/mark-all-as-read", json!({})).map(|_| json!({})),
         "sns.relationships" => sns_relationships(&args_value),

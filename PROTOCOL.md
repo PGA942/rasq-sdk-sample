@@ -222,6 +222,18 @@ SNS プラグインのイベントハンドラー関数は「一定程度は抽�
     RASQ 内では実行せず**外部リンク**として出す。
   - クリップと Play は SNS 固有機能。持たないプラグイン(Mastodon)は
     実装しない = C01 が返り、ホストが該当タブ/メニューを隠す。
+- **設定ページ (D-044) の写像** (D-136):
+  - ローカル保存ページの値は、**すべての `sns.*` 呼び出しの `args.settings` に
+    area ごと入れ子で載る**(`{"timeline": {"withRenotes": false}, …}`)。
+    プラグインは自分が知っている area / キーだけ読む。area で入れ子にして
+    あるので、別ページの同名キーとぶつからない。
+  - `sns.applySettings {area, values}` → `{}` — 値の変更をプラグインに通知する
+    (保存したいプラグイン向け)。未実装 = C01 でよく、ホストは無視する。
+    次回以降の呼び出しに `args.settings` として載るので実害はない。
+  - `sns.settingsRead {area}` → `{values}` / `sns.settingsWrite {area, key, value}`
+    → `{values}` — `source: "remote"` のページ。**戻りは書き込み後に読み直した
+    最新値**にすること(サーバーが弾いた変更も画面に出るように)。
+    知らない area は C01。
 - 未実装関数は C01 — ホストは該当 UI を隠す(SnsSession の UnsupportedError と同じ扱い)。
   認証トークンは v1 ではホストが `args.token` で毎回渡す(サンプルは `i` に積む)。
 
