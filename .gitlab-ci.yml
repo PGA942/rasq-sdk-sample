@@ -21,6 +21,8 @@ rust:
     - rustup target add wasm32-unknown-unknown
     - cd rust
     - cargo build --release --target wasm32-unknown-unknown -p misskey-wasm-sample
+    - cargo build --release --target wasm32-unknown-unknown -p mastodon-wasm
+    - cargo test
     - cargo test --release -p rasq_wasm_runtime_core
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -41,7 +43,7 @@ dart:
     - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
     - export PATH="$CARGO_HOME/bin:$PATH"
     - rustup target add wasm32-unknown-unknown
-    - (cd rust && cargo build --release --target wasm32-unknown-unknown -p misskey-wasm-sample)
+    - (cd rust && cargo build --release --target wasm32-unknown-unknown -p misskey-wasm-sample -p mastodon-wasm)
   script:
     - cd rasq_wasm_runtime
     - dart pub get

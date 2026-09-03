@@ -7,6 +7,15 @@ wasm plugin sample and the native runtime that hosts it inside Flutter.
   cdylib that emits `snapshot`/`patch` and answers `call` as
   `rasq.boundary/1` JSON, per [`../PROTOCOL.md`](../PROTOCOL.md) §3. This is
   the plugin side — what a real SNS plugin author would ship.
+- [`mastodon-wasm/`](mastodon-wasm) — the same `sns.*` contract against a
+  second SNS (D-135). It has **no screen constructor**: it only answers
+  `sns.*`, and the host draws its standard PostTile. Useful as the proof
+  that the boundary is SNS-agnostic — the host code is identical for both.
+  The interesting differences are all inside the plugin: Mastodon serves
+  HTML bodies (flattened to text here, since the host's RSL pass expects
+  plain text), pages with `max_id`, has no reactions (favourites are mapped
+  onto the reaction surface as ⭐) and no native quotes (`sns.quotes`
+  returns C01, so the host hides that column).
 - [`rasq_wasm_runtime_core/`](rasq_wasm_runtime_core) — a native cdylib that
   embeds [`wasmi`](https://crates.io/crates/wasmi) (a pure-Rust WASM
   *interpreter*, chosen per D-007 because iOS forbids JIT'ing runtimes) and
@@ -19,7 +28,9 @@ wasm plugin sample and the native runtime that hosts it inside Flutter.
 ```sh
 rustup target add wasm32-unknown-unknown   # once
 cargo build --release --target wasm32-unknown-unknown -p misskey-wasm-sample
-cargo test --release -p rasq_wasm_runtime_core   # loads the sample above and round-trips it through wasmi
+cargo build --release --target wasm32-unknown-unknown -p mastodon-wasm
+cargo test                                        # pure mapping tests for both plugins
+cargo test --release -p rasq_wasm_runtime_core    # loads the sample above and round-trips it through wasmi
 ```
 
 `rasq_wasm_runtime_core`'s own cdylib (for whatever Flutter is targeting) is

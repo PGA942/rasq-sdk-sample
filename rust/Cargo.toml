@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "hello-rasq-plugin",
+    "mastodon-wasm",
     "misskey-wasm-sample",
     "rasq_wasm_runtime_core",
     "relational-wasm",

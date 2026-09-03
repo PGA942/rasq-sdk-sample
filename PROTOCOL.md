@@ -163,6 +163,11 @@ SNS プラグインのイベントハンドラー関数は「一定程度は抽�
   - `sns.reposters {postId, …}` → `{page: {items: [user]}}` / `sns.quotes {postId, …}` → `{page: {items: [Post]}}` (D-076)
 - v1 追加分 (D-134) — 通知 / 関係 / DM / 検索。`SnsSession` 契約 (CONTRACT §5) の
   残りを同じ規則(引数は素の JSON、戻りはワイヤ)で写したもの:
+  - `sns.inspectServer {host}` → `{server: {host, name, software?, version?,
+    description?, iconUrl?, registrationOpen?, maintainer?}}` — サーバー検索 /
+    PDS 変更 (CONTRACT §2) が出す情報。**認証前に呼ばれる**ので `token` は無い。
+    取り方は SNS ごとに違う(Misskey は `meta`、Mastodon は `/api/v2/instance`)ので
+    ホストは知らなくてよい。未実装/失敗ならホストはホスト名だけで縮退する。
   - `sns.timelines {}` → `{timelines: [{id, label?}]}` — **タブに並べる基本 TL の宣言**
     (CONTRACT §6 の id 体系)。SNS ごとに揃う TL が違うため、ホストは決め打ちせず
     ここから受け取る。未実装(C01)はホスト既定へ縮退。

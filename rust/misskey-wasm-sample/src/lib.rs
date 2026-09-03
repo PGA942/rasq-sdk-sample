@@ -740,6 +740,23 @@ fn sns_renotes(args: &Value, quotes: bool) -> Result<Value, Value> {
 // 分。ワイヤは PROTOCOL §4.3 に追記してある。返す形はホスト側モデルに
 // 1:1 で載るので、`WasmSnsSession` は取り込むだけで済む。
 
+/// `call("sns.inspectServer", {host})` (CONTRACT §2): サーバー検索 /
+/// PDS 変更の画面が出す情報。**認証前に呼ばれる**ので token は無い。
+fn sns_inspect_server(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let meta = misskey_fetch(args, "meta", json!({ "detail": true }))?;
+    Ok(json!({ "server": {
+        "host": host,
+        "name": meta["name"].as_str().unwrap_or(&host),
+        "software": "misskey",
+        "version": meta["version"],
+        "description": meta["description"],
+        "iconUrl": meta["iconUrl"],
+        "registrationOpen": meta["disableRegistration"].as_bool().map(|d| !d),
+        "maintainer": meta["maintainerName"],
+    } }))
+}
+
 /// `call("sns.timelines")`: このアカウントで出せる基本 TL の宣言。
 /// ホストはこれをタブに並べる(CONTRACT §6 の id 体系)。SNS ごとに
 /// 揃う TL が違うため、ハードコードではなくプラグインが宣言する。
@@ -1165,6 +1182,7 @@ pub extern "C" fn call(
         "sns.quotes" => sns_renotes(&args_value, true),
         "sns.emojis" => sns_emojis(&args_value),
         // 通知 / 関係 / DM / 検索 (D-134): 残りの SnsSession 契約を写した分。
+        "sns.inspectServer" => sns_inspect_server(&args_value),
         "sns.timelines" => sns_timelines(&args_value),
         "sns.notifications" => sns_notifications(&args_value),
         "sns.markNotificationsRead" => misskey_fetch(&args_value, "notifications/mark-all-as-read", json!({})).map(|_| json!({})),
