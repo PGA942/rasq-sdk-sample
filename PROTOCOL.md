@@ -161,7 +161,45 @@ SNS プラグインのイベントハンドラー関数は「一定程度は抽�
   - `sns.userPosts {id, filter: posts|withReplies|replies|media|quotes, limit, cursor?}` → `{page}` — 返信/引用の振り分け規約 (D-069) はプラグイン側で適用 (D-076)
   - `sns.reactions {postId, type?, limit, cursor?}` → `{page: {items: [{id, user, reaction, createdAt, emojiUrl?}], nextCursor?}}` (D-076)
   - `sns.reposters {postId, …}` → `{page: {items: [user]}}` / `sns.quotes {postId, …}` → `{page: {items: [Post]}}` (D-076)
-- 以降(notifications / follow 系 / DM …)は同じ形で 1 本ずつ追加する。未実装関数は C01 — ホストは該当 UI を隠す(SnsSession の UnsupportedError と同じ扱い)。認証トークンは v1 ではホストが `args.token` で毎回渡す(サンプルは `i` に積む)— 実セッション登録の口と同時に整備する。
+- v1 追加分 (D-134) — 通知 / 関係 / DM / 検索。`SnsSession` 契約 (CONTRACT §5) の
+  残りを同じ規則(引数は素の JSON、戻りはワイヤ)で写したもの:
+  - `sns.timelines {}` → `{timelines: [{id, label?}]}` — **タブに並べる基本 TL の宣言**
+    (CONTRACT §6 の id 体系)。SNS ごとに揃う TL が違うため、ホストは決め打ちせず
+    ここから受け取る。未実装(C01)はホスト既定へ縮退。
+  - `sns.notifications {limit, cursor?}` → `{page: {items: [Notification], nextCursor?}}`
+    - Notification ワイヤ: `{id, kind, createdAt(ISO), read?, actors: [user],
+      post?: Post, reaction?, reactionsByActor?: {userId: reaction}, title?, body?}`。
+    - `kind`: `reaction` `repost` `quote` `reply` `mention` `follow` `followRequest`
+      `followAccepted` `listAdded` `pollEnded` `timer` `vc` `system` `other`。
+      **未知の値はホストが `other` に倒す**ので、新しい種別を返してよい。
+    - **グループ通知は畳んで返す**: `actors` に全員、`reactionsByActor` に
+      actor id → リアクション文字列。単体通知は `actors` が 1 件。
+    - `system` (D-045) はサーバー/アプリ発の本文つき通知で、`title`/`body` を使う。
+  - `sns.markNotificationsRead {}` → `{}`
+  - `sns.relationships {ids: [id]}` → `{states: {id: FollowState}}`
+    - FollowState ワイヤ: `{following, followedBy, requested, muted, blocked, blockedBy}`
+      (すべて bool、省略は false)。
+  - `sns.setRelation {id, relation: following|muted|blocked, on}` → `{state: FollowState}`
+    — 3 つのセッターを 1 本に束ねる。**戻りは書き込み後にサーバーを読み直した状態**に
+    すること: 鍵アカウントへのフォローは `following` ではなく `requested` で返る。
+  - `sns.follows {id, direction: followers|following, limit, cursor?}` → `{page: {items: [user]}}`
+  - `sns.userList {kind: muted|blocked|followRequests, limit, cursor?}` → `{page: {items: [user]}}`
+    — 「人の一覧」は形が同じなので 1 本に束ねる。未知の kind は C01。
+  - `sns.resolveFollowRequest {id, accept}` → `{}`
+  - `sns.reportUser {id, comment}` → `{}`
+  - `sns.search {kind: posts|users, q, limit, cursor?}` → `{page}`(posts は Post、users は user)
+  - `sns.trendingTags {}` → `{tags: [{tag, count?}]}`
+  - `sns.favorites {limit, cursor?}` → `{page}` — ブックマーク(お気に入り)。
+  - `sns.dmRooms {}` → `{rooms: [{id, kind: direct|chat, peer: user, lastPost?: Post,
+    unreadCount?, title?}]}` — CONTRACT §7 のとおり、`visibility == specified|direct` の
+    投稿を**相手ユーザー単位**に束ねて `direct` ルームにし、ネイティブ Chat があれば
+    `chat` ルームを足す(404/403 のインスタンスでは足さない)。
+  - `sns.sendDm {roomKind: direct|chat, peerId, draft: NewPost}` → `{post}`
+- まだ写していないもの: `uploadMedia`(v1 の `net.fetch` は multipart を持たないため
+  ホスト実装のまま)、`updateProfile`、リスト/クリップ/Play 系。以降も同じ形で 1 本ずつ
+  追加する。
+- 未実装関数は C01 — ホストは該当 UI を隠す(SnsSession の UnsupportedError と同じ扱い)。
+  認証トークンは v1 ではホストが `args.token` で毎回渡す(サンプルは `i` に積む)。
 
 ## 4.4 タイムラインレンダラー契約 v1(M5e / D-080)
 

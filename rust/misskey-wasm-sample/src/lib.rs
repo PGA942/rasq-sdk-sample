@@ -335,15 +335,47 @@ fn misskey_fetch(args: &Value, endpoint: &str, mut body: Value) -> Result<Value,
     serde_json::from_str(text).map_err(|e| json!({ "code": "D01", "message": format!("bad JSON from {endpoint}: {e}") }))
 }
 
-/// Misskey local-timeline fetch(`timeline` と `sns.timeline` で共用)。
-fn fetch_local_notes(args: &Value) -> Result<(Vec<Value>, String), Value> {
+/// `TimelineKind.id` (CONTRACT §6) → Misskey のエンドポイントと追加パラメータ。
+///
+/// `list:{id}` と `tag:{tag}` は接頭辞つきの動的 id なので、値を本文へ移す。
+/// 未知の id は `home` に倒す(ホストが宣言に無い TL を要求することは
+/// 無いが、縮退させておく方が安全)。
+fn timeline_endpoint(kind: &str) -> (&'static str, Value) {
+    match kind {
+        "local" => ("notes/local-timeline", json!({})),
+        "social" | "recommended" => ("notes/hybrid-timeline", json!({})),
+        "global" => ("notes/global-timeline", json!({})),
+        "featured" => ("notes/featured", json!({})),
+        k if k.starts_with("list:") => ("notes/user-list-timeline", json!({ "listId": &k[5..] })),
+        k if k.starts_with("tag:") => ("notes/search-by-tag", json!({ "tag": &k[4..] })),
+        _ => ("notes/timeline", json!({})),
+    }
+}
+
+/// タイムライン取得(`timeline` と `sns.timeline` で共用)。`kind` 省略時は
+/// ローカル TL —— 旧 `timeline`(RRL デモ)の挙動を保つため。
+fn fetch_notes(args: &Value, default_kind: &str) -> Result<(Vec<Value>, String), Value> {
     let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
     let limit = args["limit"].as_u64().unwrap_or(10).min(30);
+    let kind = args["kind"].as_str().unwrap_or(default_kind);
+    let (endpoint, extra) = timeline_endpoint(kind);
     let mut body = json!({ "limit": limit });
+    if let Some(map) = extra.as_object() {
+        for (k, v) in map {
+            body[k] = v.clone();
+        }
+    }
     if let Some(cursor) = args["cursor"].as_str() {
         body["untilId"] = json!(cursor);
     }
-    let notes = misskey_fetch(args, "notes/local-timeline", body)?;
+    // TL 設定 (D-044): ローカル保存ページの値がホストから届いていれば反映。
+    if let Some(with_renotes) = args["withRenotes"].as_bool() {
+        body["withRenotes"] = json!(with_renotes);
+    }
+    if let Some(with_replies) = args["withReplies"].as_bool() {
+        body["withReplies"] = json!(with_replies);
+    }
+    let notes = misskey_fetch(args, endpoint, body)?;
     Ok((notes.as_array().cloned().unwrap_or_default(), host))
 }
 
@@ -474,7 +506,7 @@ fn shallow_post_wire(note: &Value, fallback_instance: &str) -> Value {
 /// `call("sns.timeline", {kind?, limit?, cursor?, host?, baseUrl?})` (D-074):
 /// SnsSession 契約の boundary 写像 — Post ワイヤの page を返す。
 fn sns_timeline(args: &Value) -> Result<Value, Value> {
-    let (notes, host) = fetch_local_notes(args)?;
+    let (notes, host) = fetch_notes(args, "home")?;
     let items: Vec<Value> = notes.iter().map(|n| post_wire(n, &host)).collect();
     let next = notes.last().and_then(|n| n["id"].as_str());
     Ok(json!({ "page": { "items": items, "nextCursor": next } }))
@@ -702,11 +734,381 @@ fn sns_renotes(args: &Value, quotes: bool) -> Result<Value, Value> {
     Ok(json!({ "page": { "items": items, "nextCursor": next } }))
 }
 
+// ── 通知 / 関係 / DM / 検索 (D-134) ────────────────────────────────
+//
+// ここから下は `SnsSession` 契約 (CONTRACT §5) の残りを boundary へ写した
+// 分。ワイヤは PROTOCOL §4.3 に追記してある。返す形はホスト側モデルに
+// 1:1 で載るので、`WasmSnsSession` は取り込むだけで済む。
+
+/// `call("sns.timelines")`: このアカウントで出せる基本 TL の宣言。
+/// ホストはこれをタブに並べる(CONTRACT §6 の id 体系)。SNS ごとに
+/// 揃う TL が違うため、ハードコードではなくプラグインが宣言する。
+fn sns_timelines(_args: &Value) -> Result<Value, Value> {
+    Ok(json!({ "timelines": [
+        { "id": "home",   "label": "ホーム" },
+        { "id": "social", "label": "ソーシャル" },
+        { "id": "local",  "label": "ローカル" },
+        { "id": "global", "label": "グローバル" },
+        { "id": "featured", "label": "Today" },
+    ] }))
+}
+
+/// Misskey の通知種別 → RASQ の `NotificationKind`。
+/// 未知の種別は `other` に倒す(ホストはアクションタイルとして描く)。
+fn notification_kind(t: &str) -> &'static str {
+    match t {
+        "reaction" => "reaction",
+        "renote" => "repost",
+        "quote" => "quote",
+        "reply" => "reply",
+        "mention" => "mention",
+        "follow" => "follow",
+        "receiveFollowRequest" => "followRequest",
+        "followRequestAccepted" => "followAccepted",
+        "pollEnded" | "pollVote" => "pollEnded",
+        // D-045: サーバー/アプリ発の本文つき通知はシステム通知にまとめる。
+        "app" | "roleAssigned" | "achievementEarned" | "login" | "test" => "system",
+        _ => "other",
+    }
+}
+
+/// 1 件の通知 → 通知ワイヤ。`i/notifications-grouped` は `users` /
+/// `reactions` を持つので、グループ通知もそのまま畳んで返す。
+fn notification_wire(n: &Value, host: &str) -> Value {
+    let kind = notification_kind(n["type"].as_str().unwrap_or(""));
+
+    // 単体は `user`、グループは `users`。どちらも actors 配列に均す。
+    let mut actors: Vec<Value> = vec![];
+    if let Some(list) = n["users"].as_array() {
+        actors.extend(list.iter().map(|u| user_wire(u, host)));
+    } else if n["user"].is_object() {
+        actors.push(user_wire(&n["user"], host));
+    }
+
+    // グループリアクション: actor id → リアクション文字列。
+    let mut by_actor = serde_json::Map::new();
+    if let Some(list) = n["reactions"].as_array() {
+        for r in list {
+            if let (Some(uid), Some(reaction)) = (r["user"]["id"].as_str(), r["type"].as_str()) {
+                by_actor.insert(uid.to_string(), json!(reaction));
+            }
+        }
+    }
+
+    json!({
+        "id": n["id"],
+        "kind": kind,
+        "createdAt": n["createdAt"],
+        "read": n["isRead"].as_bool().unwrap_or(false),
+        "actors": actors,
+        "post": if n["note"].is_object() { post_wire(&n["note"], host) } else { Value::Null },
+        "reaction": n["reaction"],
+        "reactionsByActor": Value::Object(by_actor),
+        "title": n["header"],
+        "body": n["body"],
+    })
+}
+
+/// `call("sns.notifications", {limit, cursor?})`。
+/// グループ版が無いインスタンス(404)は素の `i/notifications` に落ちる —
+/// CONTRACT §5 の Misskey 参照実装と同じ縮退。
+fn sns_notifications(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let mut body = json!({ "limit": args["limit"].as_u64().unwrap_or(20).min(100) });
+    if let Some(cursor) = args["cursor"].as_str() {
+        body["untilId"] = json!(cursor);
+    }
+    let list = match misskey_fetch(args, "i/notifications-grouped", body.clone()) {
+        Ok(v) => v,
+        Err(_) => misskey_fetch(args, "i/notifications", body)?,
+    };
+    let items: Vec<Value> = list.as_array().cloned().unwrap_or_default().iter().map(|n| notification_wire(n, &host)).collect();
+    let next = list.as_array().and_then(|a| a.last()).and_then(|n| n["id"].as_str());
+    Ok(json!({ "page": { "items": items, "nextCursor": next } }))
+}
+
+/// Misskey の `users/relation` 1 件 → FollowState ワイヤ。
+fn follow_state_wire(r: &Value) -> Value {
+    json!({
+        "following": r["isFollowing"].as_bool().unwrap_or(false),
+        "followedBy": r["isFollowed"].as_bool().unwrap_or(false),
+        // 申請中は「自分が送った申請」。相手からの申請は通知側で扱う。
+        "requested": r["hasPendingFollowRequestFromYou"].as_bool().unwrap_or(false),
+        "muted": r["isMuted"].as_bool().unwrap_or(false),
+        "blocked": r["isBlocking"].as_bool().unwrap_or(false),
+        "blockedBy": r["isBlocked"].as_bool().unwrap_or(false),
+    })
+}
+
+/// `call("sns.relationships", {ids: [id]})` → `{states: {id: FollowState}}`。
+/// `users/relation` は 1 件でもオブジェクト、複数だと配列を返すので均す。
+fn sns_relationships(args: &Value) -> Result<Value, Value> {
+    let ids: Vec<String> = args["ids"].as_array().cloned().unwrap_or_default().iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
+    if ids.is_empty() {
+        return Ok(json!({ "states": {} }));
+    }
+    let res = misskey_fetch(args, "users/relation", json!({ "userId": ids }))?;
+    let rows: Vec<Value> = match res.as_array() {
+        Some(a) => a.clone(),
+        None => vec![res],
+    };
+    let mut states = serde_json::Map::new();
+    for r in rows {
+        if let Some(id) = r["id"].as_str() {
+            states.insert(id.to_string(), follow_state_wire(&r));
+        }
+    }
+    Ok(json!({ "states": states }))
+}
+
+/// `call("sns.setRelation", {id, relation: following|muted|blocked, on})`
+/// → `{state}`。3 つの setter を 1 本にまとめてある(ホスト側で
+/// `setFollowing` / `setMuted` / `setBlocked` へ割り振る)。
+/// 書き込み後は関係を読み直して**サーバーが真実**の状態を返す —
+/// 鍵アカウントへのフォローは `requested` 止まりになるため。
+fn sns_set_relation(args: &Value) -> Result<Value, Value> {
+    let id = args["id"].as_str().unwrap_or("");
+    let on = args["on"].as_bool().unwrap_or(false);
+    let endpoint = match (args["relation"].as_str().unwrap_or(""), on) {
+        ("following", true) => "following/create",
+        ("following", false) => "following/delete",
+        ("muted", true) => "mute/create",
+        ("muted", false) => "mute/delete",
+        ("blocked", true) => "blocking/create",
+        ("blocked", false) => "blocking/delete",
+        (other, _) => return Err(json!({ "code": "C01", "message": format!("unknown relation {other:?}") })),
+    };
+    misskey_fetch(args, endpoint, json!({ "userId": id }))?;
+    let res = misskey_fetch(args, "users/relation", json!({ "userId": [id] }))?;
+    let row = match res.as_array().and_then(|a| a.first()) {
+        Some(r) => r.clone(),
+        None => res,
+    };
+    Ok(json!({ "state": follow_state_wire(&row) }))
+}
+
+/// `call("sns.follows", {id, direction: followers|following, limit, cursor?})`。
+fn sns_follows(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let endpoint = match args["direction"].as_str().unwrap_or("followers") {
+        "following" => "users/following",
+        _ => "users/followers",
+    };
+    let mut body = json!({ "userId": args["id"], "limit": args["limit"].as_u64().unwrap_or(20).min(100) });
+    if let Some(cursor) = args["cursor"].as_str() {
+        body["untilId"] = json!(cursor);
+    }
+    let list = misskey_fetch(args, endpoint, body)?;
+    let rows: Vec<Value> = list.as_array().cloned().unwrap_or_default();
+    // followers は `follower`、following は `followee` にユーザーが入る。
+    let items: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            let u = if r["followee"].is_object() { &r["followee"] } else { &r["follower"] };
+            user_wire(u, &host)
+        })
+        .collect();
+    let next = rows.last().and_then(|r| r["id"].as_str());
+    Ok(json!({ "page": { "items": items, "nextCursor": next } }))
+}
+
+/// `call("sns.userList", {kind: muted|blocked|followRequests, limit, cursor?})`。
+/// 「人の一覧」を 1 本の関数に束ねる — どれも同じ形(user の page)を返す。
+fn sns_user_list(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let kind = args["kind"].as_str().unwrap_or("");
+    let mut body = json!({ "limit": args["limit"].as_u64().unwrap_or(30).min(100) });
+    if let Some(cursor) = args["cursor"].as_str() {
+        body["untilId"] = json!(cursor);
+    }
+    let (endpoint, field) = match kind {
+        "muted" => ("mute/list", "mutee"),
+        "blocked" => ("blocking/list", "blockee"),
+        "followRequests" => ("following/requests/list", "follower"),
+        other => return Err(json!({ "code": "C01", "message": format!("unknown user list {other:?}") })),
+    };
+    let list = misskey_fetch(args, endpoint, body)?;
+    let rows: Vec<Value> = list.as_array().cloned().unwrap_or_default();
+    let items: Vec<Value> = rows.iter().map(|r| user_wire(&r[field], &host)).collect();
+    let next = rows.last().and_then(|r| r["id"].as_str());
+    Ok(json!({ "page": { "items": items, "nextCursor": next } }))
+}
+
+/// `call("sns.search", {kind: posts|users, q, limit, cursor?})`。
+fn sns_search(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let q = args["q"].as_str().unwrap_or("");
+    let limit = args["limit"].as_u64().unwrap_or(20).min(100);
+    if args["kind"].as_str() == Some("users") {
+        let list = misskey_fetch(args, "users/search", json!({ "query": q, "limit": limit }))?;
+        let rows: Vec<Value> = list.as_array().cloned().unwrap_or_default();
+        let items: Vec<Value> = rows.iter().map(|u| user_wire(u, &host)).collect();
+        // users/search はカーソルを持たない(offset 方式)。
+        return Ok(json!({ "page": { "items": items, "nextCursor": Value::Null } }));
+    }
+    let mut body = json!({ "query": q, "limit": limit });
+    if let Some(cursor) = args["cursor"].as_str() {
+        body["untilId"] = json!(cursor);
+    }
+    let list = misskey_fetch(args, "notes/search", body)?;
+    let notes: Vec<Value> = list.as_array().cloned().unwrap_or_default();
+    let next = notes.last().and_then(|n| n["id"].as_str());
+    Ok(json!({ "page": { "items": notes.iter().map(|n| post_wire(n, &host)).collect::<Vec<Value>>(), "nextCursor": next } }))
+}
+
+/// `call("sns.trendingTags")` → `{tags: [{tag, count?}]}`。
+fn sns_trending_tags(args: &Value) -> Result<Value, Value> {
+    let list = misskey_fetch(args, "hashtags/trend", json!({}))?;
+    let tags: Vec<Value> = list
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|t| json!({ "tag": t["tag"], "count": t["usersCount"] }))
+        .collect();
+    Ok(json!({ "tags": tags }))
+}
+
+/// `call("sns.favorites", {limit, cursor?})` → ブックマーク(お気に入り)。
+fn sns_favorites(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let mut body = json!({ "limit": args["limit"].as_u64().unwrap_or(20).min(100) });
+    if let Some(cursor) = args["cursor"].as_str() {
+        body["untilId"] = json!(cursor);
+    }
+    let list = misskey_fetch(args, "i/favorites", body)?;
+    let rows: Vec<Value> = list.as_array().cloned().unwrap_or_default();
+    let items: Vec<Value> = rows.iter().map(|f| post_wire(&f["note"], &host)).collect();
+    let next = rows.last().and_then(|f| f["id"].as_str());
+    Ok(json!({ "page": { "items": items, "nextCursor": next } }))
+}
+
+/// `call("sns.dmRooms")` → `{rooms: [...]}` (CONTRACT §7)。
+///
+/// 「限定公開がDM代わりの SNS」をまとめる規約どおり、`visibility ==
+/// specified` の投稿を**相手ユーザー単位**に束ねて `kind: direct` の
+/// ルームにする。ネイティブ Chat (2025.4+) があれば `kind: chat` の
+/// ルームを足し、404/403 のインスタンスでは黙って無視する。
+fn sns_dm_rooms(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let me = misskey_fetch(args, "i", json!({}))?;
+    let my_id = me["id"].as_str().unwrap_or("").to_string();
+
+    // 受け取った限定公開 + 自分が送った限定公開。
+    let received = misskey_fetch(args, "notes/mentions", json!({ "visibility": "specified", "limit": 50 })).unwrap_or(json!([]));
+    let sent = misskey_fetch(args, "users/notes", json!({ "userId": my_id, "limit": 50, "withReplies": true })).unwrap_or(json!([]));
+
+    // peerId → (最新ノート, 未読数)。Misskey に DM 未読の概念は無いので 0。
+    let mut rooms: Vec<(String, Value, Value)> = vec![]; // (peerId, peer, lastPost)
+    let mut seen: Vec<String> = vec![];
+    let consider = |note: &Value, rooms: &mut Vec<(String, Value, Value)>, seen: &mut Vec<String>| {
+        if note["visibility"].as_str() != Some("specified") {
+            return;
+        }
+        // 相手 = 自分以外の可視ユーザー(自分の送信)か、投稿者(受信)。
+        let peer_id = if note["user"]["id"].as_str() == Some(my_id.as_str()) {
+            note["visibleUserIds"].as_array().and_then(|a| a.first()).and_then(|v| v.as_str()).map(str::to_string)
+        } else {
+            note["user"]["id"].as_str().map(str::to_string)
+        };
+        let Some(peer_id) = peer_id else { return };
+        if seen.contains(&peer_id) {
+            return; // 既に新しい方を採っている(どちらの一覧も新しい順)
+        }
+        seen.push(peer_id.clone());
+        rooms.push((peer_id, note["user"].clone(), post_wire(note, &host)));
+    };
+    for n in received.as_array().cloned().unwrap_or_default().iter() {
+        consider(n, &mut rooms, &mut seen);
+    }
+    for n in sent.as_array().cloned().unwrap_or_default().iter() {
+        consider(n, &mut rooms, &mut seen);
+    }
+
+    let mut out: Vec<Value> = rooms
+        .iter()
+        .map(|(peer_id, peer_raw, last)| {
+            // 送信ノートでは `user` が自分なので、相手は last の可視先から引く。
+            let peer = if peer_raw["id"].as_str() == Some(my_id.as_str()) {
+                json!({ "id": peer_id, "kind": "misskey", "instance": host, "handle": "", "displayName": "" })
+            } else {
+                user_wire(peer_raw, &host)
+            };
+            json!({ "id": format!("dm:{peer_id}"), "kind": "direct", "peer": peer, "lastPost": last, "unreadCount": 0 })
+        })
+        .collect();
+
+    // ネイティブ Chat。使えないインスタンスでは足さない。
+    if let Ok(history) = misskey_fetch(args, "chat/history", json!({ "limit": 30 })) {
+        for m in history.as_array().cloned().unwrap_or_default().iter() {
+            let peer = if m["fromUser"]["id"].as_str() == Some(my_id.as_str()) { &m["toUser"] } else { &m["fromUser"] };
+            let Some(peer_id) = peer["id"].as_str() else { continue };
+            out.push(json!({
+                "id": format!("chat:{peer_id}"),
+                "kind": "chat",
+                "peer": user_wire(peer, &host),
+                "lastPost": Value::Null,
+                "unreadCount": if m["isRead"].as_bool().unwrap_or(true) { 0 } else { 1 },
+                "preview": m["text"],
+            }));
+        }
+    }
+    Ok(json!({ "rooms": out }))
+}
+
+/// `call("sns.sendDm", {roomKind: direct|chat, peerId, draft})` → `{post}`。
+/// direct は限定公開ノート、chat はネイティブ Chat メッセージ (CONTRACT §7)。
+fn sns_send_dm(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let peer = args["peerId"].as_str().unwrap_or("");
+    let draft = &args["draft"];
+    if args["roomKind"].as_str() == Some("chat") {
+        let mut body = json!({ "toUserId": peer, "text": draft["text"] });
+        // Chat は画像 1 枚まで (CONTRACT §7)。
+        if let Some(first) = draft["mediaIds"].as_array().and_then(|a| a.first()) {
+            body["fileId"] = first.clone();
+        }
+        let sent = misskey_fetch(args, "chat/messages/create-to-user", body)?;
+        // Chat メッセージはノートではないので、Post ワイヤへ最小限で写す。
+        return Ok(json!({ "post": {
+            "id": sent["id"],
+            "author": user_wire(&sent["fromUser"], &host),
+            "createdAt": sent["createdAt"],
+            "body": sent["text"].as_str().unwrap_or(""),
+            "bodyFormat": "plain",
+            "visibility": "specified",
+        } }));
+    }
+    let mut body = json!({
+        "text": draft["text"],
+        "visibility": "specified",
+        "visibleUserIds": [peer],
+    });
+    if let Some(cw) = draft["cw"].as_str() {
+        body["cw"] = json!(cw);
+    }
+    if let Some(ids) = draft["mediaIds"].as_array() {
+        if !ids.is_empty() {
+            body["fileIds"] = json!(ids);
+        }
+    }
+    if let Some(reply) = draft["replyToId"].as_str() {
+        body["replyId"] = json!(reply);
+    }
+    let created = misskey_fetch(args, "notes/create", body)?;
+    Ok(json!({ "post": post_wire(&created["createdNote"], &host) }))
+}
+
+/// `call("sns.reportUser", {id, comment})` → `{}`。
+fn sns_report_user(args: &Value) -> Result<Value, Value> {
+    misskey_fetch(args, "users/report-abuse", json!({ "userId": args["id"], "comment": args["comment"] })).map(|_| json!({}))
+}
+
 /// `call("timeline", {host?, limit?})`: fetch the local timeline through the
 /// host's `net.fetch`, rebuild the tree, bump rev. The host then pulls the
 /// new `snapshot()` (result carries `treeUpdated: true`).
 fn timeline(args: &Value) -> Result<Value, Value> {
-    let (notes, host) = fetch_local_notes(args)?;
+    let (notes, host) = fetch_notes(args, "local")?;
     let tiles: Vec<Value> = notes.iter().map(|n| post_tile(n, &host)).collect();
     let count = tiles.len();
     let root = json!({ "t": "Column", "k": "tl", "c": tiles });
@@ -762,6 +1164,24 @@ pub extern "C" fn call(
         "sns.reposters" => sns_renotes(&args_value, false),
         "sns.quotes" => sns_renotes(&args_value, true),
         "sns.emojis" => sns_emojis(&args_value),
+        // 通知 / 関係 / DM / 検索 (D-134): 残りの SnsSession 契約を写した分。
+        "sns.timelines" => sns_timelines(&args_value),
+        "sns.notifications" => sns_notifications(&args_value),
+        "sns.markNotificationsRead" => misskey_fetch(&args_value, "notifications/mark-all-as-read", json!({})).map(|_| json!({})),
+        "sns.relationships" => sns_relationships(&args_value),
+        "sns.setRelation" => sns_set_relation(&args_value),
+        "sns.follows" => sns_follows(&args_value),
+        "sns.userList" => sns_user_list(&args_value),
+        "sns.resolveFollowRequest" => {
+            let endpoint = if args_value["accept"].as_bool().unwrap_or(false) { "following/requests/accept" } else { "following/requests/reject" };
+            misskey_fetch(&args_value, endpoint, json!({ "userId": args_value["id"] })).map(|_| json!({}))
+        }
+        "sns.reportUser" => sns_report_user(&args_value),
+        "sns.search" => sns_search(&args_value),
+        "sns.trendingTags" => sns_trending_tags(&args_value),
+        "sns.favorites" => sns_favorites(&args_value),
+        "sns.dmRooms" => sns_dm_rooms(&args_value),
+        "sns.sendDm" => sns_send_dm(&args_value),
         // gpu.compute デモ (D-081): f32 配列を GPU(WGSL compute)で 2 倍。
         // カスタム TL の重いソートやメディア編集フィルターの下地 — GPU が
         // 無い環境は E01 で返るので、その時はクラウドカルクレーター
@@ -1050,5 +1470,124 @@ mod tests {
         assert_eq!(wire["id"], "m1");
         assert!(wire["repostedBy"].is_null());
         assert_eq!(wire["media"].as_array().unwrap().len(), 1);
+    }
+
+    // ── D-134: 通知 / 関係 / TL 種別のマッピング ────────────────────
+
+    /// CONTRACT §6 の TimelineKind.id → Misskey エンドポイント。
+    /// `list:` / `tag:` は接頭辞を剥がして本文パラメータへ移す。
+    #[test]
+    fn timeline_ids_map_to_misskey_endpoints() {
+        assert_eq!(timeline_endpoint("home").0, "notes/timeline");
+        assert_eq!(timeline_endpoint("local").0, "notes/local-timeline");
+        assert_eq!(timeline_endpoint("social").0, "notes/hybrid-timeline");
+        assert_eq!(timeline_endpoint("global").0, "notes/global-timeline");
+        assert_eq!(timeline_endpoint("featured").0, "notes/featured");
+
+        let (ep, extra) = timeline_endpoint("list:abc123");
+        assert_eq!(ep, "notes/user-list-timeline");
+        assert_eq!(extra["listId"], "abc123");
+
+        let (ep, extra) = timeline_endpoint("tag:ロケット");
+        assert_eq!(ep, "notes/search-by-tag");
+        assert_eq!(extra["tag"], "ロケット");
+
+        // 未知の id はホーム TL に倒す(縮退)。
+        assert_eq!(timeline_endpoint("relational").0, "notes/timeline");
+    }
+
+    #[test]
+    fn notification_types_map_onto_the_four_tile_kinds() {
+        assert_eq!(notification_kind("renote"), "repost");
+        assert_eq!(notification_kind("receiveFollowRequest"), "followRequest");
+        assert_eq!(notification_kind("followRequestAccepted"), "followAccepted");
+        // D-045: 本文つきのサーバー/アプリ通知はシステム通知へ。
+        assert_eq!(notification_kind("achievementEarned"), "system");
+        assert_eq!(notification_kind("app"), "system");
+        // 知らない種別でも落とさない。
+        assert_eq!(notification_kind("brandNewThing"), "other");
+    }
+
+    /// グループ通知(`i/notifications-grouped`)は users / reactions を持つ。
+    /// actor 配列と actor→リアクションの対応表に畳んで返す。
+    #[test]
+    fn grouped_reaction_notification_folds_actors_and_reactions() {
+        let n = json!({
+            "id": "n1",
+            "type": "reaction",
+            "createdAt": "2026-09-01T00:00:00Z",
+            "isRead": false,
+            "users": [
+                { "id": "u1", "username": "alice" },
+                { "id": "u2", "username": "bob" },
+            ],
+            "reactions": [
+                { "type": "🎉", "user": { "id": "u1", "username": "alice" } },
+                { "type": "👍", "user": { "id": "u2", "username": "bob" } },
+            ],
+            "note": { "id": "p1", "text": "本文", "user": { "id": "me", "username": "me" } },
+        });
+        let wire = notification_wire(&n, "example.test");
+        assert_eq!(wire["kind"], "reaction");
+        assert_eq!(wire["read"], false);
+        assert_eq!(wire["actors"].as_array().unwrap().len(), 2);
+        assert_eq!(wire["actors"][0]["handle"], "alice");
+        assert_eq!(wire["reactionsByActor"]["u1"], "🎉");
+        assert_eq!(wire["reactionsByActor"]["u2"], "👍");
+        assert_eq!(wire["post"]["body"], "本文");
+    }
+
+    /// 単体通知は `user` 1 件。post が無い種別では null のままにする。
+    #[test]
+    fn single_follow_notification_has_one_actor_and_no_post() {
+        let n = json!({
+            "id": "n2",
+            "type": "follow",
+            "createdAt": "2026-09-01T00:00:00Z",
+            "isRead": true,
+            "user": { "id": "u9", "username": "newfollower", "name": "新しい人" },
+        });
+        let wire = notification_wire(&n, "example.test");
+        assert_eq!(wire["kind"], "follow");
+        assert_eq!(wire["read"], true);
+        assert_eq!(wire["actors"].as_array().unwrap().len(), 1);
+        assert_eq!(wire["actors"][0]["displayName"], "新しい人");
+        assert!(wire["post"].is_null());
+        assert!(wire["reactionsByActor"].as_object().unwrap().is_empty());
+    }
+
+    /// `users/relation` → FollowState ワイヤ。欠けたフラグは false。
+    #[test]
+    fn relation_maps_onto_follow_state() {
+        let r = json!({
+            "id": "u1",
+            "isFollowing": true,
+            "isFollowed": false,
+            "hasPendingFollowRequestFromYou": false,
+            "isMuted": true,
+            "isBlocking": false,
+            "isBlocked": true,
+        });
+        let wire = follow_state_wire(&r);
+        assert_eq!(wire["following"], true);
+        assert_eq!(wire["followedBy"], false);
+        assert_eq!(wire["muted"], true);
+        assert_eq!(wire["blocked"], false);
+        assert_eq!(wire["blockedBy"], true);
+
+        // 空オブジェクトでも全部 false で返る(欠けたフラグで落ちない)。
+        let empty = follow_state_wire(&json!({}));
+        for key in ["following", "followedBy", "requested", "muted", "blocked", "blockedBy"] {
+            assert_eq!(empty[key], false, "{key} should default to false");
+        }
+    }
+
+    /// 鍵アカウントへのフォローは `requested` 止まり — セッターの戻りは
+    /// **サーバーを読み直した状態**なので、これがそのまま出る。
+    #[test]
+    fn pending_follow_request_shows_as_requested_not_following() {
+        let wire = follow_state_wire(&json!({ "hasPendingFollowRequestFromYou": true }));
+        assert_eq!(wire["requested"], true);
+        assert_eq!(wire["following"], false);
     }
 }

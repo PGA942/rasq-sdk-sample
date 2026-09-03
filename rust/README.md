@@ -64,6 +64,14 @@ rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-and
       `storageRoundTrip` sample fn
 - [ ] Run the example on a physical iPhone and measure interpreter throughput
       (D-007: compare `wasmi` vs `wasm3`/WAMR for binary size + perf)
-- [ ] Real plugin logic (talk to a Misskey instance) instead of the
+- [x] Real plugin logic (talk to a Misskey instance) instead of the
       hardcoded sample snapshot/patch/call payloads; host functions
       (`net.fetch`, `storage.*`) exposed to the wasm side
+- [x] `sns.*` boundary covering the `SnsSession` contract: timelines (all
+      `TimelineKind.id`s incl. `list:` / `tag:`), threads, actions, posting,
+      users, reactions, emoji — plus notifications, follow/mute/block
+      relations, DM rooms, search and trends (D-134). See
+      [`../PROTOCOL.md`](../PROTOCOL.md) §4.3 for the wire.
+- [ ] `uploadMedia` — needs multipart over `net.fetch` (v1 has `bodyB64`
+      only), so media upload still runs host-side
+- [ ] `updateProfile`, lists / clips / Plays
