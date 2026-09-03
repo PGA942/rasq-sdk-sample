@@ -389,9 +389,22 @@ fn native_fetch_response(req: &serde_json::Value) -> serde_json::Value {
             }
         }
     }
-    let result = match args["body"].as_str() {
-        Some(body) => request.send_string(body),
-        None => request.call(),
+    // ボディは UTF-8 文字列(`body`)か、バイナリの base64(`body.b64`)。
+    // host-fn schema の `body: "string? (utf-8) | {b64: string}?"` に対応する。
+    // multipart/form-data(メディアアップロード)はプラグインが本体を組み立てて
+    // b64 で渡してくる — ランタイムは中身を解釈しない。
+    let result = match (&args["body"], args["body"]["b64"].as_str()) {
+        (_, Some(b64)) => {
+            use base64::Engine as _;
+            match base64::engine::general_purpose::STANDARD.decode(b64) {
+                Ok(bytes) => request.send_bytes(&bytes),
+                Err(e) => {
+                    return serde_json::json!({"callId": call_id, "ok": false, "error": {"code": "D01", "message": format!("bad body base64: {e}")}});
+                }
+            }
+        }
+        (serde_json::Value::String(body), None) => request.send_string(body),
+        _ => request.call(),
     };
     let http_response = match result {
         Ok(r) => r,
@@ -408,9 +421,19 @@ fn native_fetch_response(req: &serde_json::Value) -> serde_json::Value {
             headers.insert(name.clone(), serde_json::Value::String(v.to_string()));
         }
     }
-    match http_response.into_string() {
-        Ok(body) => serde_json::json!({"callId": call_id, "ok": true, "value": {"status": status, "headers": headers, "bodyText": body}}),
-        Err(e) => serde_json::json!({"callId": call_id, "ok": false, "error": {"code": "B03", "message": format!("read body failed: {e}")}}),
+    // 応答は UTF-8 なら `bodyText`、そうでなければ `bodyB64`(画像など)。
+    // 読めるものは今までどおり文字列で返す — 既存プラグインは無改造で動く。
+    let mut body = Vec::new();
+    if let Err(e) = std::io::Read::read_to_end(&mut http_response.into_reader(), &mut body) {
+        return serde_json::json!({"callId": call_id, "ok": false, "error": {"code": "B03", "message": format!("read body failed: {e}")}});
+    }
+    match String::from_utf8(body) {
+        Ok(text) => serde_json::json!({"callId": call_id, "ok": true, "value": {"status": status, "headers": headers, "bodyText": text}}),
+        Err(e) => {
+            use base64::Engine as _;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(e.as_bytes());
+            serde_json::json!({"callId": call_id, "ok": true, "value": {"status": status, "headers": headers, "bodyB64": b64}})
+        }
     }
 }
 

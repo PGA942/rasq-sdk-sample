@@ -1121,6 +1121,273 @@ fn sns_report_user(args: &Value) -> Result<Value, Value> {
     misskey_fetch(args, "users/report-abuse", json!({ "userId": args["id"], "comment": args["comment"] })).map(|_| json!({}))
 }
 
+// ── メディア / プロフィール / リスト / クリップ (D-136) ─────────────
+
+/// multipart/form-data の本体を組み立てる。
+///
+/// `net.fetch` はバイト列を `{b64}` で受けるので(host-fn schema)、
+/// **multipart の組み立てはプラグインの仕事**。ホストは中身を解釈しない。
+/// 境界に multipart 専用の口を足すより、既にあるバイナリ口に載せる方が
+/// 面が増えなくて済む。
+fn multipart_body(boundary: &str, fields: &[(&str, &str)], file: Option<(&str, &str, &str, &[u8])>) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::new();
+    for (name, value) in fields {
+        out.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n").as_bytes());
+    }
+    if let Some((name, filename, mime, bytes)) = file {
+        out.extend_from_slice(
+            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\nContent-Type: {mime}\r\n\r\n")
+                .as_bytes(),
+        );
+        out.extend_from_slice(bytes);
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    out
+}
+
+/// 添付ファイル 1 件 → MediaItem ワイヤ。`post_wire` の中と同じ形。
+fn media_wire(file: &Value) -> Value {
+    json!({
+        "id": file["id"],
+        "type": media_type(file["type"].as_str().unwrap_or("")),
+        "url": file["url"],
+        "thumbnailUrl": file["thumbnailUrl"],
+        "sensitive": file["isSensitive"].as_bool().unwrap_or(false),
+        "alt": file["comment"],
+        "fileName": file["name"],
+    })
+}
+
+/// `call("sns.uploadMedia", {bytesB64, filename, mimeType?, sensitive?, alt?})`
+/// → `{media}`。Misskey は `drive/files/create` が multipart (CONTRACT §5)。
+fn sns_upload_media(args: &Value) -> Result<Value, Value> {
+    use base64::Engine as _;
+    let Some(b64) = args["bytesB64"].as_str() else {
+        return Err(json!({ "code": "D01", "message": "bytesB64 required" }));
+    };
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| json!({ "code": "D01", "message": format!("bad bytesB64: {e}") }))?;
+
+    let filename = args["filename"].as_str().unwrap_or("upload.bin");
+    let mime = args["mimeType"].as_str().unwrap_or("application/octet-stream");
+    let sensitive = if args["sensitive"].as_bool().unwrap_or(false) { "true" } else { "false" };
+    let alt = args["alt"].as_str().unwrap_or("");
+    let token = args["token"].as_str().unwrap_or("");
+    let boundary = "----rasqUploadBoundary7MA4YWxkTrZu0gW";
+
+    let mut fields: Vec<(&str, &str)> = vec![("i", token), ("isSensitive", sensitive), ("name", filename)];
+    if !alt.is_empty() {
+        fields.push(("comment", alt));
+    }
+    let body = multipart_body(boundary, &fields, Some(("file", filename, mime, &bytes)));
+
+    let host = args["host"].as_str().unwrap_or("misskey.io");
+    let base = match args["baseUrl"].as_str() {
+        Some(b) => b.trim_end_matches('/').to_string(),
+        None => format!("https://{host}"),
+    };
+    let response = host_call(
+        "net.fetch",
+        json!({
+            "method": "POST",
+            "url": format!("{base}/api/drive/files/create"),
+            "headers": { "Content-Type": format!("multipart/form-data; boundary={boundary}") },
+            "body": { "b64": base64::engine::general_purpose::STANDARD.encode(&body) },
+        }),
+    );
+    if response["ok"].as_bool() != Some(true) {
+        return Err(response.get("error").cloned().unwrap_or(json!({ "code": "B01", "message": "net.fetch failed" })));
+    }
+    let status = response["value"]["status"].as_u64().unwrap_or(0);
+    if !(200..300).contains(&status) {
+        return Err(json!({ "code": status.to_string(), "message": format!("HTTP {status} from drive/files/create") }));
+    }
+    let file: Value = serde_json::from_str(response["value"]["bodyText"].as_str().unwrap_or(""))
+        .map_err(|e| json!({ "code": "D01", "message": format!("bad JSON from drive/files/create: {e}") }))?;
+    Ok(json!({ "media": media_wire(&file) }))
+}
+
+/// `call("sns.updateProfile", {update})` → `{profile}`。
+fn sns_update_profile(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let u = &args["update"];
+    let mut body = json!({});
+    if let Some(v) = u["displayName"].as_str() {
+        body["name"] = json!(v);
+    }
+    if let Some(v) = u["description"].as_str() {
+        body["description"] = json!(v);
+    }
+    if let Some(v) = u["location"].as_str() {
+        body["location"] = json!(v);
+    }
+    if let Some(v) = u["birthday"].as_str() {
+        body["birthday"] = json!(v);
+    }
+    if let Some(v) = u["avatarMediaId"].as_str() {
+        body["avatarId"] = json!(v);
+    }
+    if let Some(v) = u["bannerMediaId"].as_str() {
+        body["bannerId"] = json!(v);
+    }
+    if let Some(fields) = u["fields"].as_array() {
+        body["fields"] = json!(fields);
+    }
+    let me = misskey_fetch(args, "i/update", body)?;
+    Ok(json!({ "profile": {
+        "user": user_wire(&me, &host),
+        "description": me["description"],
+        "location": me["location"],
+        "fields": me["fields"],
+    } }))
+}
+
+/// リスト 1 件 → UserListInfo ワイヤ。
+fn list_wire(list: &Value) -> Value {
+    json!({
+        "id": list["id"],
+        "name": list["name"],
+        "memberIds": list["userIds"],
+        "isPublic": list["isPublic"].as_bool().unwrap_or(false),
+    })
+}
+
+/// `call("sns.lists")` / `sns.listInfo` / `sns.createList` /
+/// `sns.updateListMember` (D-136): リスト操作をまとめて実装。
+fn sns_lists(args: &Value) -> Result<Value, Value> {
+    let list = misskey_fetch(args, "users/lists/list", json!({}))?;
+    Ok(json!({ "lists": list.as_array().cloned().unwrap_or_default().iter().map(list_wire).collect::<Vec<Value>>() }))
+}
+
+fn sns_list_info(args: &Value) -> Result<Value, Value> {
+    let list = misskey_fetch(args, "users/lists/show", json!({ "listId": args["id"] }))?;
+    Ok(json!({ "list": list_wire(&list) }))
+}
+
+/// リストのメンバーは `userIds` しか返らないので、ユーザーを引き直す。
+fn sns_list_members(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let list = misskey_fetch(args, "users/lists/show", json!({ "listId": args["id"] }))?;
+    let ids: Vec<Value> = list["userIds"].as_array().cloned().unwrap_or_default();
+    if ids.is_empty() {
+        return Ok(json!({ "users": [] }));
+    }
+    let users = misskey_fetch(args, "users/show", json!({ "userIds": ids }))?;
+    Ok(json!({ "users": users.as_array().cloned().unwrap_or_default().iter().map(|u| user_wire(u, &host)).collect::<Vec<Value>>() }))
+}
+
+fn sns_create_list(args: &Value) -> Result<Value, Value> {
+    let list = misskey_fetch(args, "users/lists/create", json!({ "name": args["name"] }))?;
+    Ok(json!({ "list": list_wire(&list) }))
+}
+
+fn sns_update_list_member(args: &Value) -> Result<Value, Value> {
+    let endpoint = if args["add"].as_bool().unwrap_or(false) { "users/lists/push" } else { "users/lists/pull" };
+    misskey_fetch(args, endpoint, json!({ "listId": args["listId"], "userId": args["userId"] })).map(|_| json!({}))
+}
+
+/// `call("sns.users", {ids})` → `{profiles: [...]}`(ユーザー一括取得)。
+fn sns_users(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let ids: Vec<Value> = args["ids"].as_array().cloned().unwrap_or_default();
+    if ids.is_empty() {
+        return Ok(json!({ "profiles": [] }));
+    }
+    let users = misskey_fetch(args, "users/show", json!({ "userIds": ids }))?;
+    let profiles: Vec<Value> = users
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|u| {
+            json!({
+                "user": user_wire(u, &host),
+                "description": u["description"],
+                "followersCount": u["followersCount"],
+                "followingCount": u["followingCount"],
+                "postsCount": u["notesCount"],
+                "isLocked": u["isLocked"],
+                "isBot": u["isBot"],
+            })
+        })
+        .collect();
+    Ok(json!({ "profiles": profiles }))
+}
+
+/// `call("sns.reactedPosts", {limit, cursor?})` (D-103): 自分がリアクションした投稿。
+fn sns_reacted_posts(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let mut body = json!({ "limit": args["limit"].as_u64().unwrap_or(20).min(100) });
+    if let Some(cursor) = args["cursor"].as_str() {
+        body["untilId"] = json!(cursor);
+    }
+    // 自分の id は `i` から。reactions は {id, note, type, createdAt}。
+    let me = misskey_fetch(args, "i", json!({}))?;
+    body["userId"] = me["id"].clone();
+    let list = misskey_fetch(args, "users/reactions", body)?;
+    let rows: Vec<Value> = list.as_array().cloned().unwrap_or_default();
+    let items: Vec<Value> = rows.iter().map(|r| post_wire(&r["note"], &host)).collect();
+    let next = rows.last().and_then(|r| r["id"].as_str());
+    Ok(json!({ "page": { "items": items, "nextCursor": next } }))
+}
+
+/// クリップ (D-032): Misskey ネイティブのクリップ機能。
+fn clip_wire(clip: &Value) -> Value {
+    json!({
+        "id": clip["id"],
+        "name": clip["name"],
+        "description": clip["description"],
+        "isPublic": clip["isPublic"].as_bool().unwrap_or(false),
+        "notesCount": clip["notesCount"],
+    })
+}
+
+fn sns_clips(args: &Value) -> Result<Value, Value> {
+    // userId 指定は他ユーザーの公開クリップ、省略は自分の全クリップ。
+    let (endpoint, body) = match args["userId"].as_str() {
+        Some(id) => ("users/clips", json!({ "userId": id, "limit": 100 })),
+        None => ("clips/list", json!({})),
+    };
+    let list = misskey_fetch(args, endpoint, body)?;
+    Ok(json!({ "clips": list.as_array().cloned().unwrap_or_default().iter().map(clip_wire).collect::<Vec<Value>>() }))
+}
+
+fn sns_clip_notes(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let mut body = json!({ "clipId": args["clipId"], "limit": args["limit"].as_u64().unwrap_or(20).min(100) });
+    if let Some(cursor) = args["cursor"].as_str() {
+        body["untilId"] = json!(cursor);
+    }
+    let list = misskey_fetch(args, "clips/notes", body)?;
+    let notes: Vec<Value> = list.as_array().cloned().unwrap_or_default();
+    let next = notes.last().and_then(|n| n["id"].as_str());
+    Ok(json!({ "page": { "items": notes.iter().map(|n| post_wire(n, &host)).collect::<Vec<Value>>(), "nextCursor": next } }))
+}
+
+/// `call("sns.userPlays", {userId})` (D-039): Play(Flash)は RASQ 内では
+/// 実行せず**外部リンク**として出す。
+fn sns_user_plays(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
+    let list = misskey_fetch(args, "users/flashs", json!({ "userId": args["userId"], "limit": 50 }))?;
+    let plays: Vec<Value> = list
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|f| {
+            json!({
+                "id": f["id"],
+                "title": f["title"],
+                "summary": f["summary"],
+                "url": format!("https://{host}/play/{}", f["id"].as_str().unwrap_or("")),
+            })
+        })
+        .collect();
+    Ok(json!({ "plays": plays }))
+}
+
 /// `call("timeline", {host?, limit?})`: fetch the local timeline through the
 /// host's `net.fetch`, rebuild the tree, bump rev. The host then pulls the
 /// new `snapshot()` (result carries `treeUpdated: true`).
@@ -1200,6 +1467,26 @@ pub extern "C" fn call(
         "sns.favorites" => sns_favorites(&args_value),
         "sns.dmRooms" => sns_dm_rooms(&args_value),
         "sns.sendDm" => sns_send_dm(&args_value),
+        // メディア / プロフィール / リスト / クリップ / Play (D-136)。
+        "sns.uploadMedia" => sns_upload_media(&args_value),
+        "sns.updateProfile" => sns_update_profile(&args_value),
+        "sns.lists" => sns_lists(&args_value),
+        "sns.listInfo" => sns_list_info(&args_value),
+        "sns.listMembers" => sns_list_members(&args_value),
+        "sns.createList" => sns_create_list(&args_value),
+        "sns.updateListMember" => sns_update_list_member(&args_value),
+        "sns.users" => sns_users(&args_value),
+        "sns.reactedPosts" => sns_reacted_posts(&args_value),
+        "sns.clips" => sns_clips(&args_value),
+        "sns.clipInfo" => misskey_fetch(&args_value, "clips/show", json!({ "clipId": args_value["clipId"] })).map(|c| json!({ "clip": clip_wire(&c) })),
+        "sns.clipNotes" => sns_clip_notes(&args_value),
+        "sns.createClip" => misskey_fetch(&args_value, "clips/create", json!({ "name": args_value["name"], "description": args_value["description"], "isPublic": args_value["isPublic"] })).map(|c| json!({ "clip": clip_wire(&c) })),
+        "sns.deleteClip" => misskey_fetch(&args_value, "clips/delete", json!({ "clipId": args_value["clipId"] })).map(|_| json!({})),
+        "sns.updateClipNote" => {
+            let endpoint = if args_value["add"].as_bool().unwrap_or(false) { "clips/add-note" } else { "clips/remove-note" };
+            misskey_fetch(&args_value, endpoint, json!({ "clipId": args_value["clipId"], "noteId": args_value["postId"] })).map(|_| json!({}))
+        }
+        "sns.userPlays" => sns_user_plays(&args_value),
         // gpu.compute デモ (D-081): f32 配列を GPU(WGSL compute)で 2 倍。
         // カスタム TL の重いソートやメディア編集フィルターの下地 — GPU が
         // 無い環境は E01 で返るので、その時はクラウドカルクレーター
@@ -1607,5 +1894,30 @@ mod tests {
         let wire = follow_state_wire(&json!({ "hasPendingFollowRequestFromYou": true }));
         assert_eq!(wire["requested"], true);
         assert_eq!(wire["following"], false);
+    }
+
+    /// multipart は境界に専用の口を作らず、プラグインが本体を組み立てて
+    /// `net.fetch` の `{b64}` に載せる。組み立てを間違えるとサーバー側で
+    /// 黙って弾かれるので、バイト列を直接固定しておく。
+    #[test]
+    fn multipart_body_frames_fields_and_the_file() {
+        let body = multipart_body("BOUND", &[("i", "tok"), ("name", "a.png")], Some(("file", "a.png", "image/png", &[0u8, 1, 2])));
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.starts_with("--BOUND\r\nContent-Disposition: form-data; name=\"i\"\r\n\r\ntok\r\n"));
+        assert!(text.contains("name=\"file\"; filename=\"a.png\"\r\nContent-Type: image/png\r\n\r\n"));
+        assert!(text.ends_with("--BOUND--\r\n"));
+        // 生バイトがそのまま入っていること(UTF-8 に潰れていない)。
+        let needle = b"image/png\r\n\r\n\x00\x01\x02\r\n";
+        assert!(
+            body.windows(needle.len()).any(|w| w == needle),
+            "raw bytes were not embedded verbatim"
+        );
+    }
+
+    /// ファイル無し(フィールドだけ)でも壊れない。
+    #[test]
+    fn multipart_body_without_a_file_is_still_terminated() {
+        let body = multipart_body("B", &[("a", "1")], None);
+        assert_eq!(String::from_utf8_lossy(&body), "--B\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n1\r\n--B--\r\n");
     }
 }

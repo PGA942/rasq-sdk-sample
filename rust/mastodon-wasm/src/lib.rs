@@ -960,6 +960,162 @@ fn sns_send_dm(args: &Value) -> Result<Value, Value> {
     Ok(json!({ "post": post_wire(&created, &host) }))
 }
 
+// ── メディア / プロフィール / リスト (D-136) ───────────────────────
+
+/// multipart/form-data の本体を組み立てる。`net.fetch` はバイト列を
+/// `{b64}` で受けるので(host-fn schema)、組み立てはプラグインの仕事。
+fn multipart_body(boundary: &str, fields: &[(&str, &str)], file: Option<(&str, &str, &str, &[u8])>) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::new();
+    for (name, value) in fields {
+        out.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n").as_bytes());
+    }
+    if let Some((name, filename, mime, bytes)) = file {
+        out.extend_from_slice(
+            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\nContent-Type: {mime}\r\n\r\n")
+                .as_bytes(),
+        );
+        out.extend_from_slice(bytes);
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    out
+}
+
+/// `call("sns.uploadMedia", {bytesB64, filename, mimeType?, alt?})` → `{media}`。
+/// Mastodon は `POST /api/v2/media`(multipart)。`sensitive` は投稿単位の
+/// 属性なので、ここでは受け取っても捨てる — 投稿時に `sensitive` が付く。
+fn sns_upload_media(args: &Value) -> Result<Value, Value> {
+    use base64::Engine as _;
+    let Some(b64) = args["bytesB64"].as_str() else {
+        return Err(json!({ "code": "D01", "message": "bytesB64 required" }));
+    };
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| json!({ "code": "D01", "message": format!("bad bytesB64: {e}") }))?;
+
+    let filename = args["filename"].as_str().unwrap_or("upload.bin");
+    let mime = args["mimeType"].as_str().unwrap_or("application/octet-stream");
+    let alt = args["alt"].as_str().unwrap_or("");
+    let boundary = "----rasqUploadBoundary7MA4YWxkTrZu0gW";
+    let mut fields: Vec<(&str, &str)> = vec![];
+    if !alt.is_empty() {
+        fields.push(("description", alt));
+    }
+    let body = multipart_body(boundary, &fields, Some(("file", filename, mime, &bytes)));
+
+    let host = args["host"].as_str().unwrap_or("mastodon.social");
+    let base = match args["baseUrl"].as_str() {
+        Some(b) => b.trim_end_matches('/').to_string(),
+        None => format!("https://{host}"),
+    };
+    let mut headers = json!({ "Content-Type": format!("multipart/form-data; boundary={boundary}") });
+    if let Some(token) = args["token"].as_str() {
+        headers["Authorization"] = json!(format!("Bearer {token}"));
+    }
+    let response = host_call(
+        "net.fetch",
+        json!({
+            "method": "POST",
+            "url": format!("{base}/api/v2/media"),
+            "headers": headers,
+            "body": { "b64": base64::engine::general_purpose::STANDARD.encode(&body) },
+        }),
+    );
+    if response["ok"].as_bool() != Some(true) {
+        return Err(response.get("error").cloned().unwrap_or(json!({ "code": "B01", "message": "net.fetch failed" })));
+    }
+    let status = response["value"]["status"].as_u64().unwrap_or(0);
+    // 202 = 処理中(大きい動画)。id は返るのでそのまま使える。
+    if !(200..300).contains(&status) {
+        return Err(json!({ "code": status.to_string(), "message": format!("HTTP {status} from /api/v2/media") }));
+    }
+    let media: Value = serde_json::from_str(response["value"]["bodyText"].as_str().unwrap_or(""))
+        .map_err(|e| json!({ "code": "D01", "message": format!("bad JSON from /api/v2/media: {e}") }))?;
+    Ok(json!({ "media": media_wire(&media) }))
+}
+
+/// `call("sns.updateProfile", {update})` → `{profile}`。
+/// Mastodon の `PATCH /accounts/update_credentials` は multipart 前提だが、
+/// 画像を含まない項目は JSON でも通る。アバター/ヘッダーの差し替えは
+/// メディア id ではなくファイルそのものを要求するため、v1 では扱わない。
+fn sns_update_profile(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("mastodon.social").to_string();
+    let u = &args["update"];
+    let mut body = json!({});
+    if let Some(v) = u["displayName"].as_str() {
+        body["display_name"] = json!(v);
+    }
+    if let Some(v) = u["description"].as_str() {
+        body["note"] = json!(v);
+    }
+    if let Some(fields) = u["fields"].as_array() {
+        // fields_attributes[0][name] 形式は JSON でも配列で受け付けられる。
+        body["fields_attributes"] = json!(fields
+            .iter()
+            .map(|f| json!({ "name": f["name"], "value": f["value"] }))
+            .collect::<Vec<Value>>());
+    }
+    let account = fetch(args, "PATCH", "/api/v1/accounts/update_credentials", Some(body))?;
+    Ok(json!({ "profile": profile_wire(&account, &host) }))
+}
+
+fn list_wire(list: &Value) -> Value {
+    json!({
+        "id": list["id"],
+        "name": list["title"],
+        // Mastodon のリストにメンバー id は含まれない(別途 accounts を引く)。
+        "memberIds": [],
+        "isPublic": false,
+    })
+}
+
+fn sns_lists(args: &Value) -> Result<Value, Value> {
+    let list = as_list(get(args, "/api/v1/lists")?);
+    Ok(json!({ "lists": list.iter().map(list_wire).collect::<Vec<Value>>() }))
+}
+
+fn sns_list_members(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("mastodon.social").to_string();
+    let id = urlencode(args["id"].as_str().unwrap_or(""));
+    let list = as_list(get(args, &format!("/api/v1/lists/{id}/accounts?limit=80"))?);
+    Ok(json!({ "users": list.iter().map(|u| user_wire(u, &host)).collect::<Vec<Value>>() }))
+}
+
+fn sns_update_list_member(args: &Value) -> Result<Value, Value> {
+    let id = urlencode(args["listId"].as_str().unwrap_or(""));
+    let user = args["userId"].as_str().unwrap_or("");
+    let method = if args["add"].as_bool().unwrap_or(false) { "POST" } else { "DELETE" };
+    fetch(args, method, &format!("/api/v1/lists/{id}/accounts"), Some(json!({ "account_ids": [user] }))).map(|_| json!({}))
+}
+
+/// `call("sns.users", {ids})` → `{profiles}`。Mastodon には一括取得が無いので
+/// 1 件ずつ引く(ホストは相手のプロフィールを数件しか要求しない)。
+fn sns_users(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("mastodon.social").to_string();
+    let mut profiles = vec![];
+    for id in as_list(args["ids"].clone()).iter().filter_map(|v| v.as_str()) {
+        // 1 件失敗しても残りは返す(消えたアカウントで一覧全体を落とさない)。
+        if let Ok(a) = get(args, &format!("/api/v1/accounts/{}", urlencode(id))) {
+            profiles.push(profile_wire(&a, &host));
+        }
+    }
+    Ok(json!({ "profiles": profiles }))
+}
+
+/// `call("sns.reactedPosts")` (D-103): 自分がリアクションした投稿。
+/// Mastodon ではお気に入り(favourites)がそれにあたる。`sns.favorites`
+/// (ホストのブックマーク欄)はブックマークを返すので、別物として分ける。
+fn sns_reacted_posts(args: &Value) -> Result<Value, Value> {
+    let host = args["host"].as_str().unwrap_or("mastodon.social").to_string();
+    let q = query_string(&[
+        ("limit", args["limit"].as_u64().unwrap_or(20).min(40).to_string()),
+        ("max_id", args["cursor"].as_str().unwrap_or("").to_string()),
+    ]);
+    let list = as_list(get(args, &format!("/api/v1/favourites{q}"))?);
+    let items: Vec<Value> = list.iter().map(|s| post_wire(s, &host)).collect();
+    Ok(json!({ "page": { "items": items, "nextCursor": next_cursor(&list) } }))
+}
+
 // ── boundary の call ディスパッチ (PROTOCOL §3.2) ──────────────────
 
 #[no_mangle]
@@ -1019,6 +1175,18 @@ pub extern "C" fn call(
         "sns.favorites" => sns_favorites(&args_value),
         "sns.dmRooms" => sns_dm_rooms(&args_value),
         "sns.sendDm" => sns_send_dm(&args_value),
+        // メディア / プロフィール / リスト (D-136)。
+        "sns.uploadMedia" => sns_upload_media(&args_value),
+        "sns.updateProfile" => sns_update_profile(&args_value),
+        "sns.lists" => sns_lists(&args_value),
+        "sns.listInfo" => get(&args_value, &format!("/api/v1/lists/{}", urlencode(args_value["id"].as_str().unwrap_or("")))).map(|l| json!({ "list": list_wire(&l) })),
+        "sns.listMembers" => sns_list_members(&args_value),
+        "sns.createList" => post(&args_value, "/api/v1/lists", json!({ "title": args_value["name"] })).map(|l| json!({ "list": list_wire(&l) })),
+        "sns.updateListMember" => sns_update_list_member(&args_value),
+        "sns.users" => sns_users(&args_value),
+        "sns.reactedPosts" => sns_reacted_posts(&args_value),
+        // クリップ (D-032) と Play (D-039) は Misskey 固有。未実装 = C01 で
+        // 落ちるので、ホストが該当タブ/メニューを隠す。
         // 未対応は C01 — ホストが該当 UI を隠す (PROTOCOL §4.3)。
         // Mastodon に引用投稿はネイティブに存在しない。
         other => Err(json!({ "code": "C01", "message": format!("unsupported fn: {other}") })),
@@ -1190,5 +1358,30 @@ mod tests {
         let list = vec![json!({ "id": "1" }), json!({ "id": "2" })];
         assert_eq!(next_cursor(&list), json!("2"));
         assert_eq!(next_cursor(&[]), Value::Null);
+    }
+
+    /// multipart は境界に専用の口を作らず、プラグインが本体を組み立てて
+    /// `net.fetch` の `{b64}` に載せる。組み立てを間違えるとサーバー側で
+    /// 黙って弾かれるので、バイト列を直接固定しておく。
+    #[test]
+    fn multipart_body_frames_fields_and_the_file() {
+        let body = multipart_body("BOUND", &[("i", "tok"), ("name", "a.png")], Some(("file", "a.png", "image/png", &[0u8, 1, 2])));
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.starts_with("--BOUND\r\nContent-Disposition: form-data; name=\"i\"\r\n\r\ntok\r\n"));
+        assert!(text.contains("name=\"file\"; filename=\"a.png\"\r\nContent-Type: image/png\r\n\r\n"));
+        assert!(text.ends_with("--BOUND--\r\n"));
+        // 生バイトがそのまま入っていること(UTF-8 に潰れていない)。
+        let needle = b"image/png\r\n\r\n\x00\x01\x02\r\n";
+        assert!(
+            body.windows(needle.len()).any(|w| w == needle),
+            "raw bytes were not embedded verbatim"
+        );
+    }
+
+    /// ファイル無し(フィールドだけ)でも壊れない。
+    #[test]
+    fn multipart_body_without_a_file_is_still_terminated() {
+        let body = multipart_body("B", &[("a", "1")], None);
+        assert_eq!(String::from_utf8_lossy(&body), "--B\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n1\r\n--B--\r\n");
     }
 }

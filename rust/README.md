@@ -83,6 +83,9 @@ rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-and
       users, reactions, emoji — plus notifications, follow/mute/block
       relations, DM rooms, search and trends (D-134). See
       [`../PROTOCOL.md`](../PROTOCOL.md) §4.3 for the wire.
-- [ ] `uploadMedia` — needs multipart over `net.fetch` (v1 has `bodyB64`
-      only), so media upload still runs host-side
-- [ ] `updateProfile`, lists / clips / Plays
+- [x] `uploadMedia` — `net.fetch` now carries binary both ways (`body: {b64}`
+      in, `bodyB64` out) and the plugins build the multipart body themselves,
+      since the field names and auth placement differ per SNS (D-136)
+- [x] `updateProfile`, `users`, `reactedPosts`, lists; clips / Plays on
+      Misskey (Mastodon has neither, so those answer C01 and the host hides
+      the tabs)

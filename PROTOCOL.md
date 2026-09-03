@@ -200,9 +200,28 @@ SNS プラグインのイベントハンドラー関数は「一定程度は抽�
     投稿を**相手ユーザー単位**に束ねて `direct` ルームにし、ネイティブ Chat があれば
     `chat` ルームを足す(404/403 のインスタンスでは足さない)。
   - `sns.sendDm {roomKind: direct|chat, peerId, draft: NewPost}` → `{post}`
-- まだ写していないもの: `uploadMedia`(v1 の `net.fetch` は multipart を持たないため
-  ホスト実装のまま)、`updateProfile`、リスト/クリップ/Play 系。以降も同じ形で 1 本ずつ
-  追加する。
+- v1 追加分 (D-136) — メディア / プロフィール / リスト / クリップ:
+  - `sns.uploadMedia {bytesB64, filename, mimeType?, sensitive?, alt?}` → `{media}` —
+    **バイト列は base64 で境界を渡り、multipart の組み立てはプラグインの仕事**。
+    SNS ごとにフィールド名も認証の載せ方も違う(Misskey は `i` フィールド、
+    Mastodon は `Authorization` ヘッダー)ため、境界に multipart 専用の口を
+    作るより面が増えない。組み立てた本体は `net.fetch` の `body: {b64}` で送る。
+  - `sns.updateProfile {update}` → `{profile}`
+  - `sns.users {ids}` → `{profiles: [Profile]}` — ユーザー一括取得。
+  - `sns.reactedPosts {limit, cursor?}` → `{page}` (D-103) — 自分がリアクション
+    した投稿。Mastodon ではお気に入り、`sns.favorites`(ホストのブックマーク欄)
+    はブックマークで、**別物として分ける**。
+  - `sns.lists {}` / `sns.listInfo {id}` / `sns.listMembers {id}` /
+    `sns.createList {name}` / `sns.updateListMember {listId, userId, add}`
+    — リストワイヤ: `{id, name, memberIds?, description?, isPublic?}`。
+  - `sns.clips {userId?}` / `sns.clipInfo {clipId}` / `sns.clipNotes {clipId, …}` /
+    `sns.createClip {name, description?, isPublic?}` / `sns.deleteClip {clipId}` /
+    `sns.updateClipNote {clipId, postId, add}` (D-032) — クリップワイヤ:
+    `{id, name, description?, isPublic?, notesCount?}`。
+  - `sns.userPlays {userId}` → `{plays: [{id, title, summary?, url}]}` (D-039) —
+    RASQ 内では実行せず**外部リンク**として出す。
+  - クリップと Play は SNS 固有機能。持たないプラグイン(Mastodon)は
+    実装しない = C01 が返り、ホストが該当タブ/メニューを隠す。
 - 未実装関数は C01 — ホストは該当 UI を隠す(SnsSession の UnsupportedError と同じ扱い)。
   認証トークンは v1 ではホストが `args.token` で毎回渡す(サンプルは `i` に積む)。
 
