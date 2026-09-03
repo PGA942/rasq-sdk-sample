@@ -759,6 +759,19 @@ fn sns_inspect_server(args: &Value) -> Result<Value, Value> {
     } }))
 }
 
+/// `call("sns.capabilities")`: セッション単位の能力値。**インスタンスごとに
+/// 違う**ので、ホストが決め打ちせずプラグインから受け取る(Misskey は
+/// 既定 3000 だが、インスタンス設定で変わる)。将来の能力フラグもここへ足す。
+fn sns_capabilities(args: &Value) -> Result<Value, Value> {
+    // meta が取れなければ Misskey の既定値で答える(ログイン直後に
+    // コンポーザーを開いても文字数制限が出せるように)。
+    let max = misskey_fetch(args, "meta", json!({ "detail": false }))
+        .ok()
+        .and_then(|m| m["maxNoteTextLength"].as_u64())
+        .unwrap_or(3000);
+    Ok(json!({ "maxPostLength": max }))
+}
+
 /// `call("sns.settingsRead", {area})` / `sns.settingsWrite` (D-044):
 /// `source: "remote"` の設定ページはサーバーが真実なので、KV ではなく
 /// ここを通す。Misskey は `account` ページを `i` / `i/update` に写す。
@@ -1485,6 +1498,7 @@ pub extern "C" fn call(
         // 通知 / 関係 / DM / 検索 (D-134): 残りの SnsSession 契約を写した分。
         "sns.inspectServer" => sns_inspect_server(&args_value),
         "sns.timelines" => sns_timelines(&args_value),
+        "sns.capabilities" => sns_capabilities(&args_value),
         "sns.settingsRead" => sns_settings_read(&args_value),
         "sns.settingsWrite" => sns_settings_write(&args_value),
         "sns.notifications" => sns_notifications(&args_value),

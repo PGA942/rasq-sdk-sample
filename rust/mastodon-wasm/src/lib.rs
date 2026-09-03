@@ -509,6 +509,16 @@ fn sns_inspect_server(args: &Value) -> Result<Value, Value> {
     } }))
 }
 
+/// `call("sns.capabilities")`: セッション単位の能力値。投稿の文字数上限は
+/// インスタンス設定で変わる(既定 500)。
+fn sns_capabilities(args: &Value) -> Result<Value, Value> {
+    let max = get(args, "/api/v2/instance")
+        .ok()
+        .and_then(|i| i["configuration"]["statuses"]["max_characters"].as_u64())
+        .unwrap_or(500);
+    Ok(json!({ "maxPostLength": max }))
+}
+
 /// `call("sns.timelines")`: このアカウントで出せる基本 TL。
 fn sns_timelines(_args: &Value) -> Result<Value, Value> {
     Ok(json!({ "timelines": [
@@ -1135,6 +1145,7 @@ pub extern "C" fn call(
     let outcome: Result<Value, Value> = match fn_name.as_str() {
         "sns.inspectServer" => sns_inspect_server(&args_value),
         "sns.timelines" => sns_timelines(&args_value),
+        "sns.capabilities" => sns_capabilities(&args_value),
         "sns.timeline" => sns_timeline(&args_value),
         "sns.thread" => sns_thread(&args_value),
         "sns.actions" => sns_actions(&args_value),
