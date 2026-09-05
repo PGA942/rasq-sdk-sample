@@ -272,6 +272,7 @@ components:
           description: 投稿者(RASQ アカウントの公開プロフィール。匿名なら省略)
           properties:
             name: { type: string }
+            handle: { type: string, description: RASQ アカウントのハンドル(@なし。将来のアカウントページ導線) }
             avatarUrl: { type: string, format: uri }
         usedVersion: { type: string }
         verifiedUse: { type: boolean, description: 実利用済み(サーバーがインストール履歴から判定) }
