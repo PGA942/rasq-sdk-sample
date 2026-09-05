@@ -73,6 +73,7 @@ paths:
       parameters:
         - { name: pluginId, in: path, required: true, schema: { type: string } }
         - { name: artifactId, in: path, required: true, schema: { type: string } }
+        - { name: version, in: query, schema: { type: string }, description: 省略時は現在版(manifest と同じ版を指定する) }
       responses:
         "200": { content: { application/zstd: { schema: { type: string, format: binary } } } }
   /plugins/{pluginId}/reviews:
@@ -104,10 +105,29 @@ paths:
               required: [rating]
               properties:
                 rating: { type: integer, minimum: 1, maximum: 5 }
+                title: { type: string, description: 見出し(任意、80 文字まで) }
                 body: { type: string }
                 usedVersion: { type: string }
       responses:
         "201": { content: { application/json: { schema: { $ref: "#/components/schemas/Review" } } } }
+  /plugins/{pluginId}/reviews/{reviewId}/vote:
+    put:
+      operationId: voteReview
+      summary: レビューへの「参考になった / ならなかった」投票(要認証。1 アカウント 1 票、none で取り消し)
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: pluginId, in: path, required: true, schema: { type: string } }
+        - { name: reviewId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [vote]
+              properties:
+                vote: { type: string, enum: [up, down, none] }
+      responses:
+        "204": { description: ok }
   /plugins/{pluginId}/releases:
     get:
       operationId: releaseNotes
@@ -177,6 +197,10 @@ components:
           properties:
             description: { type: string }
             screenshots: { type: array, items: { type: string, format: uri } }
+            bannerUrl: { type: string, format: uri, description: ページ上部のバナー画像 }
+            downloadsLastMonth: { type: integer, description: 先月のダウンロード数(集計が無ければ省略) }
+            downloadHistory: { type: array, items: { type: integer }, description: 直近の累積 DL 推移(古い→新しい、等間隔。折れ線用) }
+            ratingHistogram: { type: array, items: { type: integer }, minItems: 5, maxItems: 5, description: 評価の分布 [★1,★2,★3,★4,★5] }
             channel: { type: string, enum: [stable, beta] }
             updatedAt: { type: string, format: date-time }
             safety: { $ref: "#/components/schemas/SafetyBlock" }
@@ -241,10 +265,18 @@ components:
       properties:
         id: { type: string }
         rating: { type: integer }
+        title: { type: string, description: 見出し(無ければ本文 1 行目を表示) }
         body: { type: string }
+        author:
+          type: object
+          description: 投稿者(RASQ アカウントの公開プロフィール。匿名なら省略)
+          properties:
+            name: { type: string }
+            avatarUrl: { type: string, format: uri }
         usedVersion: { type: string }
         verifiedUse: { type: boolean, description: 実利用済み(サーバーがインストール履歴から判定) }
         helpfulCount: { type: integer }
+        notHelpfulCount: { type: integer }
         developerReply: { type: [string, "null"] }
         createdAt: { type: string, format: date-time }
     ReleaseNote:
