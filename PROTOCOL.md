@@ -161,7 +161,85 @@ SNS プラグインのイベントハンドラー関数は「一定程度は抽�
   - `sns.userPosts {id, filter: posts|withReplies|replies|media|quotes, limit, cursor?}` → `{page}` — 返信/引用の振り分け規約 (D-069) はプラグイン側で適用 (D-076)
   - `sns.reactions {postId, type?, limit, cursor?}` → `{page: {items: [{id, user, reaction, createdAt, emojiUrl?}], nextCursor?}}` (D-076)
   - `sns.reposters {postId, …}` → `{page: {items: [user]}}` / `sns.quotes {postId, …}` → `{page: {items: [Post]}}` (D-076)
-- 以降(notifications / follow 系 / DM …)は同じ形で 1 本ずつ追加する。未実装関数は C01 — ホストは該当 UI を隠す(SnsSession の UnsupportedError と同じ扱い)。認証トークンは v1 ではホストが `args.token` で毎回渡す(サンプルは `i` に積む)— 実セッション登録の口と同時に整備する。
+- v1 追加分 (D-134) — 通知 / 関係 / DM / 検索。`SnsSession` 契約 (CONTRACT §5) の
+  残りを同じ規則(引数は素の JSON、戻りはワイヤ)で写したもの:
+  - `sns.inspectServer {host}` → `{server: {host, name, software?, version?,
+    description?, iconUrl?, registrationOpen?, maintainer?}}` — サーバー検索 /
+    PDS 変更 (CONTRACT §2) が出す情報。**認証前に呼ばれる**ので `token` は無い。
+    取り方は SNS ごとに違う(Misskey は `meta`、Mastodon は `/api/v2/instance`)ので
+    ホストは知らなくてよい。未実装/失敗ならホストはホスト名だけで縮退する。
+  - `sns.capabilities {}` → `{maxPostLength?}` — セッション単位の能力値。
+    **投稿の文字数上限はインスタンス設定で変わる**ので、ホストが決め打ちせず
+    プラグインから受け取る(Misskey は既定 3000、Mastodon は 500)。
+    未実装 = C01 でホスト既定に据え置き。将来の能力フラグもここへ足す。
+  - `sns.timelines {}` → `{timelines: [{id, label?}]}` — **タブに並べる基本 TL の宣言**
+    (CONTRACT §6 の id 体系)。SNS ごとに揃う TL が違うため、ホストは決め打ちせず
+    ここから受け取る。未実装(C01)はホスト既定へ縮退。
+  - `sns.notifications {limit, cursor?}` → `{page: {items: [Notification], nextCursor?}}`
+    - Notification ワイヤ: `{id, kind, createdAt(ISO), read?, actors: [user],
+      post?: Post, reaction?, reactionsByActor?: {userId: reaction}, title?, body?}`。
+    - `kind`: `reaction` `repost` `quote` `reply` `mention` `follow` `followRequest`
+      `followAccepted` `listAdded` `pollEnded` `timer` `vc` `system` `other`。
+      **未知の値はホストが `other` に倒す**ので、新しい種別を返してよい。
+    - **グループ通知は畳んで返す**: `actors` に全員、`reactionsByActor` に
+      actor id → リアクション文字列。単体通知は `actors` が 1 件。
+    - `system` (D-045) はサーバー/アプリ発の本文つき通知で、`title`/`body` を使う。
+  - `sns.markNotificationsRead {}` → `{}`
+  - `sns.relationships {ids: [id]}` → `{states: {id: FollowState}}`
+    - FollowState ワイヤ: `{following, followedBy, requested, muted, blocked, blockedBy}`
+      (すべて bool、省略は false)。
+  - `sns.setRelation {id, relation: following|muted|blocked, on}` → `{state: FollowState}`
+    — 3 つのセッターを 1 本に束ねる。**戻りは書き込み後にサーバーを読み直した状態**に
+    すること: 鍵アカウントへのフォローは `following` ではなく `requested` で返る。
+  - `sns.follows {id, direction: followers|following, limit, cursor?}` → `{page: {items: [user]}}`
+  - `sns.userList {kind: muted|blocked|followRequests, limit, cursor?}` → `{page: {items: [user]}}`
+    — 「人の一覧」は形が同じなので 1 本に束ねる。未知の kind は C01。
+  - `sns.resolveFollowRequest {id, accept}` → `{}`
+  - `sns.reportUser {id, comment}` → `{}`
+  - `sns.search {kind: posts|users, q, limit, cursor?}` → `{page}`(posts は Post、users は user)
+  - `sns.trendingTags {}` → `{tags: [{tag, count?}]}`
+  - `sns.favorites {limit, cursor?}` → `{page}` — ブックマーク(お気に入り)。
+  - `sns.dmRooms {}` → `{rooms: [{id, kind: direct|chat, peer: user, lastPost?: Post,
+    unreadCount?, title?}]}` — CONTRACT §7 のとおり、`visibility == specified|direct` の
+    投稿を**相手ユーザー単位**に束ねて `direct` ルームにし、ネイティブ Chat があれば
+    `chat` ルームを足す(404/403 のインスタンスでは足さない)。
+  - `sns.sendDm {roomKind: direct|chat, peerId, draft: NewPost}` → `{post}`
+- v1 追加分 (D-136) — メディア / プロフィール / リスト / クリップ:
+  - `sns.uploadMedia {bytesB64, filename, mimeType?, sensitive?, alt?}` → `{media}` —
+    **バイト列は base64 で境界を渡り、multipart の組み立てはプラグインの仕事**。
+    SNS ごとにフィールド名も認証の載せ方も違う(Misskey は `i` フィールド、
+    Mastodon は `Authorization` ヘッダー)ため、境界に multipart 専用の口を
+    作るより面が増えない。組み立てた本体は `net.fetch` の `body: {b64}` で送る。
+  - `sns.updateProfile {update}` → `{profile}`
+  - `sns.users {ids}` → `{profiles: [Profile]}` — ユーザー一括取得。
+  - `sns.reactedPosts {limit, cursor?}` → `{page}` (D-103) — 自分がリアクション
+    した投稿。Mastodon ではお気に入り、`sns.favorites`(ホストのブックマーク欄)
+    はブックマークで、**別物として分ける**。
+  - `sns.lists {}` / `sns.listInfo {id}` / `sns.listMembers {id}` /
+    `sns.createList {name}` / `sns.updateListMember {listId, userId, add}`
+    — リストワイヤ: `{id, name, memberIds?, description?, isPublic?}`。
+  - `sns.clips {userId?}` / `sns.clipInfo {clipId}` / `sns.clipNotes {clipId, …}` /
+    `sns.createClip {name, description?, isPublic?}` / `sns.deleteClip {clipId}` /
+    `sns.updateClipNote {clipId, postId, add}` (D-032) — クリップワイヤ:
+    `{id, name, description?, isPublic?, notesCount?}`。
+  - `sns.userPlays {userId}` → `{plays: [{id, title, summary?, url}]}` (D-039) —
+    RASQ 内では実行せず**外部リンク**として出す。
+  - クリップと Play は SNS 固有機能。持たないプラグイン(Mastodon)は
+    実装しない = C01 が返り、ホストが該当タブ/メニューを隠す。
+- **設定ページ (D-044) の写像** (D-136):
+  - ローカル保存ページの値は、**すべての `sns.*` 呼び出しの `args.settings` に
+    area ごと入れ子で載る**(`{"timeline": {"withRenotes": false}, …}`)。
+    プラグインは自分が知っている area / キーだけ読む。area で入れ子にして
+    あるので、別ページの同名キーとぶつからない。
+  - `sns.applySettings {area, values}` → `{}` — 値の変更をプラグインに通知する
+    (保存したいプラグイン向け)。未実装 = C01 でよく、ホストは無視する。
+    次回以降の呼び出しに `args.settings` として載るので実害はない。
+  - `sns.settingsRead {area}` → `{values}` / `sns.settingsWrite {area, key, value}`
+    → `{values}` — `source: "remote"` のページ。**戻りは書き込み後に読み直した
+    最新値**にすること(サーバーが弾いた変更も画面に出るように)。
+    知らない area は C01。
+- 未実装関数は C01 — ホストは該当 UI を隠す(SnsSession の UnsupportedError と同じ扱い)。
+  認証トークンは v1 ではホストが `args.token` で毎回渡す(サンプルは `i` に積む)。
 
 ## 4.4 タイムラインレンダラー契約 v1(M5e / D-080)
 
