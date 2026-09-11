@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "bluesky-wasm",
     "hello-rasq-plugin",
     "mastodon-wasm",
     "misskey-wasm-sample",

@@ -16,6 +16,19 @@ wasm plugin sample and the native runtime that hosts it inside Flutter.
   plain text), pages with `max_id`, has no reactions (favourites are mapped
   onto the reaction surface as ⭐) and no native quotes (`sns.quotes`
   returns C01, so the host hides that column).
+- [`bluesky-wasm/`](bluesky-wasm) — the same `sns.*` contract against
+  Bluesky / AT Protocol (D-175). Also handler-only (no screen constructor).
+  What differs is again all inside the plugin: post ids are `at://` URIs
+  (with an in-memory `uri → cid` cache for the strong refs that likes,
+  reposts, replies and quotes need), every request goes to the account's
+  PDS as XRPC, the session token is a `{did, handle, accessJwt, refreshJwt}`
+  JSON produced by `sns.login` (credential login on the anonymous worker)
+  and refreshed through `refreshSession` + `storage.safe`, rich text is
+  emitted as UTF-8 byte-offset `facets`, posts are capped at 300 graphemes,
+  and there are no bookmarks/lists (C01). It also carries the
+  `set_host_hook` / `take_host_log` native test hook, so `cargo test`
+  exercises real request/response flows against a mocked `net.fetch`.
+  See its [README](bluesky-wasm/README.md).
 - [`rasq_wasm_runtime_core/`](rasq_wasm_runtime_core) — a native cdylib that
   embeds [`wasmi`](https://crates.io/crates/wasmi) (a pure-Rust WASM
   *interpreter*, chosen per D-007 because iOS forbids JIT'ing runtimes) and
@@ -29,7 +42,8 @@ wasm plugin sample and the native runtime that hosts it inside Flutter.
 rustup target add wasm32-unknown-unknown   # once
 cargo build --release --target wasm32-unknown-unknown -p misskey-wasm-sample
 cargo build --release --target wasm32-unknown-unknown -p mastodon-wasm
-cargo test                                        # pure mapping tests for both plugins
+cargo build --release --target wasm32-unknown-unknown -p bluesky-wasm
+cargo test                                        # mapping tests for all three plugins (bluesky-wasm mocks net.fetch)
 cargo test --release -p rasq_wasm_runtime_core    # loads the sample above and round-trips it through wasmi
 ```
 
