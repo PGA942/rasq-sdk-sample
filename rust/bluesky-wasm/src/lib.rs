@@ -1656,6 +1656,15 @@ pub extern "C" fn call(fn_ptr: u32, fn_len: u32, args_ptr: u32, args_len: u32, c
 
 #[cfg(test)]
 mod tests {
+    /// テストは直列に(`CID_CACHE` と host hook がプロセス共有の static なので、並列だと
+    /// 別テストの cid / ログが混ざる。CI で `Some("c")` != `Some("cid1")` になった)。
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+        let g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        *super::CID_CACHE.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        let _ = super::take_host_log();
+        g
+    }
     use super::*;
 
     const DID: &str = "did:plc:alice";
@@ -1730,6 +1739,7 @@ mod tests {
 
     #[test]
     fn login_returns_session_json_and_me() {
+        let _g = test_lock();
         mock_xrpc(Value::Null, |method, nsid, req| match (method, nsid) {
             ("POST", "com.atproto.server.createSession") => {
                 let b = body_of(req);
@@ -1759,6 +1769,7 @@ mod tests {
 
     #[test]
     fn login_with_wrong_password_is_401() {
+        let _g = test_lock();
         mock_xrpc(Value::Null, |_, _, _| Err((401, json!({ "error": "AuthenticationRequired", "message": "Invalid identifier or password" }))));
         let e = dispatch("sns.login", &json!({ "host": "bsky.social", "identifier": "alice", "password": "nope" })).unwrap_err();
         assert_eq!(e["code"], "401");
@@ -1767,6 +1778,7 @@ mod tests {
 
     #[test]
     fn missing_token_is_401_and_unknown_fn_is_c01() {
+        let _g = test_lock();
         mock_xrpc(Value::Null, |_, _, _| Ok(json!({})));
         let e = dispatch("sns.timeline", &json!({ "host": "bsky.social" })).unwrap_err();
         assert_eq!(e["code"], "401");
@@ -1779,6 +1791,7 @@ mod tests {
 
     #[test]
     fn inspect_server_maps_describe_server() {
+        let _g = test_lock();
         mock_xrpc(Value::Null, |_, nsid, _| {
             assert_eq!(nsid, "com.atproto.server.describeServer");
             Ok(json!({ "did": "did:web:bsky.social", "inviteCodeRequired": false, "links": { "termsOfService": "https://bsky.social/about/support/tos" } }))
@@ -1794,6 +1807,7 @@ mod tests {
 
     #[test]
     fn timeline_maps_posts_reposts_embeds_and_likes() {
+        let _g = test_lock();
         let quoted = json!({
             "$type": "app.bsky.embed.record#viewRecord",
             "uri": "at://did:plc:carol/app.bsky.feed.post/3kq", "cid": "cidq",
@@ -1873,6 +1887,7 @@ mod tests {
 
     #[test]
     fn global_timeline_is_the_discover_feed() {
+        let _g = test_lock();
         mock_xrpc(Value::Null, |_, nsid, req| {
             assert_eq!(nsid, "app.bsky.feed.getFeed");
             assert!(query_of(req).starts_with(&format!("feed={}", urlencode(DISCOVER_FEED))));
@@ -1885,6 +1900,7 @@ mod tests {
 
     #[test]
     fn thread_flattens_ancestors_oldest_first_and_descendants_depth_first() {
+        let _g = test_lock();
         let tvp = |uri: &str, text: &str, parent: Value, replies: Vec<Value>| {
             let mut n = json!({ "$type": "app.bsky.feed.defs#threadViewPost", "post": post_view(uri, "c", text), "replies": replies });
             if !parent.is_null() {
@@ -1920,6 +1936,7 @@ mod tests {
 
     #[test]
     fn facets_use_utf8_byte_offsets() {
+        let _g = test_lock();
         let text = "こんにちは https://example.com/道, #ロケット と @bob.test へ。";
         let (facets, mentions) = scan_facets(text);
         assert_eq!(facets.len(), 2);
@@ -1945,6 +1962,7 @@ mod tests {
 
     #[test]
     fn create_post_builds_facets_reply_quote_and_images() {
+        let _g = test_lock();
         let parent_uri = "at://did:plc:bob/app.bsky.feed.post/3kparent";
         let quote_uri = "at://did:plc:carol/app.bsky.feed.post/3kquote";
         let mut parent = post_view(parent_uri, "cidparent", "親");
@@ -2012,6 +2030,7 @@ mod tests {
 
     #[test]
     fn create_post_rejects_more_than_300_graphemes_and_defaults_to_japanese() {
+        let _g = test_lock();
         mock_xrpc(Value::Null, |method, nsid, req| match (method, nsid) {
             ("POST", "com.atproto.repo.createRecord") => {
                 let r = &body_of(req)["record"];
@@ -2039,6 +2058,7 @@ mod tests {
 
     #[test]
     fn like_toggles_between_create_and_delete_record() {
+        let _g = test_lock();
         let liked = std::rc::Rc::new(std::cell::Cell::new(false));
         let l2 = liked.clone();
         mock_xrpc(Value::Null, move |method, nsid, req| match (method, nsid) {
@@ -2082,6 +2102,7 @@ mod tests {
 
     #[test]
     fn expired_token_refreshes_once_and_persists_the_new_pair() {
+        let _g = test_lock();
         mock_xrpc(Value::Null, |method, nsid, req| match (method, nsid) {
             ("GET", "app.bsky.actor.getProfile") => {
                 if req["headers"]["Authorization"] == "Bearer access-1" {
@@ -2110,6 +2131,7 @@ mod tests {
 
     #[test]
     fn refresh_failure_surfaces_as_401_without_looping() {
+        let _g = test_lock();
         mock_xrpc(Value::Null, |_, nsid, _| match nsid {
             "com.atproto.server.refreshSession" => Err((400, json!({ "error": "ExpiredToken", "message": "refresh expired" }))),
             _ => Err((400, json!({ "error": "ExpiredToken", "message": "Token has expired" }))),
@@ -2121,6 +2143,7 @@ mod tests {
 
     #[test]
     fn stored_session_pair_is_preferred_over_the_host_token() {
+        let _g = test_lock();
         mock_xrpc(json!({ "accessJwt": "stored-access", "refreshJwt": "stored-refresh" }), |_, nsid, req| {
             assert_eq!(nsid, "app.bsky.actor.getProfile");
             assert_eq!(req["headers"]["Authorization"], "Bearer stored-access");
@@ -2135,6 +2158,7 @@ mod tests {
 
     #[test]
     fn notifications_group_consecutive_likes_and_attach_subject_posts() {
+        let _g = test_lock();
         let n = |uri: &str, reason: &str, did: &str, subject: Option<&str>, read: bool| {
             let mut v = json!({ "uri": uri, "cid": "c", "author": author(did, &format!("{}.test", &did[8..]), &did[8..]), "reason": reason, "isRead": read, "indexedAt": "2026-09-11T00:00:00.000Z", "record": {} });
             if let Some(s) = subject {
@@ -2186,6 +2210,7 @@ mod tests {
 
     #[test]
     fn set_relation_follows_and_unfollows_via_graph_records() {
+        let _g = test_lock();
         let following = std::rc::Rc::new(std::cell::Cell::new(false));
         let f2 = following.clone();
         mock_xrpc(Value::Null, move |method, nsid, req| match (method, nsid) {
@@ -2217,6 +2242,7 @@ mod tests {
 
     #[test]
     fn relationships_and_users_batch_get_profiles() {
+        let _g = test_lock();
         mock_xrpc(Value::Null, |_, nsid, req| {
             assert_eq!(nsid, "app.bsky.actor.getProfiles");
             assert_eq!(query_of(req), "actors=did%3Aplc%3Abob&actors=did%3Aplc%3Acarol");
@@ -2237,6 +2263,7 @@ mod tests {
 
     #[test]
     fn upload_media_returns_the_blob_as_a_json_id() {
+        let _g = test_lock();
         mock_xrpc(Value::Null, |method, nsid, req| {
             assert_eq!((method, nsid), ("POST", "com.atproto.repo.uploadBlob"));
             assert_eq!(req["headers"]["Content-Type"], "image/png");
@@ -2257,6 +2284,7 @@ mod tests {
 
     #[test]
     fn dm_rooms_use_the_chat_proxy_and_degrade_to_c01() {
+        let _g = test_lock();
         mock_xrpc(Value::Null, |_, nsid, req| {
             assert_eq!(nsid, "chat.bsky.convo.listConvos");
             assert_eq!(req["headers"]["atproto-proxy"], CHAT_PROXY);
@@ -2281,6 +2309,7 @@ mod tests {
 
     #[test]
     fn trending_tags_never_fail() {
+        let _g = test_lock();
         mock_xrpc(Value::Null, |_, _, _| Err((500, json!({}))));
         assert_eq!(dispatch("sns.trendingTags", &args(json!({}))).unwrap(), json!({ "tags": [] }));
         mock_xrpc(Value::Null, |_, _, _| Ok(json!({ "topics": [{ "topic": "ロケット", "link": "/x" }] })));
@@ -2289,6 +2318,7 @@ mod tests {
 
     #[test]
     fn user_posts_filters_replies_and_quotes_locally() {
+        let _g = test_lock();
         mock_xrpc(Value::Null, |_, nsid, req| {
             assert_eq!(nsid, "app.bsky.feed.getAuthorFeed");
             let q = query_of(req);
@@ -2314,6 +2344,7 @@ mod tests {
 
     #[test]
     fn query_strings_encode_and_drop_empty_values() {
+        let _g = test_lock();
         assert_eq!(query_string(&[("limit", "20".into()), ("cursor", String::new())]), "?limit=20");
         assert_eq!(query_string(&[("q", "a b&c".into())]), "?q=a%20b%26c");
         assert_eq!(query_string(&[("uris", "a".into()), ("uris", "b".into())]), "?uris=a&uris=b");

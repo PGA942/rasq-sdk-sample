@@ -2,8 +2,8 @@
 # - rust: builds the wasm plugin sample + runs the wasmi runtime tests
 # - dart: runs the Flutter FFI plugin's tests (the build hook shells out to
 #   cargo, so Rust is installed in that job too).
-# Flutter image is PINNED (3.47.1 = Dart 3.13.1); `flutter:stable` lags and
-# shipped Dart 3.12, which fails the packages' `sdk: ^3.13.1` constraint.
+# Flutter: ghcr.io/cirruslabs/flutter has no 3.47.x tag, so the dart job starts from
+# the 3.44.0 image and switches the SDK checkout to FLUTTER_PIN (Dart 3.13 is needed).
 stages:
 - test
 
@@ -22,6 +22,7 @@ rust:
     - cd rust
     - cargo build --release --target wasm32-unknown-unknown -p misskey-wasm-sample
     - cargo build --release --target wasm32-unknown-unknown -p mastodon-wasm
+    - cargo build --release --target wasm32-unknown-unknown -p bluesky-wasm
     - cargo test
     - cargo test --release -p rasq_wasm_runtime_core
   rules:
@@ -30,7 +31,7 @@ rust:
 
 dart:
   stage: test
-  image: ghcr.io/cirruslabs/flutter:3.47.1
+  image: ghcr.io/cirruslabs/flutter:3.44.0
   cache:
     key: dart-$CI_COMMIT_REF_SLUG
     paths:
@@ -39,7 +40,14 @@ dart:
   variables:
     PUB_CACHE: "$CI_PROJECT_DIR/.pub-cache"
     CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
+    FLUTTER_PIN: "3.47.2"
   before_script:
+    # cirruslabs のイメージは 3.44.0 までしか無い(3.47.x は manifest unknown)。
+    # 3.44.0 のイメージに入っている Flutter の checkout を 3.47.2 のタグへ切り替える(Dart 3.13 が要る)。
+    - git config --global --add safe.directory "$FLUTTER_HOME"
+    - git -C "$FLUTTER_HOME" fetch --depth 1 origin "refs/tags/$FLUTTER_PIN:refs/tags/$FLUTTER_PIN"
+    - git -C "$FLUTTER_HOME" checkout -q "$FLUTTER_PIN"
+    - flutter --version
     - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
     - export PATH="$CARGO_HOME/bin:$PATH"
     - rustup target add wasm32-unknown-unknown
