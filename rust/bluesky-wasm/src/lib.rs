@@ -956,6 +956,11 @@ fn sns_timeline(ctx: &Ctx) -> Result<Value, Value> {
             let items: Vec<Value> = as_list(&res["messages"]).iter().map(|m| message_wire(&ctx.host, m, &convo["members"])).collect();
             Ok(page(items, &res["cursor"]))
         }
+        // カスタムフィード (D-194): `feed:<at-uri>` → getFeed。
+        k if k.starts_with("feed:") => {
+            let res = xrpc_get(ctx, "app.bsky.feed.getFeed", &[("feed", k[5..].to_string()), ("limit", limit), ("cursor", cursor)])?;
+            Ok(feed_page(&ctx.host, &res))
+        }
         k if k.starts_with("list:") => Err(unsupported("list timelines")),
         // home / local / social はすべてフォロー中 TL。
         _ => {
@@ -963,6 +968,31 @@ fn sns_timeline(ctx: &Ctx) -> Result<Value, Value> {
             Ok(feed_page(&ctx.host, &res))
         }
     }
+}
+
+/// `sns.feeds {query?, limit?}` (D-194): カスタムフィード(フィードジェネレーター)の検索。
+/// `app.bsky.unspecced.getPopularFeedGenerators`(query 付き)→ `{feeds: [{uri, name, description?, likeCount?, creator?}]}`。
+fn sns_feeds(ctx: &Ctx) -> Result<Value, Value> {
+    let query = str_or(&ctx.args["query"], "").trim().to_string();
+    let limit = limit_arg(ctx.args, 20, 100);
+    let mut params: Vec<(&str, String)> = vec![("limit", limit)];
+    if !query.is_empty() {
+        params.push(("query", query));
+    }
+    let res = xrpc_get(ctx, "app.bsky.unspecced.getPopularFeedGenerators", &params)?;
+    let feeds: Vec<Value> = as_list(&res["feeds"])
+        .iter()
+        .map(|f| {
+            json!({
+                "uri": str_or(&f["uri"], ""),
+                "name": str_or(&f["displayName"], ""),
+                "description": f["description"].as_str(),
+                "likeCount": f["likeCount"].as_i64(),
+                "creator": f["creator"]["handle"].as_str(),
+            })
+        })
+        .collect();
+    Ok(json!({ "feeds": feeds }))
 }
 
 fn sns_post(ctx: &Ctx) -> Result<Value, Value> {
@@ -1596,6 +1626,7 @@ pub fn dispatch(fn_name: &str, args: &Value) -> Result<Value, Value> {
     }
     match fn_name {
         "sns.timeline" => authed!(sns_timeline),
+        "sns.feeds" => authed!(sns_feeds),
         "sns.post" => authed!(sns_post),
         "sns.thread" => authed!(sns_thread),
         "sns.performAction" => authed!(sns_perform_action),
@@ -1896,6 +1927,38 @@ mod tests {
         let v = dispatch("sns.timeline", &args(json!({ "kind": "global" }))).unwrap();
         assert_eq!(v["page"]["items"], json!([]));
         assert!(v["page"]["nextCursor"].is_null());
+    }
+
+    #[test]
+    fn custom_feed_kind_and_feed_search() {
+        let _g = test_lock();
+        // `feed:<uri>` → getFeed(そのフィード)。
+        mock_xrpc(Value::Null, |_, nsid, req| {
+            assert_eq!(nsid, "app.bsky.feed.getFeed");
+            assert!(query_of(req).starts_with(&format!("feed={}", urlencode("at://did:plc:x/app.bsky.feed.generator/cats"))));
+            Ok(json!({ "feed": [], "cursor": "c2" }))
+        });
+        let v = dispatch("sns.timeline", &args(json!({ "kind": "feed:at://did:plc:x/app.bsky.feed.generator/cats" }))).unwrap();
+        assert_eq!(v["page"]["nextCursor"], "c2");
+        // `sns.feeds {query}` → getPopularFeedGenerators(query 付き)→ {uri, name, description, likeCount, creator}。
+        mock_xrpc(Value::Null, |_, nsid, req| {
+            assert_eq!(nsid, "app.bsky.unspecced.getPopularFeedGenerators");
+            assert!(query_of(req).contains("query=cat"));
+            Ok(json!({ "feeds": [
+                { "uri": "at://did:plc:x/app.bsky.feed.generator/cats", "displayName": "Cats", "description": "ねこ", "likeCount": 12, "creator": { "handle": "cat.bsky.social" } }
+            ] }))
+        });
+        let v = dispatch("sns.feeds", &args(json!({ "query": "cat" }))).unwrap();
+        assert_eq!(v["feeds"][0]["uri"], "at://did:plc:x/app.bsky.feed.generator/cats");
+        assert_eq!(v["feeds"][0]["name"], "Cats");
+        assert_eq!(v["feeds"][0]["likeCount"], 12);
+        assert_eq!(v["feeds"][0]["creator"], "cat.bsky.social");
+        // query 無しは人気順(パラメーターに query を付けない)。
+        mock_xrpc(Value::Null, |_, _, req| {
+            assert!(!query_of(req).contains("query="));
+            Ok(json!({ "feeds": [] }))
+        });
+        assert_eq!(dispatch("sns.feeds", &args(json!({}))).unwrap()["feeds"], json!([]));
     }
 
     #[test]

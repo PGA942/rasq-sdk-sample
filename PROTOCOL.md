@@ -215,6 +215,9 @@ SNS プラグインのイベントハンドラー関数は「一定程度は抽�
   - `sns.reactedPosts {limit, cursor?}` → `{page}` (D-103) — 自分がリアクション
     した投稿。Mastodon ではお気に入り、`sns.favorites`(ホストのブックマーク欄)
     はブックマークで、**別物として分ける**。
+  - `sns.feeds {query?, limit?}` → `{feeds: [{uri, name, description?, likeCount?, creator?}]}`
+    — **カスタムフィードの検索** (D-194: Bluesky のフィードジェネレーター。TL カスタマイズの
+    「カスタムフィード」が使う)。取得は `sns.timeline {kind: "feed:<uri>"}`。持たない SNS は C01。
   - `sns.lists {}` / `sns.listInfo {id}` / `sns.listMembers {id}` /
     `sns.createList {name}` / `sns.updateListMember {listId, userId, add}`
     — リストワイヤ: `{id, name, memberIds?, description?, isPublic?}`。
