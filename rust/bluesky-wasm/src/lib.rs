@@ -956,13 +956,146 @@ fn sns_timeline(ctx: &Ctx) -> Result<Value, Value> {
             let items: Vec<Value> = as_list(&res["messages"]).iter().map(|m| message_wire(&ctx.host, m, &convo["members"])).collect();
             Ok(page(items, &res["cursor"]))
         }
-        k if k.starts_with("list:") => Err(unsupported("list timelines")),
+        // カスタムフィード (D-194): `feed:<at-uri>` → getFeed。
+        k if k.starts_with("feed:") => {
+            let res = xrpc_get(ctx, "app.bsky.feed.getFeed", &[("feed", k[5..].to_string()), ("limit", limit), ("cursor", cursor)])?;
+            Ok(feed_page(&ctx.host, &res))
+        }
+        // リスト TL (D-195): `list:<at-uri>` → getListFeed。
+        k if k.starts_with("list:") => {
+            let res = xrpc_get(ctx, "app.bsky.feed.getListFeed", &[("list", k[5..].to_string()), ("limit", limit), ("cursor", cursor)])?;
+            Ok(feed_page(&ctx.host, &res))
+        }
         // home / local / social はすべてフォロー中 TL。
         _ => {
             let res = xrpc_get(ctx, "app.bsky.feed.getTimeline", &[("limit", limit), ("cursor", cursor)])?;
             Ok(feed_page(&ctx.host, &res))
         }
     }
+}
+
+/// リストのワイヤ (D-195): `{id: at-uri, name, memberIds: [], description?, isPublic}`(purpose が curatelist なら公開リスト)。
+fn list_wire(l: &Value) -> Value {
+    json!({
+        "id": l["uri"],
+        "name": str_or(&l["name"], ""),
+        "memberIds": [],
+        "description": l["description"].as_str(),
+        "isPublic": str_or(&l["purpose"], "").ends_with("#curatelist"),
+        "memberCount": l["listItemCount"].as_u64(),
+    })
+}
+
+/// `sns.lists {}` (D-195): 自分の公開リスト(`app.bsky.graph.getLists actor=did`)。
+fn sns_lists(ctx: &Ctx) -> Result<Value, Value> {
+    let res = xrpc_get(ctx, "app.bsky.graph.getLists", &[("actor", ctx.did()), ("limit", "100".into())])?;
+    let lists: Vec<Value> = as_list(&res["lists"]).iter().filter(|l| str_or(&l["purpose"], "").ends_with("#curatelist")).map(list_wire).collect();
+    Ok(json!({ "lists": lists }))
+}
+
+/// `sns.listInfo {id}` / `sns.listMembers {id}` (D-195): `app.bsky.graph.getList list=<uri>`。
+fn sns_list_info(ctx: &Ctx) -> Result<Value, Value> {
+    let res = xrpc_get(ctx, "app.bsky.graph.getList", &[("list", str_or(&ctx.args["id"], "").into()), ("limit", "1".into())])?;
+    Ok(json!({ "list": list_wire(&res["list"]) }))
+}
+
+fn sns_list_members(ctx: &Ctx) -> Result<Value, Value> {
+    let res = xrpc_get(ctx, "app.bsky.graph.getList", &[("list", str_or(&ctx.args["id"], "").into()), ("limit", "100".into())])?;
+    let users: Vec<Value> = as_list(&res["items"]).iter().map(|i| user_wire(&ctx.host, &i["subject"])).collect();
+    Ok(json!({ "users": users }))
+}
+
+/// `sns.savedFeeds {}` (D-195): 保存済み / ピン留めのカスタムフィード(`getPreferences` の savedFeedsPrefV2 → `getFeedGenerators`)。
+fn sns_saved_feeds(ctx: &Ctx) -> Result<Value, Value> {
+    let prefs = xrpc_get(ctx, "app.bsky.actor.getPreferences", &[])?;
+    let mut uris: Vec<String> = Vec::new();
+    for p in as_list(&prefs["preferences"]) {
+        let t = str_or(&p["$type"], "");
+        if t == "app.bsky.actor.defs#savedFeedsPrefV2" {
+            for item in as_list(&p["items"]) {
+                if str_or(&item["type"], "") == "feed" {
+                    if let Some(v) = item["value"].as_str() {
+                        uris.push(v.to_string());
+                    }
+                }
+            }
+        } else if t == "app.bsky.actor.defs#savedFeedsPref" && uris.is_empty() {
+            for v in as_list(&p["saved"]) {
+                if let Some(u) = v.as_str() {
+                    uris.push(u.to_string());
+                }
+            }
+        }
+    }
+    if uris.is_empty() {
+        return Ok(json!({ "feeds": [] }));
+    }
+    let params: Vec<(&str, String)> = uris.iter().map(|u| ("feeds", u.clone())).collect();
+    let res = xrpc_get(ctx, "app.bsky.feed.getFeedGenerators", &params)?;
+    let feeds: Vec<Value> = as_list(&res["feeds"])
+        .iter()
+        .map(|f| json!({ "uri": str_or(&f["uri"], ""), "name": str_or(&f["displayName"], ""), "description": f["description"].as_str(), "likeCount": f["likeCount"].as_i64(), "creator": f["creator"]["handle"].as_str() }))
+        .collect();
+    Ok(json!({ "feeds": feeds }))
+}
+
+/// `sns.feeds {query?, limit?}` (D-194): カスタムフィード(フィードジェネレーター)の検索。
+/// `app.bsky.unspecced.getPopularFeedGenerators`(query 付き)→ `{feeds: [{uri, name, description?, likeCount?, creator?}]}`。
+/// フィードの URL / at-uri (D-196): `at://<did|handle>/app.bsky.feed.generator/<rkey>` か
+/// `https://bsky.app/profile/<did|handle>/feed/<rkey>` → (actor, rkey)。
+fn parse_feed_ref(q: &str) -> Option<(String, String)> {
+    let rest = if let Some(r) = q.strip_prefix("at://") {
+        let mut it = r.split('/');
+        let actor = it.next()?.to_string();
+        let coll = it.next()?;
+        let rkey = it.next()?.to_string();
+        if coll != "app.bsky.feed.generator" || rkey.is_empty() { return None; }
+        return Some((actor, rkey));
+    } else if let Some(i) = q.find("bsky.app/profile/") {
+        &q[i + "bsky.app/profile/".len()..]
+    } else {
+        return None;
+    };
+    let mut it = rest.split('/');
+    let actor = it.next()?.to_string();
+    if it.next()? != "feed" { return None; }
+    let rkey = it.next()?.split(['?', '#']).next()?.to_string();
+    if actor.is_empty() || rkey.is_empty() { return None; }
+    Some((actor, rkey))
+}
+
+fn feed_wire(f: &Value) -> Value {
+    json!({
+        "uri": str_or(&f["uri"], ""),
+        "name": str_or(&f["displayName"], ""),
+        "description": f["description"].as_str(),
+        "likeCount": f["likeCount"].as_i64(),
+        "creator": f["creator"]["handle"].as_str(),
+    })
+}
+
+fn sns_feeds(ctx: &Ctx) -> Result<Value, Value> {
+    let query = str_or(&ctx.args["query"], "").trim().to_string();
+    // URL / at-uri (D-196): そのフィードを 1 件返す(ハンドルは DID に解決)。
+    if let Some((actor, rkey)) = parse_feed_ref(&query) {
+        let did = if actor.starts_with("did:") {
+            actor
+        } else {
+            let r = xrpc_get(ctx, "com.atproto.identity.resolveHandle", &[("handle", actor)])?;
+            str_or(&r["did"], "").to_string()
+        };
+        let uri = format!("at://{did}/app.bsky.feed.generator/{rkey}");
+        let res = xrpc_get(ctx, "app.bsky.feed.getFeedGenerator", &[("feed", uri)])?;
+        return Ok(json!({ "feeds": [feed_wire(&res["view"])] }));
+    }
+    let limit = limit_arg(ctx.args, 20, 100);
+    let mut params: Vec<(&str, String)> = vec![("limit", limit)];
+    if !query.is_empty() {
+        params.push(("query", query));
+    }
+    let res = xrpc_get(ctx, "app.bsky.unspecced.getPopularFeedGenerators", &params)?;
+    let feeds: Vec<Value> = as_list(&res["feeds"]).iter().map(feed_wire).collect();
+    Ok(json!({ "feeds": feeds }))
 }
 
 fn sns_post(ctx: &Ctx) -> Result<Value, Value> {
@@ -1596,6 +1729,11 @@ pub fn dispatch(fn_name: &str, args: &Value) -> Result<Value, Value> {
     }
     match fn_name {
         "sns.timeline" => authed!(sns_timeline),
+        "sns.feeds" => authed!(sns_feeds),
+        "sns.savedFeeds" => authed!(sns_saved_feeds),
+        "sns.lists" => authed!(sns_lists),
+        "sns.listInfo" => authed!(sns_list_info),
+        "sns.listMembers" => authed!(sns_list_members),
         "sns.post" => authed!(sns_post),
         "sns.thread" => authed!(sns_thread),
         "sns.performAction" => authed!(sns_perform_action),
@@ -1624,7 +1762,7 @@ pub fn dispatch(fn_name: &str, args: &Value) -> Result<Value, Value> {
         "sns.favorites" => Err(unsupported("bookmarks (Bluesky has none)")),
         "sns.updateProfile" => Err(unsupported("updateProfile (not yet)")),
         "sns.resolveFollowRequest" => Err(unsupported("follow requests (Bluesky has none)")),
-        "sns.lists" | "sns.listInfo" | "sns.listMembers" | "sns.createList" | "sns.updateListMember" => Err(unsupported("lists (not yet)")),
+        "sns.createList" | "sns.updateListMember" => Err(unsupported("list editing (not yet)")),
         "sns.clips" | "sns.clipInfo" | "sns.clipNotes" | "sns.createClip" | "sns.deleteClip" | "sns.updateClipNote" => Err(unsupported("clips (Misskey only)")),
         "sns.userPlays" => Err(unsupported("plays (Misskey only)")),
         "sns.applySettings" | "sns.settingsRead" | "sns.settingsWrite" => Err(unsupported("settings pages")),
@@ -1786,7 +1924,7 @@ mod tests {
         assert_eq!(e["code"], "C01");
         // 明示的に未対応のもの。
         assert_eq!(dispatch("sns.favorites", &args(json!({}))).unwrap_err()["code"], "C01");
-        assert_eq!(dispatch("sns.lists", &args(json!({}))).unwrap_err()["code"], "C01");
+        assert_eq!(dispatch("sns.createList", &args(json!({ "name": "x" }))).unwrap_err()["code"], "C01");
     }
 
     #[test]
@@ -1896,6 +2034,99 @@ mod tests {
         let v = dispatch("sns.timeline", &args(json!({ "kind": "global" }))).unwrap();
         assert_eq!(v["page"]["items"], json!([]));
         assert!(v["page"]["nextCursor"].is_null());
+    }
+
+    #[test]
+    fn custom_feed_kind_and_feed_search() {
+        let _g = test_lock();
+        // `feed:<uri>` → getFeed(そのフィード)。
+        mock_xrpc(Value::Null, |_, nsid, req| {
+            assert_eq!(nsid, "app.bsky.feed.getFeed");
+            assert!(query_of(req).starts_with(&format!("feed={}", urlencode("at://did:plc:x/app.bsky.feed.generator/cats"))));
+            Ok(json!({ "feed": [], "cursor": "c2" }))
+        });
+        let v = dispatch("sns.timeline", &args(json!({ "kind": "feed:at://did:plc:x/app.bsky.feed.generator/cats" }))).unwrap();
+        assert_eq!(v["page"]["nextCursor"], "c2");
+        // `sns.feeds {query}` → getPopularFeedGenerators(query 付き)→ {uri, name, description, likeCount, creator}。
+        mock_xrpc(Value::Null, |_, nsid, req| {
+            assert_eq!(nsid, "app.bsky.unspecced.getPopularFeedGenerators");
+            assert!(query_of(req).contains("query=cat"));
+            Ok(json!({ "feeds": [
+                { "uri": "at://did:plc:x/app.bsky.feed.generator/cats", "displayName": "Cats", "description": "ねこ", "likeCount": 12, "creator": { "handle": "cat.bsky.social" } }
+            ] }))
+        });
+        let v = dispatch("sns.feeds", &args(json!({ "query": "cat" }))).unwrap();
+        assert_eq!(v["feeds"][0]["uri"], "at://did:plc:x/app.bsky.feed.generator/cats");
+        assert_eq!(v["feeds"][0]["name"], "Cats");
+        assert_eq!(v["feeds"][0]["likeCount"], 12);
+        assert_eq!(v["feeds"][0]["creator"], "cat.bsky.social");
+        // query 無しは人気順(パラメーターに query を付けない)。
+        mock_xrpc(Value::Null, |_, _, req| {
+            assert!(!query_of(req).contains("query="));
+            Ok(json!({ "feeds": [] }))
+        });
+        assert_eq!(dispatch("sns.feeds", &args(json!({}))).unwrap()["feeds"], json!([]));
+    }
+
+    #[test]
+    fn public_lists_members_list_feed_and_saved_feeds() {
+        let _g = test_lock();
+        mock_xrpc(Value::Null, |_, nsid, req| match nsid {
+            "app.bsky.graph.getLists" => {
+                assert!(query_of(req).contains(&format!("actor={}", urlencode(DID))));
+                Ok(json!({ "lists": [
+                    { "uri": "at://did:plc:me/app.bsky.graph.list/1", "name": "友達", "purpose": "app.bsky.graph.defs#curatelist", "listItemCount": 2, "description": "ともだち" },
+                    { "uri": "at://did:plc:me/app.bsky.graph.list/2", "name": "ミュート", "purpose": "app.bsky.graph.defs#modlist" }
+                ] }))
+            }
+            "app.bsky.graph.getList" => Ok(json!({ "list": { "uri": "at://did:plc:me/app.bsky.graph.list/1", "name": "友達", "purpose": "app.bsky.graph.defs#curatelist" }, "items": [ { "uri": "x", "subject": { "did": "did:plc:bob", "handle": "bob.bsky.social", "displayName": "ボブ" } } ] })),
+            "app.bsky.feed.getListFeed" => {
+                assert!(query_of(req).starts_with(&format!("list={}", urlencode("at://did:plc:me/app.bsky.graph.list/1"))));
+                Ok(json!({ "feed": [], "cursor": "n" }))
+            }
+            "app.bsky.actor.getPreferences" => Ok(json!({ "preferences": [ { "$type": "app.bsky.actor.defs#savedFeedsPrefV2", "items": [ { "type": "feed", "value": "at://did:plc:x/app.bsky.feed.generator/cats", "pinned": true }, { "type": "timeline", "value": "following" } ] } ] })),
+            "app.bsky.feed.getFeedGenerators" => {
+                assert!(query_of(req).contains("feeds="));
+                Ok(json!({ "feeds": [ { "uri": "at://did:plc:x/app.bsky.feed.generator/cats", "displayName": "Cats", "likeCount": 3, "creator": { "handle": "cat.bsky.social" } } ] }))
+            }
+            other => panic!("unexpected {other}"),
+        });
+        let v = dispatch("sns.lists", &args(json!({}))).unwrap();
+        assert_eq!(v["lists"].as_array().unwrap().len(), 1); // モデレーションリストは出さない
+        assert_eq!(v["lists"][0]["id"], "at://did:plc:me/app.bsky.graph.list/1");
+        assert_eq!(v["lists"][0]["name"], "友達");
+        assert_eq!(v["lists"][0]["isPublic"], true);
+        let m = dispatch("sns.listMembers", &args(json!({ "id": "at://did:plc:me/app.bsky.graph.list/1" }))).unwrap();
+        assert_eq!(m["users"][0]["handle"], "bob.bsky.social");
+        let i = dispatch("sns.listInfo", &args(json!({ "id": "at://did:plc:me/app.bsky.graph.list/1" }))).unwrap();
+        assert_eq!(i["list"]["name"], "友達");
+        let t = dispatch("sns.timeline", &args(json!({ "kind": "list:at://did:plc:me/app.bsky.graph.list/1" }))).unwrap();
+        assert_eq!(t["page"]["nextCursor"], "n");
+        let f = dispatch("sns.savedFeeds", &args(json!({}))).unwrap();
+        assert_eq!(f["feeds"][0]["name"], "Cats");
+        assert_eq!(f["feeds"][0]["creator"], "cat.bsky.social");
+    }
+
+    #[test]
+    fn feed_url_or_at_uri_resolves_to_one_feed() {
+        let _g = test_lock();
+        assert_eq!(parse_feed_ref("at://did:plc:x/app.bsky.feed.generator/cats"), Some(("did:plc:x".into(), "cats".into())));
+        assert_eq!(parse_feed_ref("https://bsky.app/profile/cat.bsky.social/feed/cats?x=1"), Some(("cat.bsky.social".into(), "cats".into())));
+        assert_eq!(parse_feed_ref("ねこ"), None);
+        mock_xrpc(Value::Null, |_, nsid, req| match nsid {
+            "com.atproto.identity.resolveHandle" => {
+                assert!(query_of(req).contains("handle=cat.bsky.social"));
+                Ok(json!({ "did": "did:plc:x" }))
+            }
+            "app.bsky.feed.getFeedGenerator" => {
+                assert!(query_of(req).contains(&urlencode("at://did:plc:x/app.bsky.feed.generator/cats")));
+                Ok(json!({ "view": { "uri": "at://did:plc:x/app.bsky.feed.generator/cats", "displayName": "Cats", "likeCount": 5, "creator": { "handle": "cat.bsky.social" } } }))
+            }
+            other => panic!("unexpected {other}"),
+        });
+        let v = dispatch("sns.feeds", &args(json!({ "query": "https://bsky.app/profile/cat.bsky.social/feed/cats" }))).unwrap();
+        assert_eq!(v["feeds"].as_array().unwrap().len(), 1);
+        assert_eq!(v["feeds"][0]["name"], "Cats");
     }
 
     #[test]

@@ -36,3 +36,10 @@ Misskey アダプタ(`packages/sns_misskey`)で検証したものを、ここで
 2. ~~WASM ランタイム選定(D-007: wasm3 / WAMR / wasmi、iOS インタープリタ基準)の実測~~ → `wasmi` を [`rust/rasq_wasm_runtime_core`](rust/rasq_wasm_runtime_core) に組み込み、Flutter プラグイン [`rasq_wasm_runtime`](rasq_wasm_runtime) から実行を確認(macOS 実行、iOS シミュレータ / Android 全 ABI ビルド)。wasm3/WAMR との比較実測と iOS 実機計測は未着手(`rust/README.md` 参照)
 3. スロット宣言(D-005)と `ActionRef`(D-006)の形式確定 → `schema/` に追加
 4. 性能が必要なら Snapshot を FlatBuffers/ZeroCopy 化(論理モデルは維持)
+
+## mixi2 サンプル (`rust/mixi2-wasm`, D-206)
+
+mixi2 の公式 API は申請制で、認証は OAuth(RASQ サーバーのブローカー `/auth/sns/mixi2/begin`)。どちらも揃うまでは
+**ダミーモード**(ホスト `dummy` / トークン `dummy:...`)がプラグイン内のメモリで `sns.*` をこなす(ログイン → TL →
+いいね / リポスト → 投稿 → 通知)。実モードのエンドポイント(`api` モジュール)と ワイヤ変換は未検証の仮置き。
+ビルド: `cargo build --release --target wasm32-unknown-unknown -p mixi2-wasm` → クライアントの `assets/plugins/mixi2_wasm.wasm`。
