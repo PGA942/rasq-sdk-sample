@@ -1039,6 +1039,34 @@ fn sns_saved_feeds(ctx: &Ctx) -> Result<Value, Value> {
     Ok(json!({ "feeds": feeds }))
 }
 
+/// `sns.saveFeed {uri, on}` (D-227): カスタムフィードを保存 / 保存から外す。`getPreferences` の
+/// `savedFeedsPrefV2`(無ければ作る)の items に `{type: feed, value: uri, pinned: false, id}` を足す / 抜き、
+/// `putPreferences` で書き戻す。戻りは保存後の `{feeds: [...]}`(`sns.savedFeeds` と同じワイヤ)。
+fn sns_save_feed(ctx: &Ctx) -> Result<Value, Value> {
+    let uri = str_or(&ctx.args["uri"], "").trim().to_string();
+    if uri.is_empty() {
+        return Err(err("400", "uri is required"));
+    }
+    let on = ctx.args["on"].as_bool().unwrap_or(true);
+    let prefs = xrpc_get(ctx, "app.bsky.actor.getPreferences", &[])?;
+    let mut list = as_list(&prefs["preferences"]);
+    let idx = list.iter().position(|p| str_or(&p["$type"], "") == "app.bsky.actor.defs#savedFeedsPrefV2");
+    let mut items: Vec<Value> = idx.map(|i| as_list(&list[i]["items"])).unwrap_or_default();
+    items.retain(|it| !(str_or(&it["type"], "") == "feed" && str_or(&it["value"], "") == uri));
+    if on {
+        // id はレコード内で一意ならよい(lexicon は string)。時刻 + 通し番号。
+        let id = format!("rasq{}{}", ctx.now().replace(|c: char| !c.is_ascii_digit(), ""), items.len());
+        items.push(json!({ "type": "feed", "value": uri, "pinned": false, "id": id }));
+    }
+    let pref = json!({ "$type": "app.bsky.actor.defs#savedFeedsPrefV2", "items": items });
+    match idx {
+        Some(i) => list[i] = pref,
+        None => list.push(pref),
+    }
+    xrpc_post(ctx, "app.bsky.actor.putPreferences", json!({ "preferences": list }))?;
+    sns_saved_feeds(ctx)
+}
+
 /// `sns.feeds {query?, limit?}` (D-194): カスタムフィード(フィードジェネレーター)の検索。
 /// `app.bsky.unspecced.getPopularFeedGenerators`(query 付き)→ `{feeds: [{uri, name, description?, likeCount?, creator?}]}`。
 /// フィードの URL / at-uri (D-196): `at://<did|handle>/app.bsky.feed.generator/<rkey>` か
@@ -1731,6 +1759,7 @@ pub fn dispatch(fn_name: &str, args: &Value) -> Result<Value, Value> {
         "sns.timeline" => authed!(sns_timeline),
         "sns.feeds" => authed!(sns_feeds),
         "sns.savedFeeds" => authed!(sns_saved_feeds),
+        "sns.saveFeed" => authed!(sns_save_feed),
         "sns.lists" => authed!(sns_lists),
         "sns.listInfo" => authed!(sns_list_info),
         "sns.listMembers" => authed!(sns_list_members),

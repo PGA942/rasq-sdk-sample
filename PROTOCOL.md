@@ -217,6 +217,8 @@ SNS プラグインのイベントハンドラー関数は「一定程度は抽�
     はブックマークで、**別物として分ける**。
   - `sns.savedFeeds {}` → `{feeds: [...]}`(同じワイヤ)— **保存済み / ピン留めのカスタムフィード**
     (D-195: リストページの「カスタムフィード」欄。Bluesky は getPreferences の savedFeedsPrefV2)。
+  - `sns.saveFeed {uri, on}` → `{feeds: [...]}`(保存後、同じワイヤ)— **カスタムフィードを保存 / 保存から外す**
+    (D-227: フィード行・フィード TL の「フィードを保存」。Bluesky は savedFeedsPrefV2 を `putPreferences` で書き戻す)。
   - `sns.feeds {query?, limit?}` → `{feeds: [{uri, name, description?, likeCount?, creator?}]}`
     (query が `at://…/app.bsky.feed.generator/<rkey>` か `https://bsky.app/profile/<actor>/feed/<rkey>` ならそのフィード 1 件、D-196)
     — **カスタムフィードの検索** (D-194: Bluesky のフィードジェネレーター。TL カスタマイズの
