@@ -1,0 +1,38 @@
+{
+  "schema": "rasq.bundle/1",
+  "sdk": "0.1.0",
+  "createdAt": "2026-09-18T00:00:00Z",
+  "$comment": "docs/cli.md の例。Misskey プラグイン(土台)を自分で作っていて、その配下に post.action の子と顔検知ライブラリ、設定画面の RRL、遅延取得のモデルをバンドルした .rasqpkg の目次。ハッシュは例(実物は rasq build が計算する)。",
+  "root": {
+    "id": "rasq.official.misskey",
+    "version": "0.1.0",
+    "kind": "sns",
+    "manifest": "manifest.json",
+    "wasm": { "path": "misskey.wasm", "sha512": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000a", "sizeBytes": 412000 }
+  },
+  "children": [
+    {
+      "id": "rasq.official.misskey.later",
+      "version": "0.1.0",
+      "kind": "action",
+      "manifest": "plugins/later/manifest.json",
+      "wasm": { "path": "plugins/later/later.wasm", "sha512": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000b", "sizeBytes": 131000 },
+      "template": "post.action"
+    }
+  ],
+  "libs": [
+    {
+      "name": "rustface",
+      "wasm": { "path": "libs/rustface.wasm", "sha512": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c", "sizeBytes": 1900000 },
+      "exports": ["detect"],
+      "source": "crates.io/rustface 0.1",
+      "license": "BSD-2-Clause"
+    }
+  ],
+  "assets": [
+    { "path": "assets/settings.rrl.json", "kind": "rrl", "sizeBytes": 2048, "sha512": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000d" }
+  ],
+  "models": [
+    { "manifest": "models/gliner-ner.model.json", "lazy": true, "artifactId": "model-gliner-ner" }
+  ]
+}
