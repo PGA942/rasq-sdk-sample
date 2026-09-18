@@ -10,5 +10,16 @@
   ],
   "permissions": [
     "fow.widget"
+  ],
+  "actions": [
+    {
+      "id": "toggle",
+      "slot": "viewer.overlay",
+      "label": "{{display}}",
+      "icon": "center_focus_weak",
+      "tags": [
+        "全画面表示"
+      ]
+    }
   ]
 }
