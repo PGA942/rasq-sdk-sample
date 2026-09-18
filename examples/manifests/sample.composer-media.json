@@ -1,0 +1,15 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "sample.composer-media",
+  "name": "メディア加工(サンプル)",
+  "version": "0.3.0",
+  "kind": "action",
+  "description": "ガンマ / 色相 / グレースケール / ネガ反転 / 回転 / クロップ",
+  "slots": [
+    "composer.media"
+  ],
+  "permissions": [
+    "fow.widget",
+    "storage.safe"
+  ]
+}

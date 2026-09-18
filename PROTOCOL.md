@@ -309,9 +309,10 @@ SNS プラグインが RRL の icon/body に**タグ付け必須**なのはこ�
 | V12 | スロット単位の障害隔離 | 当該スロットのみ標準部品化(B系) |
 
 ## 7. 未決
-- D-005 content/action スロット仕様の形式定義 — `roles`/`slots` 宣言の JSON 化
-- D-006 `ActionRef` 形式(`pluginId:accountKey:pluginVersion:fn`)の確定
-- D-007 WASM ランタイム選定 — `wasmi` で仮組み済み(rust/)。wasm3 / WAMR との実測比較と iOS 実機計測が残
+- ~~D-005 content/action スロット仕様の形式定義~~ → `schema/slots.json`(登録簿)+ `schema/slot-registry.schema.json`。manifest v0.3 の `slots` / `roles` / `actions[].tags`
+- ~~D-006 `ActionRef` 形式の確定~~ → `schema/action-ref.schema.json`(ActionRef = 実行時の完全修飾、ActionKey = `slot:<pluginId>:<actionId>` の永続キー、InstanceScope = この §3 の `scope`)
+- ~~D-007~~ → 境界の IDL は `schema/boundary.schema.json` v0.2(`surface`、`change` / `drag` イベント、アプリ向けホスト関数)と `schema/host-fn.schema.json` v0.2。
+  WASM ランタイムは **wasmi を第一期の確定**(rust/rasq_wasm_runtime_core)。wasm3 / WAMR との実測比較と iOS 実機計測は第二期
 - host_fn の非同期化(v2: callId + poll/notify)。v1 は同期
 - `net.fetch` のストリーミング / バイナリ大容量(v1 は bodyB64)
 - モデルマニフェストの配布・審査フロー(ストア側)と `function.json` への `models` 欄追加

@@ -7,6 +7,16 @@
 stages:
 - test
 
+schema:
+  stage: test
+  image: python:3.12
+  script:
+    - pip install -q jsonschema referencing
+    - python schema/validate.py
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+
 rust:
   stage: test
   image: rust:1

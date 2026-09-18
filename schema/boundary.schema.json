@@ -1,12 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://rasq.io/schema/boundary-0.1.json",
-  "title": "RASQ boundary messages (JSON wire, draft v0.1)",
+  "$id": "https://rasq.io/schema/boundary-0.2.json",
+  "title": "RASQ boundary messages (JSON wire rasq.boundary/1, v0.2 — D-007 IDL)",
+  "description": "PROTOCOL.md §3 のメッセージの形。v0.2: patch / lifecycle の surface(FOW ドキュメント、D-072/D-073)、event の change / drag(plugin-sample §3)、hostFn の fn をアプリ向けホスト関数まで列挙(host-fn.schema.json と同じ一覧)。ワイヤの schema 文字列は rasq.boundary/1 のまま。",
   "type": "object",
   "required": ["schema", "scope", "type"],
   "properties": {
     "schema": { "const": "rasq.boundary/1" },
-    "scope": { "type": "string", "description": "instanceScope = pluginId:accountKey:pluginVersion:instanceId" },
+    "scope": { "$ref": "action-ref.schema.json#/$defs/instanceScope", "description": "instanceScope = pluginId:accountKey:pluginVersion:instanceId(action-ref.schema.json)" },
     "type": { "type": "string", "enum": ["snapshot", "patch", "hostFn", "hostFnResult", "result", "emit", "event", "lifecycle", "call", "resync"] }
   },
   "oneOf": [
@@ -16,6 +17,7 @@
         "type": { "const": "patch" },
         "rev": { "type": "integer" },
         "baseRev": { "type": "integer" },
+        "surface": { "type": "string", "description": "FOW surface の id(fow.open の id)。無ければ主ドキュメント。rev 系列は surface ごと(fow.open 時に 1 から)" },
         "ops": {
           "type": "array",
           "maxItems": 512,
@@ -35,13 +37,43 @@
       },
       "required": ["rev", "baseRev", "ops"]
     },
-    { "properties": { "type": { "const": "hostFn" }, "callId": { "type": "string" }, "fn": { "type": "string", "enum": ["fow.open", "fow.close", "alert", "storage.get", "storage.set", "storage.delete", "net.fetch", "ml.infer", "wasm.call", "store.read", "geometry.lookup"] }, "args": { "type": "object" } }, "required": ["callId", "fn"] },
-    { "properties": { "type": { "const": "hostFnResult" }, "callId": { "type": "string" }, "ok": { "type": "boolean" }, "value": {}, "error": { "type": "object", "properties": { "code": { "type": "string", "pattern": "^(\\d{3}|[A-F][0-9A-F]{2})$" }, "message": { "type": "string" } } } }, "required": ["callId", "ok"] },
-    { "properties": { "type": { "const": "result" }, "callId": { "type": "string" }, "ok": { "type": "boolean" }, "value": {}, "error": { "type": "object" } }, "required": ["callId", "ok"] },
+    { "properties": { "type": { "const": "hostFn" }, "callId": { "type": "string" }, "fn": { "$ref": "#/$defs/hostFnName" }, "args": { "type": "object" } }, "required": ["callId", "fn"] },
+    { "properties": { "type": { "const": "hostFnResult" }, "callId": { "type": "string" }, "ok": { "type": "boolean" }, "value": {}, "error": { "$ref": "#/$defs/error" } }, "required": ["callId", "ok"] },
+    { "properties": { "type": { "const": "result" }, "callId": { "type": "string" }, "ok": { "type": "boolean" }, "value": {}, "error": { "$ref": "#/$defs/error" } }, "required": ["callId", "ok"] },
     { "properties": { "type": { "const": "emit" }, "name": { "type": "string" }, "payload": {} }, "required": ["name"] },
-    { "properties": { "type": { "const": "event" }, "nodeId": { "type": "string" }, "kind": { "type": "string", "enum": ["tap", "longPress", "pointerDown", "pointerMove", "pointerUp", "confirm"] }, "payload": { "type": "object" } }, "required": ["nodeId", "kind"] },
-    { "properties": { "type": { "const": "lifecycle" }, "kind": { "type": "string", "enum": ["mount", "unmount", "visible", "hidden", "cancel"] }, "streamId": { "type": "string" } }, "required": ["kind"] },
+    {
+      "properties": {
+        "type": { "const": "event" },
+        "nodeId": { "type": "string" },
+        "kind": { "type": "string", "enum": ["tap", "longPress", "pointerDown", "pointerMove", "pointerUp", "confirm", "change", "drag"] },
+        "payload": { "type": "object", "description": "change: {value}(settings.set など)。drag: {phase: start|update|end, x, y, dx, dy, snap?}(plugin-sample §3)" }
+      },
+      "required": ["nodeId", "kind"]
+    },
+    {
+      "properties": {
+        "type": { "const": "lifecycle" },
+        "kind": { "type": "string", "enum": ["mount", "unmount", "visible", "hidden", "cancel"] },
+        "surface": { "type": "string", "description": "FOW surface の id(主ドキュメントなら無し)" },
+        "streamId": { "type": "string" }
+      },
+      "required": ["kind"]
+    },
     { "properties": { "type": { "const": "call" }, "callId": { "type": "string" }, "fn": { "type": "string" }, "args": { "type": "object" } }, "required": ["callId", "fn"] },
     { "properties": { "type": { "const": "resync" }, "reason": { "type": "string" } } }
-  ]
+  ],
+  "$defs": {
+    "error": {
+      "type": "object",
+      "properties": { "code": { "type": "string", "pattern": "^(\\d{3}|[A-F][0-9A-F]{2})$", "description": "CONTRACT §9 の体系(B: 縮退 / C: 未対応 / D: 入力 / E: 権限)" }, "message": { "type": "string" } }
+    },
+    "hostFnName": {
+      "type": "string",
+      "enum": [
+        "fow.open", "fow.close", "alert", "storage.get", "storage.set", "storage.delete", "net.fetch", "ml.infer", "gpu.compute", "wasm.call", "store.read", "geometry.lookup",
+        "toast", "sound.play", "clipboard.set", "url.open", "mute.add", "composer.open", "astell.share",
+        "composer.media.replace", "composer.media.preview", "composer.media.overlay", "composer.text.replace", "viewer.overlay.set"
+      ]
+    }
+  }
 }

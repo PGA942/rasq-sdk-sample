@@ -1,0 +1,12 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "sample.post-process",
+  "name": "相対日付の置き換え(サンプル)",
+  "version": "0.1.0",
+  "kind": "postProcessor",
+  "description": "本文の「今日」「昨日」「明日」を投稿日基準の日付に置き換える",
+  "slots": [
+    "post.transform"
+  ],
+  "permissions": []
+}

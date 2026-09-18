@@ -1,0 +1,14 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "sample.media-transform",
+  "name": "変形ハンドル(サンプル)",
+  "version": "0.1.0",
+  "kind": "action",
+  "description": "回転 / クロップのハンドルを画像の上に重ねて編集",
+  "slots": [
+    "composer.media"
+  ],
+  "permissions": [
+    "fow.widget"
+  ]
+}

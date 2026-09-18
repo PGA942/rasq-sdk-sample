@@ -1,0 +1,14 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "sample.media-process",
+  "name": "加工(サンプル)",
+  "version": "0.1.0",
+  "kind": "action",
+  "description": "顔検知ぼかし、スタンプのオブジェクト",
+  "slots": [
+    "composer.media"
+  ],
+  "permissions": [
+    "fow.widget"
+  ]
+}

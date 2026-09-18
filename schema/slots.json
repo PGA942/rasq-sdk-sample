@@ -1,0 +1,836 @@
+{
+  "schema": "rasq.slots/1",
+  "$comment": "スロット登録簿 (D-005)。プラグインが差し込める面を 1 か所で定義する。マニフェストの `slots` はここにある id だけを指せる(schema/validate.py が照合)。`status: planned` は仮案(RRL&プラグイン周り §17)から採った未実装の面で、id だけ先に予約する。 tiers: 権限ティア(PROTOCOL §6 V1)。サイドロード(未審査)は content だけ、media は tag だけ、action / avatar / full / page は審査済みのみ。 permissions.required はホスト(rasq-client slot_plugins.dart)が v1 で実際に見る権限(fow.* / storage.* / mute.words)だけ。操作語彙(replace_media / register_action など、CONTRACT §8)は審査で付くので optional。",
+  "tiers": {
+    "content": {
+      "sideload": true,
+      "description": "投稿内容の加工・並べ替え・サジェスト。画面を持たず、GPU / ネットワークも使えない(V2)"
+    },
+    "media": {
+      "sideload": "tagOnly",
+      "description": "メディアの tag 付けはサイドロード可。差し替え(replace_media)は審査済み"
+    },
+    "action": {
+      "sideload": false,
+      "description": "ボタン・FOW・オーバーレイなど、ユーザーが押して動く面"
+    },
+    "avatar": {
+      "sideload": false,
+      "description": "アバター装飾(decorate_avatar)"
+    },
+    "full": {
+      "sideload": false,
+      "description": "タイル / 画面の完全置き換え(replace_tile)。必須ロールの保証が要る(V5)"
+    },
+    "page": {
+      "sideload": false,
+      "description": "ページ型(custom:<pluginId>)。ホストのルーティングと一緒に決める"
+    }
+  },
+  "lifecycle": {
+    "$comment": "FOW / 拡張面に共通のライフサイクル(仮案 §17)。v1 wasm ABI では call(\"lifecycle\", {kind, surface?}) として届く。",
+    "kinds": [
+      "mount",
+      "unmount",
+      "visible",
+      "hidden",
+      "cancel"
+    ],
+    "stateScope": [
+      "ephemeral",
+      "component",
+      "screen",
+      "account",
+      "plugin"
+    ],
+    "offscreenPolicy": [
+      "keepAlive",
+      "suspend",
+      "dispose"
+    ],
+    "fallback": [
+      "loading",
+      "timeout",
+      "crashed",
+      "permissionDenied",
+      "unsupported",
+      "offline"
+    ],
+    "hostOwned": "最終 fallback と 閉じる / 無効化 の操作はホストが持つ(仮案 §18)"
+  },
+  "slots": [
+    {
+      "id": "post.transform",
+      "status": "stable",
+      "since": "v0.1",
+      "label": "投稿加工",
+      "tier": "content",
+      "kinds": [
+        "postProcessor",
+        "sns"
+      ],
+      "placement": {
+        "surface": "timeline.tile",
+        "constraints": [
+          "画面を持たない",
+          "全 TL の表示直前に呼ばれる",
+          "本文 / CW だけを書き換える(V3: センシティブ / CW の解除は無視)"
+        ]
+      },
+      "calls": [
+        "post.transform"
+      ],
+      "hostFns": [],
+      "permissions": {
+        "required": [],
+        "optional": [
+          "transform_content"
+        ]
+      },
+      "lifecycle": {
+        "stateScope": "plugin",
+        "offscreenPolicy": "keepAlive"
+      },
+      "fallback": [
+        "timeout",
+        "crashed"
+      ],
+      "sample": "orgate-question/plugin-sample/post-process-plugin"
+    },
+    {
+      "id": "tl",
+      "status": "stable",
+      "since": "v0.2",
+      "label": "タイムライン(アルゴリズムノード)",
+      "tier": "content",
+      "kinds": [
+        "view",
+        "sns"
+      ],
+      "placement": {
+        "surface": "timeline.algorithm",
+        "constraints": [
+          "タブではなくソートノードとして並ぶ",
+          "パラメーターは設定ページ(settings-page.schema.json のサブセット)で",
+          "データ取得はホスト"
+        ]
+      },
+      "calls": [
+        "tl.timelines",
+        "tl.params",
+        "tl.sort",
+        "tl.customize"
+      ],
+      "hostFns": [],
+      "permissions": {
+        "required": [],
+        "optional": [
+          "replace_tile"
+        ]
+      },
+      "roles": {
+        "$comment": "tl.customize(完全置き換えタイル)を返すプラグインは manifest.roles に contentBody を宣言する(V5)。宣言が無ければホストは tiles を捨てて通常タイルにする。",
+        "requiredForReplaceTile": [
+          "contentBody"
+        ],
+        "hostGuaranteed": [
+          "threadNav"
+        ]
+      },
+      "lifecycle": {
+        "stateScope": "account",
+        "offscreenPolicy": "keepAlive"
+      },
+      "fallback": [
+        "timeout",
+        "crashed"
+      ],
+      "sample": "orgate-question/plugin-sample/timeline-plugin"
+    },
+    {
+      "id": "trend.suggest",
+      "status": "stable",
+      "since": "v0.1",
+      "label": "トレンドのサジェスト",
+      "tier": "content",
+      "kinds": [
+        "trend"
+      ],
+      "placement": {
+        "surface": "search.trend",
+        "constraints": [
+          "サジェスト行だけ",
+          "サーバー無しでも返す"
+        ]
+      },
+      "calls": [
+        "trend.suggest"
+      ],
+      "hostFns": [],
+      "permissions": {
+        "required": [],
+        "optional": []
+      },
+      "lifecycle": {
+        "stateScope": "plugin",
+        "offscreenPolicy": "keepAlive"
+      },
+      "fallback": [
+        "timeout",
+        "crashed"
+      ],
+      "sample": "orgate-question/plugin-sample/trend-plugin"
+    },
+    {
+      "id": "composer.text",
+      "status": "stable",
+      "since": "v0.1",
+      "label": "コンポーザーの本文",
+      "tier": "action",
+      "kinds": [
+        "action"
+      ],
+      "placement": {
+        "surface": "composer.inline",
+        "constraints": [
+          "FOW はコンポーザーの子(同じカラム)で入力を隠さない",
+          "本文の変化は 200ms デバウンス"
+        ]
+      },
+      "calls": [
+        "text.changed"
+      ],
+      "hostFns": [
+        "composer.text.replace",
+        "fow.open",
+        "fow.close",
+        "toast"
+      ],
+      "permissions": {
+        "required": [
+          "fow.widget"
+        ],
+        "optional": [
+          "storage.safe"
+        ]
+      },
+      "lifecycle": {
+        "stateScope": "screen",
+        "offscreenPolicy": "suspend"
+      },
+      "fallback": [
+        "timeout",
+        "crashed",
+        "permissionDenied"
+      ],
+      "sample": "orgate-question/plugin-sample/composer-text-plugin"
+    },
+    {
+      "id": "composer.media",
+      "status": "stable",
+      "since": "v0.4",
+      "label": "メディア加工(全画面エディター)",
+      "tier": "media",
+      "kinds": [
+        "action"
+      ],
+      "placement": {
+        "surface": "composer.mediaEditor",
+        "constraints": [
+          "ホストの全画面エディターの中(中央プレビュー + 右の列 + 下付きの第 2 階層)",
+          "パラメーターは第 3 階層 = 下付き FOW",
+          "image/png / image/jpeg のみ(他は C01)"
+        ]
+      },
+      "calls": [
+        "media.catalog",
+        "media.edit",
+        "media.action",
+        "media.commit",
+        "media.cancel"
+      ],
+      "hostFns": [
+        "composer.media.preview",
+        "composer.media.replace",
+        "composer.media.overlay",
+        "fow.open",
+        "fow.close",
+        "toast"
+      ],
+      "permissions": {
+        "required": [
+          "fow.widget"
+        ],
+        "optional": [
+          "replace_media",
+          "storage.safe",
+          "gpu_ml"
+        ]
+      },
+      "lifecycle": {
+        "stateScope": "component",
+        "offscreenPolicy": "dispose"
+      },
+      "fallback": [
+        "loading",
+        "timeout",
+        "crashed"
+      ],
+      "sample": "orgate-question/plugin-sample/composer-media-plugin"
+    },
+    {
+      "id": "viewer.overlay",
+      "status": "stable",
+      "since": "v0.1",
+      "label": "全画面ビューワーの重ね",
+      "tier": "action",
+      "kinds": [
+        "mediaViewer"
+      ],
+      "placement": {
+        "surface": "viewer.fullscreen",
+        "constraints": [
+          "画像の画素系の Stack を重ねる(ホストが拡縮)",
+          "全画面遷移時だけ変換(V9)",
+          "戻る / 閉じるはホスト"
+        ]
+      },
+      "calls": [
+        "viewer.open",
+        "viewer.close"
+      ],
+      "hostFns": [
+        "viewer.overlay.set",
+        "clipboard.set",
+        "url.open",
+        "mute.add",
+        "fow.open",
+        "fow.close",
+        "toast"
+      ],
+      "permissions": {
+        "required": [
+          "fow.widget"
+        ],
+        "optional": [
+          "mute.words",
+          "gpu_ml"
+        ]
+      },
+      "lifecycle": {
+        "stateScope": "component",
+        "offscreenPolicy": "dispose"
+      },
+      "fallback": [
+        "timeout",
+        "crashed"
+      ],
+      "sample": "orgate-question/plugin-sample/media-fullscreen-plugin"
+    },
+    {
+      "id": "astell.action",
+      "status": "stable",
+      "since": "v0.1",
+      "label": "AsTell のプラグインアクション",
+      "tier": "action",
+      "kinds": [
+        "action"
+      ],
+      "placement": {
+        "surface": "astell.room.dock",
+        "constraints": [
+          "ルーム FOW 下段のボタン",
+          "共有は WS の share としてホストが送る"
+        ]
+      },
+      "calls": [
+        "astell.open",
+        "astell.event"
+      ],
+      "hostFns": [
+        "astell.share",
+        "sound.play",
+        "fow.open",
+        "fow.close",
+        "toast"
+      ],
+      "permissions": {
+        "required": [
+          "fow.widget"
+        ],
+        "optional": [
+          "storage.safe"
+        ]
+      },
+      "lifecycle": {
+        "stateScope": "screen",
+        "offscreenPolicy": "suspend"
+      },
+      "fallback": [
+        "timeout",
+        "crashed",
+        "offline"
+      ],
+      "sample": "orgate-question/plugin-sample/astell-plugin"
+    },
+    {
+      "id": "post.share",
+      "status": "stable",
+      "since": "v0.3",
+      "label": "投稿共有",
+      "tier": "action",
+      "kinds": [
+        "action"
+      ],
+      "placement": {
+        "surface": "post.shareSheet",
+        "constraints": [
+          "共有 FOW の「プラグイン」節に 1 行(宣言だけで自動登録)",
+          "プラグイン FOW は共有 FOW の子(インライン)"
+        ]
+      },
+      "calls": [
+        "post.share",
+        "post.share.close"
+      ],
+      "hostFns": [
+        "composer.open",
+        "clipboard.set",
+        "url.open",
+        "astell.share",
+        "fow.open",
+        "fow.close",
+        "toast"
+      ],
+      "permissions": {
+        "required": [
+          "fow.widget"
+        ],
+        "optional": [
+          "storage.safe"
+        ]
+      },
+      "lifecycle": {
+        "stateScope": "component",
+        "offscreenPolicy": "dispose"
+      },
+      "fallback": [
+        "timeout",
+        "crashed"
+      ],
+      "sample": "orgate-question/plugin-sample/post-share-plugin"
+    },
+    {
+      "id": "post.action",
+      "status": "stable",
+      "since": "v0.7",
+      "label": "投稿のアクションボタン",
+      "tier": "action",
+      "kinds": [
+        "action",
+        "sns"
+      ],
+      "placement": {
+        "surface": "post.actionBar",
+        "constraints": [
+          "manifest.actions を宣言(tags = 希望スロット)",
+          "既存ボタンとタグの類似度 ≥ 0.85 でバンドルの最下層へ",
+          "1 投稿 1 本、容量超過はサイドメニューへ(V6)",
+          "説明(label)必須"
+        ]
+      },
+      "calls": [
+        "post.action"
+      ],
+      "hostFns": [
+        "composer.open",
+        "clipboard.set",
+        "url.open",
+        "astell.share",
+        "fow.open",
+        "fow.close",
+        "toast"
+      ],
+      "permissions": {
+        "required": [
+          "fow.widget"
+        ],
+        "optional": [
+          "register_action",
+          "storage.safe"
+        ]
+      },
+      "actionKey": "slot:<pluginId>:<actionId>",
+      "lifecycle": {
+        "stateScope": "account",
+        "offscreenPolicy": "keepAlive"
+      },
+      "fallback": [
+        "timeout",
+        "crashed"
+      ],
+      "sample": "orgate-question/plugin-sample/post-action-plugin"
+    },
+    {
+      "id": "post.attachment",
+      "status": "planned",
+      "label": "投稿内の独自メディア・投票",
+      "tier": "media",
+      "kinds": [
+        "sns",
+        "action"
+      ],
+      "placement": {
+        "surface": "timeline.tile.attachment",
+        "constraints": [
+          "PostCard の幅内",
+          "固定の上限高",
+          "スクロール禁止"
+        ]
+      },
+      "calls": [],
+      "hostFns": [],
+      "permissions": {
+        "required": [
+          "tag_media"
+        ],
+        "optional": [
+          "replace_media"
+        ]
+      },
+      "lifecycle": {
+        "stateScope": "component",
+        "offscreenPolicy": "suspend"
+      },
+      "fallback": [
+        "loading",
+        "timeout",
+        "crashed",
+        "unsupported"
+      ]
+    },
+    {
+      "id": "composer.action",
+      "status": "planned",
+      "label": "コンポーザーの追加ボタン",
+      "tier": "action",
+      "kinds": [
+        "action"
+      ],
+      "placement": {
+        "surface": "composer.toolbar",
+        "constraints": [
+          "入力内容へのアクセス権を明示"
+        ]
+      },
+      "calls": [],
+      "hostFns": [
+        "composer.text.replace",
+        "fow.open",
+        "fow.close",
+        "toast"
+      ],
+      "permissions": {
+        "required": [
+          "fow.widget"
+        ],
+        "optional": []
+      },
+      "lifecycle": {
+        "stateScope": "screen",
+        "offscreenPolicy": "suspend"
+      },
+      "fallback": [
+        "timeout",
+        "crashed",
+        "permissionDenied"
+      ]
+    },
+    {
+      "id": "composer.panel",
+      "status": "planned",
+      "label": "コンポーザーのパネル(画像編集 / MFM / Emoji)",
+      "tier": "action",
+      "kinds": [
+        "action"
+      ],
+      "placement": {
+        "surface": "composer.panel",
+        "constraints": [
+          "BottomSheet / InlineFrame",
+          "閉じる操作必須(ホスト所有)"
+        ]
+      },
+      "calls": [],
+      "hostFns": [
+        "composer.text.replace",
+        "fow.open",
+        "fow.close",
+        "toast"
+      ],
+      "permissions": {
+        "required": [
+          "fow.widget"
+        ],
+        "optional": []
+      },
+      "lifecycle": {
+        "stateScope": "screen",
+        "offscreenPolicy": "suspend"
+      },
+      "fallback": [
+        "timeout",
+        "crashed"
+      ]
+    },
+    {
+      "id": "timeline.inline",
+      "status": "planned",
+      "label": "TL 内の独自カード(Relay / Trend / 広告)",
+      "tier": "full",
+      "kinds": [
+        "view",
+        "trend"
+      ],
+      "placement": {
+        "surface": "timeline.list",
+        "constraints": [
+          "VirtualList 互換",
+          "安定 key 必須",
+          "広告枠はホスト所有(仮案 §18)"
+        ]
+      },
+      "calls": [],
+      "hostFns": [],
+      "permissions": {
+        "required": [
+          "render"
+        ],
+        "optional": []
+      },
+      "roles": {
+        "requiredForReplaceTile": [
+          "contentBody"
+        ],
+        "hostGuaranteed": [
+          "threadNav"
+        ]
+      },
+      "lifecycle": {
+        "stateScope": "account",
+        "offscreenPolicy": "suspend"
+      },
+      "fallback": [
+        "loading",
+        "timeout",
+        "crashed"
+      ]
+    },
+    {
+      "id": "screen.header",
+      "status": "planned",
+      "label": "画面上部(検索補助など)",
+      "tier": "full",
+      "kinds": [
+        "view"
+      ],
+      "placement": {
+        "surface": "screen.header",
+        "constraints": [
+          "sticky 上限高",
+          "collapse 可能"
+        ]
+      },
+      "calls": [],
+      "hostFns": [
+        "fow.open",
+        "fow.close",
+        "toast"
+      ],
+      "permissions": {
+        "required": [
+          "render",
+          "fow.widget"
+        ],
+        "optional": []
+      },
+      "lifecycle": {
+        "stateScope": "screen",
+        "offscreenPolicy": "suspend"
+      },
+      "fallback": [
+        "timeout",
+        "crashed"
+      ]
+    },
+    {
+      "id": "screen.footer",
+      "status": "planned",
+      "label": "画面下部の mini dock(VC / WebView / Assistant)",
+      "tier": "full",
+      "kinds": [
+        "view"
+      ],
+      "placement": {
+        "surface": "screen.footer",
+        "constraints": [
+          "keyboard 回避",
+          "minimize / close 必須(ホスト所有)"
+        ]
+      },
+      "calls": [],
+      "hostFns": [
+        "fow.open",
+        "fow.close",
+        "toast"
+      ],
+      "permissions": {
+        "required": [
+          "render",
+          "fow.widget"
+        ],
+        "optional": []
+      },
+      "lifecycle": {
+        "stateScope": "screen",
+        "offscreenPolicy": "keepAlive"
+      },
+      "fallback": [
+        "timeout",
+        "crashed"
+      ]
+    },
+    {
+      "id": "screen.overlay",
+      "status": "planned",
+      "label": "画面のオーバーレイ(画像解析ボタンなど)",
+      "tier": "full",
+      "kinds": [
+        "view",
+        "action"
+      ],
+      "placement": {
+        "surface": "screen.overlay",
+        "constraints": [
+          "anchor 必須(geometry.lookup)",
+          "hit-test 範囲と z-index 上限"
+        ]
+      },
+      "calls": [],
+      "hostFns": [
+        "geometry.lookup",
+        "fow.open",
+        "fow.close",
+        "toast"
+      ],
+      "permissions": {
+        "required": [
+          "fow.system"
+        ],
+        "optional": []
+      },
+      "lifecycle": {
+        "stateScope": "screen",
+        "offscreenPolicy": "suspend"
+      },
+      "fallback": [
+        "timeout",
+        "crashed"
+      ]
+    },
+    {
+      "id": "page",
+      "status": "planned",
+      "label": "ページ型(全画面プラグイン、Misskey Play などの移植先)",
+      "tier": "page",
+      "kinds": [
+        "view"
+      ],
+      "placement": {
+        "surface": "screen.fullscreen",
+        "route": "custom:<pluginId>",
+        "constraints": [
+          "app-owned の back / escape を奪えない",
+          "BottomNavigation / safe area はホスト",
+          "ホストのルーティングと一緒に決める(plugin-sample/custom-page-plugin)"
+        ]
+      },
+      "calls": [
+        "page.open",
+        "page.close"
+      ],
+      "hostFns": [
+        "fow.open",
+        "fow.close",
+        "storage.get",
+        "storage.set",
+        "storage.delete",
+        "toast",
+        "url.open"
+      ],
+      "permissions": {
+        "required": [
+          "render"
+        ],
+        "optional": [
+          "storage.safe",
+          "network"
+        ]
+      },
+      "lifecycle": {
+        "stateScope": "screen",
+        "offscreenPolicy": "suspend"
+      },
+      "fallback": [
+        "loading",
+        "timeout",
+        "crashed",
+        "unsupported"
+      ],
+      "sample": "orgate-question/plugin-sample/custom-page-plugin"
+    },
+    {
+      "id": "settings.section",
+      "status": "planned",
+      "label": "プラグイン固有の設定節",
+      "tier": "content",
+      "kinds": [
+        "sns",
+        "action",
+        "view",
+        "trend",
+        "mediaViewer",
+        "postProcessor"
+      ],
+      "placement": {
+        "surface": "settings.page",
+        "constraints": [
+          "plugin identity を常時表示",
+          "settings-page.schema.json のノードだけ"
+        ]
+      },
+      "calls": [
+        "settings.page"
+      ],
+      "hostFns": [
+        "storage.get",
+        "storage.set",
+        "storage.delete"
+      ],
+      "permissions": {
+        "required": [],
+        "optional": [
+          "storage.safe"
+        ]
+      },
+      "lifecycle": {
+        "stateScope": "plugin",
+        "offscreenPolicy": "dispose"
+      },
+      "fallback": [
+        "timeout",
+        "crashed"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rasq.io/schema/slot-registry-1.0.json",
+  "title": "RASQ slot registry (rasq.slots/1, D-005)",
+  "description": "schema/slots.json の形。スロット = プラグインが差し込める面。各スロットは、権限ティア(PROTOCOL §6 V1)、置き場所と制約、ホスト → プラグインの call、プラグイン → ホストのホスト関数、必要な権限、ライフサイクル(仮案 §17)、ホストが持つ fallback を宣言する。",
+  "type": "object",
+  "required": ["schema", "tiers", "lifecycle", "slots"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": "rasq.slots/1" },
+    "$comment": { "type": "string" },
+    "tiers": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/tier" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["sideload", "description"],
+        "properties": { "sideload": { "enum": [true, false, "tagOnly"] }, "description": { "type": "string" } }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "required": ["kinds", "stateScope", "offscreenPolicy", "fallback"],
+      "properties": {
+        "$comment": { "type": "string" },
+        "kinds": { "type": "array", "items": { "enum": ["mount", "unmount", "visible", "hidden", "cancel"] } },
+        "stateScope": { "type": "array", "items": { "$ref": "#/$defs/stateScope" } },
+        "offscreenPolicy": { "type": "array", "items": { "$ref": "#/$defs/offscreenPolicy" } },
+        "fallback": { "type": "array", "items": { "$ref": "#/$defs/fallback" } },
+        "hostOwned": { "type": "string" }
+      }
+    },
+    "slots": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/slot" } }
+  },
+  "$defs": {
+    "slotId": { "type": "string", "pattern": "^[a-z][a-zA-Z0-9]*(\\.[a-z][a-zA-Z0-9]*)*$" },
+    "tier": { "enum": ["content", "media", "action", "avatar", "full", "page"] },
+    "kind": { "enum": ["sns", "action", "view", "trend", "mediaViewer", "postProcessor"] },
+    "permission": {
+      "enum": ["render", "replace_tile", "transform_content", "tag_media", "replace_media", "register_action", "decorate_avatar", "fow.widget", "fow.interstitial", "fow.system", "network", "gpu_ml", "storage.safe", "storage.unsafe", "auto_hook", "mute.words"]
+    },
+    "role": { "enum": ["threadNav", "contentBody", "mediaItem", "actionBar"] },
+    "stateScope": { "enum": ["ephemeral", "component", "screen", "account", "plugin"] },
+    "offscreenPolicy": { "enum": ["keepAlive", "suspend", "dispose"] },
+    "fallback": { "enum": ["loading", "timeout", "crashed", "permissionDenied", "unsupported", "offline"] },
+    "fnName": { "type": "string", "pattern": "^[a-z][a-zA-Z0-9]*(\\.[a-zA-Z][a-zA-Z0-9]*)*$" },
+    "slot": {
+      "type": "object",
+      "required": ["id", "status", "label", "tier", "kinds", "placement", "calls", "hostFns", "permissions", "lifecycle", "fallback"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/slotId" },
+        "status": { "enum": ["stable", "planned", "deprecated"] },
+        "since": { "type": "string", "description": "plugin-sample/CONTRACT.md の版" },
+        "label": { "type": "string" },
+        "tier": { "$ref": "#/$defs/tier" },
+        "kinds": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/kind" }, "description": "このスロットを宣言できる manifest.kind" },
+        "placement": {
+          "type": "object",
+          "required": ["surface", "constraints"],
+          "properties": {
+            "surface": { "type": "string", "description": "ホスト側の面の名前(仮案 §17 の placement)" },
+            "route": { "type": "string", "description": "ページ型のルート(custom:<pluginId>)" },
+            "constraints": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "calls": { "type": "array", "items": { "$ref": "#/$defs/fnName" }, "description": "ホスト → プラグイン(call の fn)" },
+        "hostFns": { "type": "array", "items": { "$ref": "#/$defs/fnName" }, "description": "プラグイン → ホスト(hostFn の fn)。host-fn.schema.json の $defs.fns にあること" },
+        "permissions": {
+          "type": "object",
+          "required": ["required", "optional"],
+          "properties": {
+            "required": { "type": "array", "items": { "$ref": "#/$defs/permission" } },
+            "optional": { "type": "array", "items": { "$ref": "#/$defs/permission" } }
+          }
+        },
+        "roles": {
+          "type": "object",
+          "properties": {
+            "$comment": { "type": "string" },
+            "requiredForReplaceTile": { "type": "array", "items": { "$ref": "#/$defs/role" } },
+            "hostGuaranteed": { "type": "array", "items": { "$ref": "#/$defs/role" } }
+          }
+        },
+        "actionKey": { "type": "string", "description": "永続キーの形(action-ref.schema.json の actionKey)" },
+        "lifecycle": {
+          "type": "object",
+          "required": ["stateScope", "offscreenPolicy"],
+          "properties": { "stateScope": { "$ref": "#/$defs/stateScope" }, "offscreenPolicy": { "$ref": "#/$defs/offscreenPolicy" } }
+        },
+        "fallback": { "type": "array", "items": { "$ref": "#/$defs/fallback" } },
+        "sample": { "type": "string", "description": "参考実装のリポジトリ" }
+      }
+    }
+  }
+}

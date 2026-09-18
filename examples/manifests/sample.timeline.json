@@ -1,0 +1,12 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "sample.timeline",
+  "name": "Unicode 順ソート(サンプル)",
+  "version": "0.2.0",
+  "kind": "view",
+  "description": "本文/表示名/ハンドルを Unicode コードポイント順で並べるソートノード",
+  "slots": [
+    "tl"
+  ],
+  "permissions": []
+}
