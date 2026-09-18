@@ -12,6 +12,7 @@ Misskey アダプタ(`packages/sns_misskey`)で検証したものを、ここで
 - [`docs/fow.md`](docs/fow.md) — FOW 拡張面(open/close・anchor・親子・surface patch・ライフサイクル)
 - [`docs/sns-boundary.md`](docs/sns-boundary.md) — SNS 抽象関数(`sns.*`)と Post ワイヤ `rasq.post/1`
 - [`docs/slots.md`](docs/slots.md) — **スロットプラグイン契約(正典、v0.8)**: 9 スロットの call / ホスト関数 / FOW の着き方。機械可読な登録簿は [`schema/slots.json`](schema/slots.json)。
+- [`docs/cli.md`](docs/cli.md) — **`rasq` CLI の設計(D-244)**: ワークスペース(`rasq.toml`)、雛形、配下へのバンドル、`.rasqpkg` の目次 [`schema/bundle.schema.json`](schema/bundle.schema.json)、確認・ビルド・公開。
   `plugin-sample/*/CONTRACT.md` はここへのポインタ
 
 ## サンプル
@@ -39,6 +40,7 @@ Misskey アダプタ(`packages/sns_misskey`)で検証したものを、ここで
 ## SDK(CLI)の想定フロー(ユーザー指定、未実装)
 
 プラグイン作者向けの CLI は次の流れになる想定。ここに書いておき、実装時に `schema/` の登録簿とマニフェストを土台にする。
+コマンド・ディレクトリ・配布物の形まで落とした設計は [`docs/cli.md`](docs/cli.md)(D-244)。
 
 1. **土台を読む**: ベースになる SNS プラグイン(と、データを流すための Access Token)を読み込む。SNS プラグイン自体を作るときは何も読まない。
 2. **雛形を選ぶ**: スロット(`schema/slots.json`)ごとの雛形から選ぶ。1 つ作るごとに、土台の SNS プラグインの**配下にバンドル**される(ActionRef の `pluginId` と `wasm.call` の親子関係)。
