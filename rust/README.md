@@ -43,8 +43,10 @@ wasm plugin sample and the native runtime that hosts it inside Flutter.
   `.rasq/dev.json`) / `build` (`.rasqpkg` = zstd tar with `bundle.json` first
   and `SHA512SUMS` last, D-034) / `key init|show` (developer ed25519 key,
   signs the package's SHA-512 digest like the host's `verifyArtifact`) /
-  `inspect` (table of contents vs. contents, hashes, signature). Schemas,
-  templates and the kit are embedded, so it works offline.
+  `inspect` (table of contents vs. contents, hashes, signature) / `publish`
+  (Central admin API: listing → version → artifact, `--dry-run` writes the
+  requests to `dist/publish/`). Schemas, templates and the kit are embedded,
+  so everything but `publish` works offline.
 - [`rasq_wasm_runtime_core/`](rasq_wasm_runtime_core) — a native cdylib that
   embeds [`wasmi`](https://crates.io/crates/wasmi) (a pure-Rust WASM
   *interpreter*, chosen per D-007 because iOS forbids JIT'ing runtimes) and

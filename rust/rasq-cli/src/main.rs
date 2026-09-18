@@ -1,12 +1,12 @@
 //! `rasq` — RASQ プラグイン作者向け CLI(docs/cli.md、D-244)。
 //!
-//! 第一期の範囲(①〜④): `init` / `new` / `check` / `test` / `build [--raw]` / `registry` / `token` / `dev` / `key` / `inspect`。
-//! `publish`(⑤)は docs/cli.md §9 の順で足す。
+//! 第一期(①〜⑤): `init` / `new` / `check` / `test` / `build [--raw]` / `registry` / `token` / `dev` / `key` / `inspect` / `publish`。
 
 mod credentials;
 mod embed;
 mod key;
 mod pkg;
+mod publish;
 mod schema;
 mod wasm;
 mod workspace;
@@ -86,6 +86,32 @@ enum Cmd {
         #[command(subcommand)]
         cmd: KeyCmd,
     },
+    /// Central の管理 API へ公開する(掲載 → 版 → 配布物)。--dry-run で要求を dist/publish/ に書き出すだけ
+    Publish {
+        /// Central の URL(例 http://100.91.218.56:8080)
+        #[arg(long)]
+        central: String,
+        #[arg(long, default_value = "stable", value_parser = ["stable", "beta"])]
+        channel: String,
+        /// リリースノート(Markdown)のファイル
+        #[arg(long, value_name = "FILE")]
+        notes_file: Option<PathBuf>,
+        /// 要求を dist/publish/ に書くだけ(Central には触らない。トークン不要)
+        #[arg(long)]
+        dry_run: bool,
+        /// 掲載(PUT /admin/plugins/{id})を送らない(既に掲載があるとき)
+        #[arg(long)]
+        skip_listing: bool,
+        /// そのチャンネルの現在版にしない
+        #[arg(long)]
+        no_make_current: bool,
+        /// dist/ を作り直さない(既にある .rasqpkg を送る)
+        #[arg(long)]
+        no_build: bool,
+        /// トークンを読む環境変数(無ければ credentials.toml の [central."<host>"])
+        #[arg(long, default_value = "RASQ_CENTRAL_TOKEN", value_name = "VAR")]
+        token_env: String,
+    },
     /// .rasqpkg の中身を目次(bundle.json)と突き合わせ、.sig.json があれば署名も確かめる
     Inspect {
         pkg: PathBuf,
@@ -130,8 +156,11 @@ enum KeyCmd {
 enum TokenCmd {
     /// トークンを保存する。端末なら非表示入力、パイプなら標準入力の 1 行、--from-env なら環境変数(argv では受け取らない)
     Set {
-        /// kind:instance:handle(例 misskey:misskey.io:yamada)
+        /// kind:instance:handle(例 misskey:misskey.io:yamada)。--central なら Central の host[:port]
         account_key: String,
+        /// Central(publish)のトークンとして保存する
+        #[arg(long)]
+        central: bool,
         /// トークンを環境変数から読む
         #[arg(long, value_name = "VAR")]
         from_env: Option<String>,
@@ -173,6 +202,7 @@ fn run() -> Result<()> {
         Cmd::Build { raw, no_build, no_sign } => build(raw, no_build, no_sign),
         Cmd::Key { cmd } => key_cmd(cmd),
         Cmd::Inspect { pkg, extract } => inspect(&pkg, extract.as_deref()),
+        Cmd::Publish { central, channel, notes_file, dry_run, skip_listing, no_make_current, no_build, token_env } => publish_cmd(central, channel, notes_file, dry_run, skip_listing, !no_make_current, no_build, &token_env),
         Cmd::Registry { what } => registry(what),
         Cmd::Token { cmd } => token(cmd),
         Cmd::Dev { watch, debug } => dev(watch, debug),
@@ -437,13 +467,19 @@ fn report(label: &str, errs: &[String], warns: &[String]) {
 
 fn build(raw: bool, no_build: bool, no_sign: bool) -> Result<()> {
     let (root, ws) = Workspace::find()?;
+    build_in(&root, &ws, raw, no_build, no_sign).map(|_| ())
+}
+
+/// dist/ を作る。戻りは (ファイル名, bundle.json)。
+fn build_in(root: &Path, ws: &Workspace, raw: bool, no_build: bool, no_sign: bool) -> Result<Vec<(String, Value)>> {
+    let root = root.to_path_buf();
     if ws.targets(&root).is_empty() {
         bail!("ビルド対象がありません(rasq new <slot> <name>)");
     }
     if !no_build {
         build_wasm(&root, "release")?;
     }
-    let v = verify(&root, &ws, "release")?;
+    let v = verify(&root, ws, "release")?;
     if v.errors > 0 {
         bail!("{} errors(rasq check を通してから)", v.errors);
     }
@@ -474,7 +510,8 @@ fn build(raw: bool, no_build: bool, no_sign: bool) -> Result<()> {
             }
         }
     };
-    for p in pkg::plan(&root, &ws, "release")? {
+    let mut built = Vec::new();
+    for p in pkg::plan(&root, ws, "release")? {
         let bytes = pkg::serialize(&p)?;
         let out = dist.join(&p.file_name);
         std::fs::write(&out, &bytes)?;
@@ -487,11 +524,58 @@ fn build(raw: bool, no_build: bool, no_sign: bool) -> Result<()> {
             std::fs::write(&sp, serde_json::to_string_pretty(&sig)?)?;
             println!("  {}", sp.strip_prefix(&root).unwrap_or(&sp).display());
         }
+        built.push((p.file_name.clone(), p.bundle.clone()));
     }
     if raw {
         println!("rasq-client: 「WASMプラグイン試験 (dev)」→ .wasm のパスからインポート に上の絶対パス({})を入れる", dist.display());
     } else {
         println!("note: 今のホストは .rasqpkg をまだ展開しない(M4 の 4 番)。端末で試すなら --raw の .wasm を使う");
+    }
+    Ok(built)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn publish_cmd(central: String, channel: String, notes_file: Option<PathBuf>, dry_run: bool, skip_listing: bool, make_current: bool, no_build: bool, token_env: &str) -> Result<()> {
+    let (root, ws) = Workspace::find()?;
+    if !central.starts_with("http://") && !central.starts_with("https://") {
+        bail!("--central は http(s):// で始まる URL です: {central}");
+    }
+    let notes = match notes_file {
+        Some(f) => std::fs::read_to_string(&f).with_context(|| format!("{} を読めません", f.display()))?,
+        None => String::new(),
+    };
+    let packages = if no_build {
+        // dist/ にあるものを plan の名前で拾う(build 済み前提)
+        let dist = root.join("dist");
+        let mut v = Vec::new();
+        for p in pkg::plan(&root, &ws, "release")? {
+            let bytes = std::fs::read(dist.join(&p.file_name)).with_context(|| format!("dist/{} がありません(rasq build を先に)", p.file_name))?;
+            let ins = pkg::inspect(&bytes)?;
+            v.push((p.file_name, ins.bundle));
+        }
+        v
+    } else {
+        build_in(&root, &ws, false, false, false)?
+    };
+    let token = if dry_run {
+        None
+    } else {
+        match std::env::var(token_env) {
+            Ok(t) if !t.trim().is_empty() => Some(t.trim().to_string()),
+            _ => credentials::load()?.central.get(&publish::host_key(&central)).map(|c| c.token.clone()),
+        }
+    };
+    if !dry_run && token.is_none() {
+        bail!("Central のトークンがありません: 環境変数 {token_env} か、rasq token set --central {}", publish::host_key(&central));
+    }
+    let opts = publish::Options { central: central.clone(), channel, notes, dry_run, skip_listing, make_current, token };
+    let done = publish::run(&root, &ws, &packages, &opts)?;
+    if dry_run {
+        println!("dry-run: {} 件の配布物の要求を {} に書きました(Authorization は $RASQ_CENTRAL_TOKEN のまま)", done.len(), root.join("dist/publish").display());
+    } else {
+        for d in &done {
+            println!("公開しました: {}/api/v1/plugins/{}(版 {}。掲載の status は in_review のまま = 審査待ち)", central.trim_end_matches('/'), d.id, d.version);
+        }
     }
     Ok(())
 }
@@ -579,7 +663,18 @@ fn hex(b: &[u8]) -> String {
 
 fn token(cmd: TokenCmd) -> Result<()> {
     match cmd {
-        TokenCmd::Set { account_key, from_env, host, no_workspace } => {
+        TokenCmd::Set { account_key, central: true, from_env, .. } => {
+            let host = publish::host_key(&account_key);
+            if host.is_empty() || host.contains(char::is_whitespace) {
+                bail!("--central には host[:port] を渡します(例 100.91.218.56:8080)");
+            }
+            let tok = credentials::read_token(from_env.as_deref(), &format!("Central {host}(管理トークン)"))?;
+            let mut c = credentials::load()?;
+            c.central.insert(host.clone(), credentials::Central { token: tok.clone(), updated_at: credentials::now() });
+            credentials::save(&c)?;
+            println!("保存しました: central {host} → {}(token = {})", credentials::path()?.display(), credentials::mask(&tok));
+        }
+        TokenCmd::Set { account_key, central: false, from_env, host, no_workspace } => {
             let (kind, instance, handle) = credentials::parse_account_key(&account_key)?;
             let host = host.unwrap_or_else(|| instance.to_string());
             let tok = credentials::read_token(from_env.as_deref(), &format!("{handle}@{instance} ({kind})"))?;
@@ -613,7 +708,7 @@ fn token(cmd: TokenCmd) -> Result<()> {
         }
         TokenCmd::Remove { account_key } => {
             let mut c = credentials::load()?;
-            if c.accounts.remove(&account_key).is_none() {
+            if c.accounts.remove(&account_key).is_none() && c.central.remove(&publish::host_key(&account_key)).is_none() {
                 bail!("{account_key} は保存されていません");
             }
             credentials::save(&c)?;

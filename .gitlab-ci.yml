@@ -57,6 +57,8 @@ rust:
     - $RASQ new post.share tpl
     - $RASQ build
     - $RASQ inspect dist/ci.third.tpl-0.1.0.rasqpkg
+    - $RASQ publish --central http://central.invalid:8080 --dry-run --no-build
+    - test -f dist/publish/ci.third.tpl-0.1.0/04-upload-bundle.bin && test -f dist/publish/ci.third.tpl-0.1.0/03-publish-version.json
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH

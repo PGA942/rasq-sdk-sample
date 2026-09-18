@@ -27,6 +27,31 @@ pub struct Workspace {
     pub assets: Vec<Asset>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<Model>,
+    /// ストアの掲載(Central の UpsertPlugin)。無ければ manifest の name / description / supportedSns から。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listing: Option<Listing>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct Listing {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sns: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_url: Option<String>,
+    #[serde(default)]
+    pub has_ads: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub developer: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -112,6 +137,7 @@ impl Workspace {
             libs: vec![],
             assets: vec![],
             models: vec![],
+            listing: None,
         }
     }
 

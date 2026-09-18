@@ -1431,6 +1431,7 @@ dependencies = [
  "sha2",
  "tar",
  "toml",
+ "ureq",
  "wasmi",
  "zstd",
 ]

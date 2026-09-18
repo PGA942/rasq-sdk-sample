@@ -6,9 +6,9 @@
 > 流れそのものは [`../README.md`](../README.md#sdkcliの想定フローユーザー指定) の 5 段。ここはそれを
 > コマンド・ディレクトリ・ファイル形式・ホスト側の前提まで落としたもの。
 >
-> **実装状況**: §9 の ①〜④(kit の引き上げ、雛形 10 個、`init / new / check / test / build [--raw] / registry`、
-> `token set|list|remove` / `dev [--watch]`、`.rasqpkg` の `build` / `key init|show` / `inspect`)は
-> [`../rust/rasq-cli`](../rust/rasq-cli) に実装済み。⑤ `publish` は未実装。
+> **実装状況**: §9 の ①〜⑤(kit の引き上げ、雛形 10 個、`init / new / check / test / build [--raw] / registry`、
+> `token set|list|remove` / `dev [--watch]`、`.rasqpkg` の `build` / `key init|show` / `inspect`、`publish [--dry-run]`)は
+> [`../rust/rasq-cli`](../rust/rasq-cli) に実装済み(第一期は完了)。第二期の項目は §8 / §10。
 
 ## 0. 決めたこと(要約)
 
@@ -221,24 +221,32 @@ SHA512SUMS                  # 目次と同じ値の一覧(手で確かめる用)
 `.rasqpkg` の展開・検証(M4 の 4 番、D-034)が入り次第 `--raw` は不要になる。ホスト側の展開は `rasq inspect` と同じ手順
 (zstd → tar → 先頭 `bundle.json` → スキーマ → sha512 / sizeBytes → `SHA512SUMS` → `.sig.json`)で書ける。
 
-## 7. 公開(`rasq publish`)
+## 7. 公開(`rasq publish`、実装済み)
 
 ```
-rasq publish --central https://…:8080 --channel stable|beta [--notes-file NOTES.md] [--dry-run]
+rasq publish --central http://100.91.218.56:8080 [--channel stable|beta] [--notes-file NOTES.md] [--dry-run] [--skip-listing] [--no-make-current] [--no-build]
 ```
 
-Central の管理 API(`rasq-central/src/admin/mod.rs`)に順に投げる。トークンは `RASQ_CENTRAL_TOKEN` 環境変数か
-`credentials.toml` の `[central.<host>]`。
+既定では `rasq build` を通してから(`--no-build` で `dist/` のものをそのまま)、配布物ごとに Central の管理 API
+(`rasq-central/src/admin/mod.rs`)へ順に投げる。トークンは `RASQ_CENTRAL_TOKEN` 環境変数(`--token-env` で変更)か
+`credentials.toml` の `[central."<host[:port]>"]`(`rasq token set --central <host>` で保存)。`Authorization: Bearer <token>`。
 
-1. `PUT /api/v1/admin/plugins/{id}` … `UpsertPlugin`(`name` / `summary` / `description` / `sns` / `category` …)。
-   値は `rasq.toml` の `[listing]` から。既に掲載があれば省略できる(`--skip-listing`)
+0. `GET /api/v1/plugins/{id}/manifest`(公開中の版)… `permissionsAdded` の差分の元。404 / 403(未掲載・審査中)なら新規扱い
+1. `PUT /api/v1/admin/plugins/{id}` … `UpsertPlugin`(`name` / `summary` / `description` / `sns` / `category` / `iconUrl` / `hasAds` / `price` / `developer`)。
+   値は `rasq.toml` の `[listing]` から、無ければ root の manifest(`name` / `description` / `supportedSns`)。`origin` / `status` は
+   送らないので Central の既定(`community` / `in_review` = 審査待ち)。既に掲載があれば `--skip-listing`
 2. `POST /api/v1/admin/plugins/{id}/versions` … `NewVersion`(`version` / `channel` / `manifest` / `notes` / `permissionsAdded` / `makeCurrent`)。
-   `permissionsAdded` は `GET /plugins/{id}/manifest`(公開中の版)との差分から CLI が作る(D-033 の権限増加表示)
-3. `PUT /api/v1/admin/plugins/{id}/versions/{version}/artifacts/bundle?kind=bundle` … `.rasqpkg` のバイト列。
-   応答の `sha512` が手元と一致することを確かめる。`lazy` のモデルは `artifacts/<artifactId>?kind=model` に別送
+   `manifest` は `.rasqpkg` の中の `manifest.json`(Central が id / version をパスと突き合わせる)
+3. `PUT /api/v1/admin/plugins/{id}/versions/{version}/artifacts/bundle?kind=bundle`(`Content-Type: application/zstd`)… `.rasqpkg` のバイト列。
+   応答の `artifact.sha512` が手元と一致することを確かめ、ストア署名と `storePublicKey` を表示する
+4. `lazy` のモデルごとに `PUT …/artifacts/<artifactId>?kind=model&lazy=true`(`runtimes.*.file` の本体。手元に無ければ飛ばして案内)
 
-`--dry-run` は 3 つの要求を `dist/publish/<n>-<route>.json` と `.bin` に書き出すだけ。Central を触れない作者は
-これを審査側に渡す(WF p9 の「公開申請」がこの束を受け取る口になる想定 — 第二期)。
+`--dry-run` は要求を `dist/publish/<pkg>/NN-<label>.json`(+ 配布物は `.bin` と `bodySha512`)に書き出すだけ(トークン不要、
+`Authorization` は `Bearer $RASQ_CENTRAL_TOKEN` のまま)。Central を触れない作者はこれを審査側に渡す(WF p9 の「公開申請」が
+この束を受け取る口になる想定 — 第二期)。
+
+手元の Central(`http://100.91.218.56:8080`、管理トークン)で `net.example.later` / `net.example.bylen` を投入して、掲載 → 版 →
+配布物(sha512 一致、ストア署名付き)まで通ることを確認済み。
 
 ## 8. ホスト側に要る変更(第一期の CLI が前提にするもの / しないもの)
 
@@ -253,12 +261,12 @@ Central の管理 API(`rasq-central/src/admin/mod.rs`)に順に投げる。ト�
 
 ## 9. 実装計画
 
-- `rust/rasq-cli`(bin `rasq`): `clap` / `serde` / `toml` / `jsonschema` / `wasmi` / `sha2` / `ed25519-dalek` + `getrandom` / `tar` + `zstd` / `rpassword` / `reqwest`(publish のみ、未)。
+- `rust/rasq-cli`(bin `rasq`): `clap` / `serde` / `toml` / `jsonschema` / `wasmi` / `sha2` / `ed25519-dalek` + `getrandom` / `tar` + `zstd` / `rpassword` / `ureq`(rustls、publish のみ)。
   `schema/*.json` と `templates/` は `include_dir!` で同梱し、`rasq registry` はその同梱物を出す
 - `rust/rasq-plugin-kit`: plugin-sample の `kit/src/lib.rs` をそのまま移す(D-244i)。`rasq init` がワークスペースの `kit/` に写し、雛形は `path = "../../kit"`
 - `templates/<slot>/`: §3 の 9 つ + `sns`。`{{id}}` / `{{name}}` / `{{display}}` / `{{slot}}` / `{{kit_path}}` の置換だけ(テンプレートエンジンは使わない)
 - CI(`.gitlab-ci.yml`): `rust` ジョブで `rasq-cli` を組み、全雛形を `new → check` する
-- 順番: ✅ ① kit 引き上げ + 雛形 → ✅ ② `init / new / check / build --raw` → ✅ ③ `token / dev` → ✅ ④ `build`(.rasqpkg)+ `key` + `inspect` → ⑤ `publish`。
+- 順番: ✅ ① kit 引き上げ + 雛形 → ✅ ② `init / new / check / build --raw` → ✅ ③ `token / dev` → ✅ ④ `build`(.rasqpkg)+ `key` + `inspect` → ✅ ⑤ `publish`(第一期完了)。
   ①〜② で今日の plugin-sample と同じものが CLI から作れる
 
 ## 10. 未決
