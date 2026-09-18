@@ -11,6 +11,8 @@ Misskey アダプタ(`packages/sns_misskey`)で検証したものを、ここで
 - [`docs/host-functions.md`](docs/host-functions.md) — ホスト関数(storage / net.fetch / alert / fow.* / ml.infer)
 - [`docs/fow.md`](docs/fow.md) — FOW 拡張面(open/close・anchor・親子・surface patch・ライフサイクル)
 - [`docs/sns-boundary.md`](docs/sns-boundary.md) — SNS 抽象関数(`sns.*`)と Post ワイヤ `rasq.post/1`
+- [`docs/slots.md`](docs/slots.md) — **スロットプラグイン契約(正典、v0.8)**: 9 スロットの call / ホスト関数 / FOW の着き方。機械可読な登録簿は [`schema/slots.json`](schema/slots.json)。
+  `plugin-sample/*/CONTRACT.md` はここへのポインタ
 
 ## サンプル
 
@@ -33,6 +35,16 @@ Misskey アダプタ(`packages/sns_misskey`)で検証したものを、ここで
 - [`examples/manifests/`](examples/manifests) — plugin-sample 12 個 + ページ型(計画中)のマニフェスト例
 - `python3 schema/validate.py` — スキーマと例、登録簿とマニフェストの突き合わせ(CI の `schema` ジョブ。`pip install jsonschema referencing`)
 - [`examples/misskey.function.json`](examples/misskey.function.json) — Misskey 公式プラグインのマニフェスト例
+
+## SDK(CLI)の想定フロー(ユーザー指定、未実装)
+
+プラグイン作者向けの CLI は次の流れになる想定。ここに書いておき、実装時に `schema/` の登録簿とマニフェストを土台にする。
+
+1. **土台を読む**: ベースになる SNS プラグイン(と、データを流すための Access Token)を読み込む。SNS プラグイン自体を作るときは何も読まない。
+2. **雛形を選ぶ**: スロット(`schema/slots.json`)ごとの雛形から選ぶ。1 つ作るごとに、土台の SNS プラグインの**配下にバンドル**される(ActionRef の `pluginId` と `wasm.call` の親子関係)。
+3. **コーディング**: wasm 化した既存ライブラリの取り込みや、添付ファイル(アセット / モデル)の書き込みを含む。
+4. **確認**: Flutter(rasq-client の「WASMプラグイン試験 (dev)」)での動作確認と簡易テスト(`cargo test` + `schema/validate.py`)。
+5. **ビルド**: デプロイ向けのビルド(`.rasqpkg`、ストア掲載用の署名は Central 側)。
 
 ## 次にやること(M3)
 
