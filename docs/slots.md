@@ -1,4 +1,4 @@
-# RASQ スロットプラグイン契約 v0.8(正典)
+# RASQ スロットプラグイン契約 v0.9(正典)
 
 > **ここが正典。** 以前は `orgate-question/plugin-sample/*/CONTRACT.md` に同じ文書が複製されていたが、v0.8 から
 > 各リポジトリの `CONTRACT.md` はこのファイルへのポインタだけになった。節番号(§2.1〜§2.9 / §3 / §4 / §5)は複製時代のまま。
@@ -148,6 +148,23 @@
 - ホストは重ねる `Stack` を画像の画素数(`width/height`)のサイズで置き、表示倍率に合わせて拡縮する。
 - 重ねる RRL は `Stack` の子に **`Box`**(ホスト拡張ノード、§3)を `left/top/width/height` で置く。`on: {tap}` でプラグインへ戻る。
 - リンク FOW からは `clipboard.set {text}` / `url.open {url}` / `mute.add {text}`(権限 `mute.words`。ホストは確認してからミュート語に追加)。
+- **全画面アクションバーのボタン宣言(v0.9)**: `viewer.overlay` を宣言したプラグインは、全画面(投稿のメディア / プロフィールの
+  アイコン・バナー)のヘッダーの**全画面アクションバー**に ON / OFF ボタンとして並ぶ(rasq-client D-214 / D-246)。その見た目を
+  マニフェストの `actions` に **`slot: "viewer.overlay"`** の項目で宣言する:
+
+  ```json
+  "actions": [
+    { "id": "toggle", "slot": "viewer.overlay", "label": "QR コード検出", "icon": "qr_code_scanner", "tags": ["全画面表示", "QR"] }
+  ]
+  ```
+
+  `label` はツールチップと「アクションリストの編集」の検索に、`icon`(Material のアイコン名)はボタンに、`tags` は編集画面の
+  検索に使う。押したときの `call` は無い(ホストが有効 / 無効を切り替えて `slots.viewer` に保存し、有効なら画像を渡す)。
+  宣言が無ければホストが `name` と既定のアイコンで作る(v0.8 までのプラグインもそのまま並ぶ)。保存用のキーは
+  ActionKey と同じ形の `slot:<pluginId>:viewer.overlay`(`id` には依らない)。`actions[].slot` を省略した項目は従来どおり
+  `post.action` のボタン。
+- ホストはボタンに**状態**を出す(D-246): 処理中 / 検出あり / 検出なし / 失敗(理由)。`viewer.open` がエラー(`D01` など)を
+  返したときは重ねないのは同じだが、理由はユーザーに見える。
 
 ### 2.5 `post.transform` — 投稿加工([PROTOCOL §4.4](../PROTOCOL.md) と同じ)
 

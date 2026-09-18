@@ -292,7 +292,8 @@
         "constraints": [
           "画像の画素系の Stack を重ねる(ホストが拡縮)",
           "全画面遷移時だけ変換(V9)",
-          "戻る / 閉じるはホスト"
+          "戻る / 閉じるはホスト",
+          "全画面アクションバーに ON / OFF ボタンが出る。見た目は manifest の actions[{slot: \"viewer.overlay\"}] で宣言(無ければ name と既定アイコン)"
         ]
       },
       "calls": [
@@ -325,7 +326,8 @@
         "timeout",
         "crashed"
       ],
-      "sample": "orgate-question/plugin-sample/media-fullscreen-plugin"
+      "sample": "orgate-question/plugin-sample/media-fullscreen-plugin",
+      "actionKey": "slot:<pluginId>:viewer.overlay"
     },
     {
       "id": "astell.action",

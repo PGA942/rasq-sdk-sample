@@ -11,5 +11,17 @@
   "permissions": [
     "fow.widget",
     "mute.words"
+  ],
+  "actions": [
+    {
+      "id": "toggle",
+      "slot": "viewer.overlay",
+      "label": "QR コード検出",
+      "icon": "qr_code_scanner",
+      "tags": [
+        "全画面表示",
+        "QR"
+      ]
+    }
   ]
 }

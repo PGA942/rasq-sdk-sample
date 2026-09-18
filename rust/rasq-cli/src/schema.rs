@@ -90,6 +90,15 @@ pub fn check_manifest(v: &Validator, registry: &[Slot], m: &Value, declared_slot
         if a["id"].as_str().is_some_and(|id| id.contains(':')) {
             f.errors.push(format!("action id に ':' は使えません: {}", a["id"]));
         }
+        if let Some(slot) = a["slot"].as_str() {
+            if !slots.contains(&slot) {
+                f.errors.push(format!("action {} の slot {slot} が manifest.slots {slots:?} にありません", a["id"]));
+            }
+        }
+    }
+    // 全画面アクションバーのボタン宣言(docs/slots.md §2.4 v0.9)。無くても動くが、既定の見た目になる。
+    if slots.contains(&"viewer.overlay") && !m["actions"].as_array().into_iter().flatten().any(|a| a["slot"] == "viewer.overlay") {
+        f.warnings.push("全画面アクションバーのボタン宣言(actions[].slot = \"viewer.overlay\")がありません(ホストが name と既定アイコンで出す)".into());
     }
     if let (Some(cv), Some(mv)) = (cargo_version, m["version"].as_str()) {
         if cv != mv {

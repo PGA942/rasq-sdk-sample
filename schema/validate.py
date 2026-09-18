@@ -123,6 +123,10 @@ def main() -> int:
         for a in m.get("actions", []):
             if ":" in a["id"]:
                 rep.error(f"{label}: action id に ':' は使えません: {a['id']}")
+            if "slot" in a and a["slot"] not in m.get("slots", []):
+                rep.error(f"{label}: action {a['id']} の slot {a['slot']} が manifest.slots にありません")
+        if "viewer.overlay" in m.get("slots", []) and not any(a.get("slot") == "viewer.overlay" for a in m.get("actions", [])):
+            rep.warn(f"{label}: 全画面アクションバーのボタン宣言(actions[].slot = viewer.overlay)が無い(ホストが既定の見た目で出す)")
 
     # 4. ほかの例
     for pattern, schema_name in (("*.rrl.json", "rrl-node.schema.json"), ("*.rsl.json", "rsl-span.schema.json"), ("*.model.json", "model-manifest.schema.json")):
