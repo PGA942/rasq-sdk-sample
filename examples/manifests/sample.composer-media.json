@@ -11,5 +11,16 @@
   "permissions": [
     "fow.widget",
     "storage.safe"
+  ],
+  "actions": [
+    {
+      "id": "edit",
+      "slot": "composer.media",
+      "label": "メディア加工",
+      "icon": "auto_fix_high",
+      "tags": [
+        "Filter"
+      ]
+    }
   ]
 }

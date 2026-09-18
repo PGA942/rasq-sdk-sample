@@ -237,9 +237,10 @@
       "placement": {
         "surface": "composer.mediaEditor",
         "constraints": [
-          "ホストの全画面エディターの中(中央プレビュー + 右の列 + 下付きの第 2 階層)",
-          "パラメーターは第 3 階層 = 下付き FOW",
-          "image/png / image/jpeg のみ(他は C01)"
+          "ホストの加工画面(ネイティブの編集 + 下段バー)の上に重なる編集パネル(中央プレビュー + 下付きの第 2 階層)",
+          "下段バーのボタンは manifest の actions[{slot: \"composer.media\"}] で宣言(無ければ name と既定アイコンのボタン 1 つ、画像だけ)。並べ替え / バンドルはホスト",
+          "出る添付の種類は宣言の accepts(省略 = image/*)。受けない mimeType は C01",
+          "パラメーターは第 3 階層 = 下付き FOW"
         ]
       },
       "calls": [
@@ -276,7 +277,8 @@
         "timeout",
         "crashed"
       ],
-      "sample": "orgate-question/plugin-sample/composer-media-plugin"
+      "sample": "orgate-question/plugin-sample/composer-media-plugin",
+      "actionKey": "slot:<pluginId>:<actionId>"
     },
     {
       "id": "viewer.overlay",

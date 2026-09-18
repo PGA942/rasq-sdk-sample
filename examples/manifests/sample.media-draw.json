@@ -11,5 +11,16 @@
   "permissions": [
     "fow.widget",
     "storage.safe"
+  ],
+  "actions": [
+    {
+      "id": "draw",
+      "slot": "composer.media",
+      "label": "描画",
+      "icon": "brush",
+      "tags": [
+        "Draw"
+      ]
+    }
   ]
 }
