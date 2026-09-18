@@ -1,0 +1,14 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "{{id}}",
+  "name": "{{display}}",
+  "version": "0.1.0",
+  "kind": "mediaViewer",
+  "description": "{{display}}(rasq new viewer.overlay の雛形)",
+  "slots": [
+    "viewer.overlay"
+  ],
+  "permissions": [
+    "fow.widget"
+  ]
+}

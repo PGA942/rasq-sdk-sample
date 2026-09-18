@@ -35,6 +35,30 @@ rust:
     - cargo build --release --target wasm32-unknown-unknown -p bluesky-wasm
     - cargo test
     - cargo test --release -p rasq_wasm_runtime_core
+    # rasq CLI (docs/cli.md): 全雛形を new → check(wasm32 ビルド → plugin.manifest 往復 → スキーマ → cargo test)→ token / dev
+    - cargo build -p rasq-cli
+    - export RASQ=$PWD/target/debug/rasq
+    - rm -rf /tmp/rasq-e2e && mkdir -p /tmp/rasq-e2e && cd /tmp/rasq-e2e
+    - $RASQ init --sns ci.test.sns --namespace ci.test
+    - for s in post.transform tl trend.suggest viewer.overlay composer.media composer.text astell.action post.share post.action; do $RASQ new $s $(echo $s | tr . -); done
+    - $RASQ check
+    - $RASQ build --raw --no-build
+    - RASQ_TOKEN=ci-dummy-token $RASQ token set other:example.test:ci --from-env RASQ_TOKEN
+    - $RASQ token list
+    - $RASQ dev
+    - test -f .rasq/dev.json
+    - $RASQ token remove other:example.test:ci
+    - $RASQ key init && $RASQ key show
+    - $RASQ build --raw --no-build
+    - $RASQ inspect dist/ci.test.sns-0.1.0.rasqpkg
+    # 他人の土台として読み込み、子ごとの .rasqpkg(requires 付き)を出す
+    - rm -rf /tmp/rasq-e2e-third && mkdir -p /tmp/rasq-e2e-third && cd /tmp/rasq-e2e-third
+    - $RASQ init --base /tmp/rasq-e2e/dist/ci.test.sns-0.1.0.rasqpkg --namespace ci.third
+    - $RASQ new post.share tpl
+    - $RASQ build
+    - $RASQ inspect dist/ci.third.tpl-0.1.0.rasqpkg
+    - $RASQ publish --central http://central.invalid:8080 --dry-run --no-build
+    - test -f dist/publish/ci.third.tpl-0.1.0/04-upload-bundle.bin && test -f dist/publish/ci.third.tpl-0.1.0/03-publish-version.json
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH

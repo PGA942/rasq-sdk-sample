@@ -37,10 +37,22 @@ Misskey アダプタ(`packages/sns_misskey`)で検証したものを、ここで
 - `python3 schema/validate.py` — スキーマと例、登録簿とマニフェストの突き合わせ(CI の `schema` ジョブ。`pip install jsonschema referencing`)
 - [`examples/misskey.function.json`](examples/misskey.function.json) — Misskey 公式プラグインのマニフェスト例
 
-## SDK(CLI)の想定フロー(ユーザー指定、未実装)
+## SDK(CLI)の想定フロー(ユーザー指定)
 
 プラグイン作者向けの CLI は次の流れになる想定。ここに書いておき、実装時に `schema/` の登録簿とマニフェストを土台にする。
 コマンド・ディレクトリ・配布物の形まで落とした設計は [`docs/cli.md`](docs/cli.md)(D-244)。
+**実装済み(第一期 ①〜⑤)**: [`rust/rasq-cli`](rust/rasq-cli) の `rasq init / new / check / test / build [--raw] / registry / token / dev / key / inspect / publish` と、
+[`templates/`](templates)(stable 9 スロット + sns の雛形)、[`rust/rasq-plugin-kit`](rust/rasq-plugin-kit)(kit の正典)。
+
+```sh
+cd rust && cargo build --release -p rasq-cli          # → rust/target/release/rasq
+rasq init --namespace net.example && rasq new post.action later && rasq check && rasq build --raw
+rasq token set misskey:misskey.io:yamada   # トークンは非表示入力 → ~/.config/rasq/credentials.toml(0600)
+rasq dev --watch                           # ビルド → 往復検査 → dev 画面に入れる絶対パス(変更のたびに再ビルド)
+rasq key init && rasq build                # dist/<id>-<version>.rasqpkg(zstd tar + bundle.json)+ 開発者署名 .sig.json
+rasq inspect dist/net.example.later-0.1.0.rasqpkg   # 目次 / ハッシュ / 署名を確かめる
+rasq token set --central 100.91.218.56:8080 && rasq publish --central http://100.91.218.56:8080   # 掲載 → 版 → 配布物(--dry-run で要求の書き出しだけ)
+```
 
 1. **土台を読む**: ベースになる SNS プラグイン(と、データを流すための Access Token)を読み込む。SNS プラグイン自体を作るときは何も読まない。
 2. **雛形を選ぶ**: スロット(`schema/slots.json`)ごとの雛形から選ぶ。1 つ作るごとに、土台の SNS プラグインの**配下にバンドル**される(ActionRef の `pluginId` と `wasm.call` の親子関係)。

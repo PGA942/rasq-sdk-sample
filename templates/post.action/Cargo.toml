@@ -1,0 +1,11 @@
+[package]
+name = "{{name}}"
+version = "0.1.0"
+edition = "2021"
+description = "{{display}}"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rasq-plugin-kit = { path = "{{kit_path}}" }

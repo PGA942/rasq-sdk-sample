@@ -1,0 +1,25 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "{{id}}",
+  "name": "{{display}}",
+  "version": "0.1.0",
+  "kind": "sns",
+  "description": "{{display}}(rasq init --sns の雛形)",
+  "supportedSns": [
+    "other"
+  ],
+  "permissions": [
+    "network",
+    "storage.safe",
+    "register_action"
+  ],
+  "actions": [
+    {
+      "id": "wave",
+      "genreTag": "Reaction",
+      "label": "手を振る",
+      "icon": "favorite_border",
+      "doneIcon": "favorite"
+    }
+  ]
+}

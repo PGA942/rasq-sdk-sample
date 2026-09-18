@@ -1,0 +1,25 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "{{id}}",
+  "name": "{{display}}",
+  "version": "0.1.0",
+  "kind": "action",
+  "description": "{{display}}(rasq new post.action の雛形)",
+  "slots": [
+    "post.action"
+  ],
+  "permissions": [
+    "fow.widget"
+  ],
+  "actions": [
+    {
+      "id": "hello",
+      "label": "{{display}}",
+      "icon": "content_copy",
+      "tags": [
+        "Copy",
+        "Share"
+      ]
+    }
+  ]
+}

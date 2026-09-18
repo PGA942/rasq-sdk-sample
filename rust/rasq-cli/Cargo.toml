@@ -1,0 +1,32 @@
+[package]
+name = "rasq-cli"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "RASQ プラグイン作者向け CLI `rasq`(docs/cli.md、D-244)— init / new / check / build --raw / registry"
+
+[[bin]]
+name = "rasq"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+include_dir = "0.7"
+# resolve-http / resolve-file は使わない(schema/ を同梱して with_resource で登録する)。
+jsonschema = { version = "0.30", default-features = false }
+# token の非表示入力(端末のとき)。
+rpassword = "7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+toml = "0.8"
+wasmi = "1"
+# .rasqpkg(D-034: zstd 圧縮 tar)と開発者署名(ed25519、署名対象は SHA-512 ダイジェストの生 64 バイト = ホストの verifyArtifact と同じ)。
+base64 = "0.22"
+ed25519-dalek = "2"
+getrandom = "0.2"
+tar = "0.4"
+zstd = "0.13"
+# publish(Central 管理 API)。rustls なのでシステムの OpenSSL は要らない。
+ureq = { version = "2", default-features = false, features = ["tls", "json"] }

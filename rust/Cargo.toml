@@ -6,6 +6,8 @@ members = [
     "mastodon-wasm",
     "misskey-wasm-sample",
     "mixi2-wasm",
+    "rasq-cli",
+    "rasq-plugin-kit",
     "rasq_wasm_runtime_core",
     "relational-wasm",
 ]

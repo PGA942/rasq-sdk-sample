@@ -1,10 +1,14 @@
-# `rasq` CLI — プラグイン作者向けコマンドの設計(D-244、第一期は設計のみ)
+# `rasq` CLI — プラグイン作者向けコマンドの設計(D-244)
 
 > 正典: スロットは [`slots.md`](slots.md) / [`../schema/slots.json`](../schema/slots.json)、マニフェストは
 > [`../schema/manifest.schema.json`](../schema/manifest.schema.json)、配布物の目次は
 > [`../schema/bundle.schema.json`](../schema/bundle.schema.json)(この文書で新設)。
-> 流れそのものは [`../README.md`](../README.md#sdkcliの想定フローユーザー指定未実装) の 5 段。ここはそれを
+> 流れそのものは [`../README.md`](../README.md#sdkcliの想定フローユーザー指定) の 5 段。ここはそれを
 > コマンド・ディレクトリ・ファイル形式・ホスト側の前提まで落としたもの。
+>
+> **実装状況**: §9 の ①〜⑤(kit の引き上げ、雛形 10 個、`init / new / check / test / build [--raw] / registry`、
+> `token set|list|remove` / `dev [--watch]`、`.rasqpkg` の `build` / `key init|show` / `inspect`、`publish [--dry-run]`)は
+> [`../rust/rasq-cli`](../rust/rasq-cli) に実装済み(第一期は完了)。第二期の項目は §8 / §10。
 
 ## 0. 決めたこと(要約)
 
@@ -18,7 +22,7 @@
 | D-244f | wasm 化した既存ライブラリは **画面を持たない wasm モジュール**として `libs/` に置き、`wasm.call({lib, fn, args})` で呼ぶ。Rust クレートとして直接リンクできるものは普通に `Cargo.toml` の依存にする(CLI は関与しない) | `wasm.call` は登録簿にあるが未配線。目次に `libs` を持たせることが「構成許可」の根拠になる |
 | D-244g | 確認(Flutter)は第一期は **パス読み込み**(rasq-client の「WASMプラグイン試験 (dev)」の絶対パス取り込み)。`rasq dev` はビルドして取り込み用のパスを出し、`--watch` で再ビルドする。ホットリロード用の dev サーバーは第二期 | 今のホストに口がある方法だけを第一期に入れる |
 | D-244h | 公開は Central の管理 API(`PUT /admin/plugins/{id}` → `POST …/versions` → `PUT …/artifacts/{id}`)に**そのまま**流す。作者の自己申請 API(WF p9 の公開申請)は第二期 | 今ある口は管理 API だけ。`--dry-run` で 3 つの要求を JSON に書き出せるので、審査担当が投入する運用でも回る |
-| D-244i | 12 リポジトリに同一内容で複製されている `kit/`(`rasq-plugin-kit`)を SDK 側 `rust/rasq-plugin-kit` に引き上げ、雛形はそれに依存する。plugin-sample 側の切り替えは各リポジトリの次の更新時(今回は既定ブランチを触らない) | md5 が 12 個とも同じ。契約と同じく正典を SDK に置く |
+| D-244i | 12 リポジトリに同一内容で複製されている `kit/`(`rasq-plugin-kit`)を SDK 側 `rust/rasq-plugin-kit` に引き上げ、`rasq init` がワークスペースの `kit/` へ写す(雛形は `path = "../../kit"` で依存)。plugin-sample 側の切り替えは各リポジトリの次の更新時(今回は既定ブランチを触らない) | md5 が 12 個とも同じ。契約と同じく正典を SDK に置く。git 依存にしないのはリポジトリが非公開でもネット無しでも `rasq check` が通るように |
 
 ## 1. 流れとコマンドの対応
 
@@ -39,16 +43,16 @@
 ```
 my-misskey-ext/
 ├── rasq.toml              # ワークスペース定義(下記)
-├── Cargo.toml             # [workspace] members = ["plugins/*"](CLI が管理)
+├── Cargo.toml             # [workspace] members(CLI が rasq.toml から作り直す)
+├── kit/                   # rasq-plugin-kit の写し(rasq init が置く。D-244i)
 ├── base/                  # 土台(読み取り専用。rasq init --base が展開。git には入れない)
 │   ├── manifest.json      #   土台の function.json
 │   └── misskey.wasm
 ├── plugins/
 │   └── later/             # rasq new post.action later
-│       ├── Cargo.toml     #   rasq-plugin-kit 依存、cdylib
+│       ├── Cargo.toml     #   rasq-plugin-kit = { path = "../../kit" }、cdylib
 │       ├── manifest.json  #   id = rasq.official.misskey.later (土台が自分のものの場合) / net.example.later (他人の土台)
-│       ├── src/lib.rs
-│       └── tests/         #   set_host_hook でホスト関数をモックしたテスト(bluesky-wasm と同じ型)
+│       └── src/lib.rs     #   plugin.manifest は manifest.json を include_str! で返す(往復検査が常に一致する)。テストは同じファイルの #[cfg(test)]
 ├── libs/                  # wasm 化した既存ライブラリ(rasq add lib)
 ├── assets/                # 添付(rrl / rsl / 画像 / 辞書)
 ├── models/                # *.model.json + 本体(lazy なら本体は置かない)
@@ -72,6 +76,7 @@ account = "misskey:misskey.io:yamada" # データを流すアカウント(トー
 [[plugins]]
 name = "later"
 slot = "post.action"                 # 雛形。manifest.json の slots と一致していること(rasq check)
+id = "rasq.official.misskey.later"   # rasq new が決める(D-244c)。manifest.json の id と一致していること
 
 [[libs]]
 name = "rustface"
@@ -157,15 +162,32 @@ lazy = true
 
 `rasq test` = `cargo test`(ホスト関数は `rasq-plugin-kit` の `set_host_hook` でモック)。`rasq check --no-test` で分けられる。
 
-`rasq dev`:
+`rasq dev [--watch] [--debug]`(実装済み):
 
-- debug ビルドし、rasq-client の「WASMプラグイン試験 (dev)」に入れる**絶対パス**(子ごと)を表示する。`--watch` で変更のたびに再ビルド
-- 土台に流すデータ: `credentials.toml` からトークンを引き、`.rasq/dev.json` に `{ accountKey, host, tokenRef }` を書く。
+- ビルド(既定 release: wasm はインタープリタで動くので debug は数 MB になり遅い。`--debug` で切り替え)→ `rasq check` と同じ往復検査
+  → rasq-client の「WASMプラグイン試験 (dev)」に入れる**絶対パス**(sns と子ごと)を表示する。`--watch` は sns/ / plugins/ / kit/ / rasq.toml の
+  mtime を 1 秒ごとに見て、変わったら再ビルドして出し直す(Ctrl-C で止める。依存を増やさないためポーリング)
+- 土台に流すデータ: `rasq.toml` の `account`(`[base]` か `[sns]`)から `credentials.toml` を引き、`.rasq/dev.json`(`rasq.dev/1`)に
+  `{account, host, tokenRef: "credentials:<accountKey>", base, sns, plugins: [{id, slot, wasm}]}` を書く。トークンそのものは書かない。
   第一期の dev 画面は単体 wasm の読み込みなので、**土台のデータが要るスロット**(`post.*` / `tl` など)はホスト側が既に持つアカウントで
   動かし、トークンは SNS プラグイン自体を作るときの `sns.login` 確認に使う
-- 第二期: `rasq dev --serve` で `http://<host>:7391/` にワークスペースを出し、dev 画面に「ワークスペースから読み込み」を足してホットリロード
+- 第二期: `rasq dev --serve` で `http://<host>:7391/` にワークスペースを出し、dev 画面に「ワークスペースから読み込み」(= `dev.json` の読み込み)を足してホットリロード
 
-## 6. ビルド(`rasq build`)と配布物
+`rasq token`(実装済み、D-244e):
+
+- `rasq token set <kind:instance:handle> [--from-env VAR] [--host HOST] [--no-workspace]` — 端末なら非表示入力、パイプなら標準入力の 1 行、
+  `--from-env` なら環境変数。**argv では受け取らない**(シェル履歴に残るため)。`~/.config/rasq/credentials.toml`(ディレクトリ 0700 / ファイル 0600、
+  `RASQ_CREDENTIALS` で場所を変えられる)に `[accounts."<accountKey>"] host / token / updated_at` として保存し、ワークスペース内なら
+  `rasq.toml` の `[base].account` か `[sns].account` に accountKey だけ書く。`--host` はテスト用サーバーに向けるとき(既定は accountKey の instance)
+- `rasq token list` — accountKey / host / 更新時刻と、トークンの先頭 4 文字だけ
+- `rasq token remove <accountKey>`
+- Central のトークン(`[central."<host>"]`)は同じファイルに置く想定(⑤ publish で使う)
+
+## 6. ビルド(`rasq build`)と配布物(実装済み)
+
+`rasq build [--raw] [--no-sign] [--no-build]` は release の wasm32 ビルド → `rasq check` と同じ往復検査(エラーがあれば止まる)→
+`dist/<root.id>-<root.version>.rasqpkg`(+ `.sig.json`)。`--raw` を付けると生の `.wasm` も `dist/` に出す(今のホストのパス読み込み用)。
+`rasq inspect <x.rasqpkg> [--extract DIR]` が目次と中身(sha512 / sizeBytes / `SHA512SUMS` / 余分なファイル)と `.sig.json` を確かめる。
 
 `dist/<root.id>-<root.version>.rasqpkg`:
 
@@ -180,60 +202,76 @@ models/<x>.model.json (+ 本体、lazy でなければ)
 SHA512SUMS                  # 目次と同じ値の一覧(手で確かめる用)
 ```
 
-- 圧縮は zstd(レベル 19)、tar は POSIX、パスは `bundle.schema.json` の `path` の文法(`..` / 先頭 `/` 不可)
+- 圧縮は zstd(レベル 19、フレームのチェックサム付きなので 1 バイトの破損も `Data corruption detected` で止まる)、tar は GNU、
+  パスは `bundle.schema.json` の `path` の文法(`..` / 先頭 `/` / 先頭 `.` 不可)。`bundle.json` は組む前に `bundle.schema.json` で検査する
 - `dist/<…>.rasqpkg.sig.json` = `{ "alg": "ed25519", "publicKey": "<base64>", "signature": "<base64>", "digest": "sha512:<hex>" }`。
-  鍵は `rasq key init` で `~/.config/rasq/dev-key.ed25519` に作る。ホストのサイドロード(WF P-23 `PluginImportPanel`)は
-  この鍵で検証して「開発者鍵」の警告を出す。ストア署名は Central が付ける(D-034)ので CLI は関与しない
-- `owned = false` のワークスペースで `rasq build` すると、`[[plugins]]` **ごとに** root = その子の `.rasqpkg` を出し、
-  `root.requires = [{ id: base.id, version: "^<base.version>" }]` を書く。同梱はしない
+  鍵は `rasq key init` で `~/.config/rasq/dev-key.toml`(0600、`RASQ_DEV_KEY` で場所を変えられる)に作り、`rasq key show` が公開鍵と
+  指紋(公開鍵の SHA-512 先頭 8 バイト)を出す。署名対象は配布物バイト列の SHA-512 ダイジェスト(生 64 バイト)で、ホストの
+  `verifyArtifact` と同じ。鍵が無ければ `build` は署名せずに注意だけ出す(`--no-sign` で黙る)。ホストのサイドロード(WF P-23
+  `PluginImportPanel`)はこの鍵で検証して「開発者鍵」の警告を出す。ストア署名は Central が付ける(D-034)ので CLI は関与しない
+- `[sns]` のワークスペースは root = sns、`[base] owned = true` は root = `base/` の土台で、どちらも `[[plugins]]` を `children` に同梱する
+  (子の id が `<root>.` で始まらなければ止まる)。`owned = false`(他人の土台)や土台無しでは `[[plugins]]` **ごとに** root = その子の
+  `.rasqpkg` を出し、土台があれば `root.requires = [{ id: base.id, version: "^<base.version>" }]` を書く。同梱はしない
+- `[[libs]]` は wasm の export が `exports` にあることを wasmi で確かめて `libs/<file>` に、`[[assets]]` はそのパスのまま、`[[models]]` は
+  manifest と(`lazy = false` なら)`runtimes.*.file` / `tokenizer.file` の本体を入れる。`lazy = true` は manifest だけ + `artifactId = model-<name>`
+- `rasq init --base <x.rasqpkg>` は `inspect` と同じ検査を通してから root(`kind = sns` のみ)の manifest / wasm / `bundle.json` を `base/` に置く
 
 ホスト側の現状: ストアのインストールは `.rasqpkg` をまだ展開せず、配布物が生の wasm(`\0asm`)ならスロット登録する(D-168)。
-そのため第一期の `rasq build --raw` は子 1 つにつき `.wasm` をそのまま `dist/` に出す(今日の plugin-sample の `dist/` と同じ)。
-`.rasqpkg` の展開・検証(M4 の 4 番、D-034)が入り次第 `--raw` は不要になる。
+そのため `rasq build --raw` は子 1 つにつき `.wasm` もそのまま `dist/` に出す(今日の plugin-sample の `dist/` と同じ)。
+`.rasqpkg` の展開・検証(M4 の 4 番、D-034)が入り次第 `--raw` は不要になる。ホスト側の展開は `rasq inspect` と同じ手順
+(zstd → tar → 先頭 `bundle.json` → スキーマ → sha512 / sizeBytes → `SHA512SUMS` → `.sig.json`)で書ける。
 
-## 7. 公開(`rasq publish`)
+## 7. 公開(`rasq publish`、実装済み)
 
 ```
-rasq publish --central https://…:8080 --channel stable|beta [--notes-file NOTES.md] [--dry-run]
+rasq publish --central http://100.91.218.56:8080 [--channel stable|beta] [--notes-file NOTES.md] [--dry-run] [--skip-listing] [--no-make-current] [--no-build]
 ```
 
-Central の管理 API(`rasq-central/src/admin/mod.rs`)に順に投げる。トークンは `RASQ_CENTRAL_TOKEN` 環境変数か
-`credentials.toml` の `[central.<host>]`。
+既定では `rasq build` を通してから(`--no-build` で `dist/` のものをそのまま)、配布物ごとに Central の管理 API
+(`rasq-central/src/admin/mod.rs`)へ順に投げる。トークンは `RASQ_CENTRAL_TOKEN` 環境変数(`--token-env` で変更)か
+`credentials.toml` の `[central."<host[:port]>"]`(`rasq token set --central <host>` で保存)。`Authorization: Bearer <token>`。
 
-1. `PUT /api/v1/admin/plugins/{id}` … `UpsertPlugin`(`name` / `summary` / `description` / `sns` / `category` …)。
-   値は `rasq.toml` の `[listing]` から。既に掲載があれば省略できる(`--skip-listing`)
+0. `GET /api/v1/plugins/{id}/manifest`(公開中の版)… `permissionsAdded` の差分の元。404 / 403(未掲載・審査中)なら新規扱い
+1. `PUT /api/v1/admin/plugins/{id}` … `UpsertPlugin`(`name` / `summary` / `description` / `sns` / `category` / `iconUrl` / `hasAds` / `price` / `developer`)。
+   値は `rasq.toml` の `[listing]` から、無ければ root の manifest(`name` / `description` / `supportedSns`)。`origin` / `status` は
+   送らないので Central の既定(`community` / `in_review` = 審査待ち)。既に掲載があれば `--skip-listing`
 2. `POST /api/v1/admin/plugins/{id}/versions` … `NewVersion`(`version` / `channel` / `manifest` / `notes` / `permissionsAdded` / `makeCurrent`)。
-   `permissionsAdded` は `GET /plugins/{id}/manifest`(公開中の版)との差分から CLI が作る(D-033 の権限増加表示)
-3. `PUT /api/v1/admin/plugins/{id}/versions/{version}/artifacts/bundle?kind=bundle` … `.rasqpkg` のバイト列。
-   応答の `sha512` が手元と一致することを確かめる。`lazy` のモデルは `artifacts/<artifactId>?kind=model` に別送
+   `manifest` は `.rasqpkg` の中の `manifest.json`(Central が id / version をパスと突き合わせる)
+3. `PUT /api/v1/admin/plugins/{id}/versions/{version}/artifacts/bundle?kind=bundle`(`Content-Type: application/zstd`)… `.rasqpkg` のバイト列。
+   応答の `artifact.sha512` が手元と一致することを確かめ、ストア署名と `storePublicKey` を表示する
+4. `lazy` のモデルごとに `PUT …/artifacts/<artifactId>?kind=model&lazy=true`(`runtimes.*.file` の本体。手元に無ければ飛ばして案内)
 
-`--dry-run` は 3 つの要求を `dist/publish/<n>-<route>.json` と `.bin` に書き出すだけ。Central を触れない作者は
-これを審査側に渡す(WF p9 の「公開申請」がこの束を受け取る口になる想定 — 第二期)。
+`--dry-run` は要求を `dist/publish/<pkg>/NN-<label>.json`(+ 配布物は `.bin` と `bodySha512`)に書き出すだけ(トークン不要、
+`Authorization` は `Bearer $RASQ_CENTRAL_TOKEN` のまま)。Central を触れない作者はこれを審査側に渡す(WF p9 の「公開申請」が
+この束を受け取る口になる想定 — 第二期)。
+
+手元の Central(`http://100.91.218.56:8080`、管理トークン)で `net.example.later` / `net.example.bylen` を投入して、掲載 → 版 →
+配布物(sha512 一致、ストア署名付き)まで通ることを確認済み。
 
 ## 8. ホスト側に要る変更(第一期の CLI が前提にするもの / しないもの)
 
 | 項目 | 第一期の CLI | ホストの状態 |
 |---|---|---|
 | 単体 wasm のパス読み込み | 使う | あり(D-078) |
-| `.rasqpkg` の展開・検証・`bundle.json` の解釈 | `--raw` で回避 | 無し(M4 の 4 番) |
+| `.rasqpkg` の展開・検証・`bundle.json` の解釈 | 出す(`--raw` で生 wasm も) | 無し(M4 の 4 番。`rasq inspect` が参考実装) |
 | `wasm.call`(lib / child) | 目次に書くだけ | 未配線(`host-functions.md`) |
 | 添付の読み出し `storage.get({ns: "asset"})` | 目次に書くだけ | 無し(この文書で提案。`ns` を 1 つ足す形が最小) |
-| 開発者鍵の検証とサイドロード警告 | `.sig.json` を出す | 無し(WF P-23) |
+| 開発者鍵の検証とサイドロード警告 | `.sig.json` を出す(`rasq key`) | 無し(WF P-23) |
 | dev サーバーからの読み込み | 使わない | 第二期 |
 
 ## 9. 実装計画
 
-- `rust/rasq-cli`(bin `rasq`): `clap` / `serde` / `toml` / `jsonschema` / `wasmi` / `sha2` / `ed25519-dalek` / `tar` + `zstd` / `reqwest`(publish のみ)。
+- `rust/rasq-cli`(bin `rasq`): `clap` / `serde` / `toml` / `jsonschema` / `wasmi` / `sha2` / `ed25519-dalek` + `getrandom` / `tar` + `zstd` / `rpassword` / `ureq`(rustls、publish のみ)。
   `schema/*.json` と `templates/` は `include_dir!` で同梱し、`rasq registry` はその同梱物を出す
-- `rust/rasq-plugin-kit`: plugin-sample の `kit/src/lib.rs` をそのまま移す(D-244i)。雛形は `rasq-plugin-kit = { git = "<sdk repo>", tag = "kit-0.1.0" }`
-- `templates/<slot>/`: §3 の 9 つ。`{{id}}` / `{{name}}` / `{{slot}}` の置換だけ(テンプレートエンジンは使わない)
-- CI(`.gitlab-ci.yml`): `rust` ジョブに `cargo run -p rasq-cli -- registry templates` と、各雛形の `new → check` を足す
-- 順番: ① kit 引き上げ + 雛形 9 つ → ② `init / new / check / build --raw` → ③ `token / dev` → ④ `build`(.rasqpkg)+ `key` → ⑤ `publish`。
+- `rust/rasq-plugin-kit`: plugin-sample の `kit/src/lib.rs` をそのまま移す(D-244i)。`rasq init` がワークスペースの `kit/` に写し、雛形は `path = "../../kit"`
+- `templates/<slot>/`: §3 の 9 つ + `sns`。`{{id}}` / `{{name}}` / `{{display}}` / `{{slot}}` / `{{kit_path}}` の置換だけ(テンプレートエンジンは使わない)
+- CI(`.gitlab-ci.yml`): `rust` ジョブで `rasq-cli` を組み、全雛形を `new → check` する
+- 順番: ✅ ① kit 引き上げ + 雛形 → ✅ ② `init / new / check / build --raw` → ✅ ③ `token / dev` → ✅ ④ `build`(.rasqpkg)+ `key` + `inspect` → ✅ ⑤ `publish`(第一期完了)。
   ①〜② で今日の plugin-sample と同じものが CLI から作れる
 
 ## 10. 未決
 
 - `wasm.call` の同期呼び出しでライブラリの大きな入出力(画像)をどう渡すか(base64 か線形メモリ共有か)。第二期の計測と一緒に決める
 - 他人の土台に対する `requires` をホストがどう解決するか(バージョン範囲の比較と、土台の更新で子が壊れたときの縮退)
-- `credentials.toml` を OS のキーチェーンに移すか(第一期はファイル 0600)
+- `credentials.toml` を OS のキーチェーンに移すか(第一期はファイル 0600。`rpassword` で非表示入力)
 - 作者の自己申請 API(WF p9)の形。`--dry-run` の出力をそのまま受け取れる形にする

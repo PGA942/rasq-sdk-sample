@@ -1,0 +1,14 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "{{id}}",
+  "name": "{{display}}",
+  "version": "0.1.0",
+  "kind": "action",
+  "description": "{{display}}(rasq new composer.text の雛形)",
+  "slots": [
+    "composer.text"
+  ],
+  "permissions": [
+    "fow.widget"
+  ]
+}
