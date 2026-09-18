@@ -35,6 +35,14 @@ rust:
     - cargo build --release --target wasm32-unknown-unknown -p bluesky-wasm
     - cargo test
     - cargo test --release -p rasq_wasm_runtime_core
+    # rasq CLI (docs/cli.md): 全雛形を new → check(wasm32 ビルド → plugin.manifest 往復 → スキーマ → cargo test)
+    - cargo build -p rasq-cli
+    - export RASQ="$PWD/target/debug/rasq"
+    - rm -rf /tmp/rasq-e2e && mkdir -p /tmp/rasq-e2e && cd /tmp/rasq-e2e
+    - "$RASQ" init --sns ci.test.sns --namespace ci.test
+    - for s in post.transform tl trend.suggest viewer.overlay composer.media composer.text astell.action post.share post.action; do "$RASQ" new "$s" "$(echo "$s" | tr . -)"; done
+    - "$RASQ" check
+    - "$RASQ" build --raw --no-build
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH

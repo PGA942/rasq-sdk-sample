@@ -1,0 +1,22 @@
+[package]
+name = "rasq-cli"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "RASQ プラグイン作者向け CLI `rasq`(docs/cli.md、D-244)— init / new / check / build --raw / registry"
+
+[[bin]]
+name = "rasq"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+include_dir = "0.7"
+# resolve-http / resolve-file は使わない(schema/ を同梱して with_resource で登録する)。
+jsonschema = { version = "0.30", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+toml = "0.8"
+wasmi = "1"

@@ -1,0 +1,12 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "{{id}}",
+  "name": "{{display}}",
+  "version": "0.1.0",
+  "kind": "trend",
+  "description": "{{display}}(rasq new trend.suggest の雛形)",
+  "slots": [
+    "trend.suggest"
+  ],
+  "permissions": []
+}

@@ -1,10 +1,13 @@
-# `rasq` CLI — プラグイン作者向けコマンドの設計(D-244、第一期は設計のみ)
+# `rasq` CLI — プラグイン作者向けコマンドの設計(D-244)
 
 > 正典: スロットは [`slots.md`](slots.md) / [`../schema/slots.json`](../schema/slots.json)、マニフェストは
 > [`../schema/manifest.schema.json`](../schema/manifest.schema.json)、配布物の目次は
 > [`../schema/bundle.schema.json`](../schema/bundle.schema.json)(この文書で新設)。
-> 流れそのものは [`../README.md`](../README.md#sdkcliの想定フローユーザー指定未実装) の 5 段。ここはそれを
+> 流れそのものは [`../README.md`](../README.md#sdkcliの想定フローユーザー指定) の 5 段。ここはそれを
 > コマンド・ディレクトリ・ファイル形式・ホスト側の前提まで落としたもの。
+>
+> **実装状況**: §9 の ①②(kit の引き上げ、雛形 10 個、`init / new / check / test / build --raw / registry`)は
+> [`../rust/rasq-cli`](../rust/rasq-cli) に実装済み。③ `token / dev`、④ `.rasqpkg` + `key`、⑤ `publish` は未実装。
 
 ## 0. 決めたこと(要約)
 
@@ -18,7 +21,7 @@
 | D-244f | wasm 化した既存ライブラリは **画面を持たない wasm モジュール**として `libs/` に置き、`wasm.call({lib, fn, args})` で呼ぶ。Rust クレートとして直接リンクできるものは普通に `Cargo.toml` の依存にする(CLI は関与しない) | `wasm.call` は登録簿にあるが未配線。目次に `libs` を持たせることが「構成許可」の根拠になる |
 | D-244g | 確認(Flutter)は第一期は **パス読み込み**(rasq-client の「WASMプラグイン試験 (dev)」の絶対パス取り込み)。`rasq dev` はビルドして取り込み用のパスを出し、`--watch` で再ビルドする。ホットリロード用の dev サーバーは第二期 | 今のホストに口がある方法だけを第一期に入れる |
 | D-244h | 公開は Central の管理 API(`PUT /admin/plugins/{id}` → `POST …/versions` → `PUT …/artifacts/{id}`)に**そのまま**流す。作者の自己申請 API(WF p9 の公開申請)は第二期 | 今ある口は管理 API だけ。`--dry-run` で 3 つの要求を JSON に書き出せるので、審査担当が投入する運用でも回る |
-| D-244i | 12 リポジトリに同一内容で複製されている `kit/`(`rasq-plugin-kit`)を SDK 側 `rust/rasq-plugin-kit` に引き上げ、雛形はそれに依存する。plugin-sample 側の切り替えは各リポジトリの次の更新時(今回は既定ブランチを触らない) | md5 が 12 個とも同じ。契約と同じく正典を SDK に置く |
+| D-244i | 12 リポジトリに同一内容で複製されている `kit/`(`rasq-plugin-kit`)を SDK 側 `rust/rasq-plugin-kit` に引き上げ、`rasq init` がワークスペースの `kit/` へ写す(雛形は `path = "../../kit"` で依存)。plugin-sample 側の切り替えは各リポジトリの次の更新時(今回は既定ブランチを触らない) | md5 が 12 個とも同じ。契約と同じく正典を SDK に置く。git 依存にしないのはリポジトリが非公開でもネット無しでも `rasq check` が通るように |
 
 ## 1. 流れとコマンドの対応
 
@@ -39,16 +42,16 @@
 ```
 my-misskey-ext/
 ├── rasq.toml              # ワークスペース定義(下記)
-├── Cargo.toml             # [workspace] members = ["plugins/*"](CLI が管理)
+├── Cargo.toml             # [workspace] members(CLI が rasq.toml から作り直す)
+├── kit/                   # rasq-plugin-kit の写し(rasq init が置く。D-244i)
 ├── base/                  # 土台(読み取り専用。rasq init --base が展開。git には入れない)
 │   ├── manifest.json      #   土台の function.json
 │   └── misskey.wasm
 ├── plugins/
 │   └── later/             # rasq new post.action later
-│       ├── Cargo.toml     #   rasq-plugin-kit 依存、cdylib
+│       ├── Cargo.toml     #   rasq-plugin-kit = { path = "../../kit" }、cdylib
 │       ├── manifest.json  #   id = rasq.official.misskey.later (土台が自分のものの場合) / net.example.later (他人の土台)
-│       ├── src/lib.rs
-│       └── tests/         #   set_host_hook でホスト関数をモックしたテスト(bluesky-wasm と同じ型)
+│       └── src/lib.rs     #   plugin.manifest は manifest.json を include_str! で返す(往復検査が常に一致する)。テストは同じファイルの #[cfg(test)]
 ├── libs/                  # wasm 化した既存ライブラリ(rasq add lib)
 ├── assets/                # 添付(rrl / rsl / 画像 / 辞書)
 ├── models/                # *.model.json + 本体(lazy なら本体は置かない)
@@ -72,6 +75,7 @@ account = "misskey:misskey.io:yamada" # データを流すアカウント(トー
 [[plugins]]
 name = "later"
 slot = "post.action"                 # 雛形。manifest.json の slots と一致していること(rasq check)
+id = "rasq.official.misskey.later"   # rasq new が決める(D-244c)。manifest.json の id と一致していること
 
 [[libs]]
 name = "rustface"
@@ -225,10 +229,10 @@ Central の管理 API(`rasq-central/src/admin/mod.rs`)に順に投げる。ト�
 
 - `rust/rasq-cli`(bin `rasq`): `clap` / `serde` / `toml` / `jsonschema` / `wasmi` / `sha2` / `ed25519-dalek` / `tar` + `zstd` / `reqwest`(publish のみ)。
   `schema/*.json` と `templates/` は `include_dir!` で同梱し、`rasq registry` はその同梱物を出す
-- `rust/rasq-plugin-kit`: plugin-sample の `kit/src/lib.rs` をそのまま移す(D-244i)。雛形は `rasq-plugin-kit = { git = "<sdk repo>", tag = "kit-0.1.0" }`
-- `templates/<slot>/`: §3 の 9 つ。`{{id}}` / `{{name}}` / `{{slot}}` の置換だけ(テンプレートエンジンは使わない)
-- CI(`.gitlab-ci.yml`): `rust` ジョブに `cargo run -p rasq-cli -- registry templates` と、各雛形の `new → check` を足す
-- 順番: ① kit 引き上げ + 雛形 9 つ → ② `init / new / check / build --raw` → ③ `token / dev` → ④ `build`(.rasqpkg)+ `key` → ⑤ `publish`。
+- `rust/rasq-plugin-kit`: plugin-sample の `kit/src/lib.rs` をそのまま移す(D-244i)。`rasq init` がワークスペースの `kit/` に写し、雛形は `path = "../../kit"`
+- `templates/<slot>/`: §3 の 9 つ + `sns`。`{{id}}` / `{{name}}` / `{{display}}` / `{{slot}}` / `{{kit_path}}` の置換だけ(テンプレートエンジンは使わない)
+- CI(`.gitlab-ci.yml`): `rust` ジョブで `rasq-cli` を組み、全雛形を `new → check` する
+- 順番: ✅ ① kit 引き上げ + 雛形 → ✅ ② `init / new / check / build --raw` → ③ `token / dev` → ④ `build`(.rasqpkg)+ `key` → ⑤ `publish`。
   ①〜② で今日の plugin-sample と同じものが CLI から作れる
 
 ## 10. 未決

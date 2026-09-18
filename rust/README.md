@@ -29,6 +29,16 @@ wasm plugin sample and the native runtime that hosts it inside Flutter.
   `set_host_hook` / `take_host_log` native test hook, so `cargo test`
   exercises real request/response flows against a mocked `net.fetch`.
   See its [README](bluesky-wasm/README.md).
+- [`rasq-plugin-kit/`](rasq-plugin-kit) — the plugin-side boilerplate crate
+  (ABI exports, `host_call`, RRL builders, FOW `Surface`). Canonical copy of
+  the `kit/` that each plugin-sample repo carries (D-244i); `rasq init` copies
+  it into a workspace.
+- [`rasq-cli/`](rasq-cli) — the `rasq` CLI for plugin authors
+  (`../docs/cli.md`, D-244): `init` / `new <slot> <name>` (from
+  `../templates/`) / `check` (wasm32 build → exports → `plugin.manifest`
+  round-trip through wasmi → manifest schema + slot registry → `cargo test`) /
+  `build --raw` / `registry`. Schemas, templates and the kit are embedded, so
+  it works offline.
 - [`rasq_wasm_runtime_core/`](rasq_wasm_runtime_core) — a native cdylib that
   embeds [`wasmi`](https://crates.io/crates/wasmi) (a pure-Rust WASM
   *interpreter*, chosen per D-007 because iOS forbids JIT'ing runtimes) and
@@ -45,6 +55,7 @@ cargo build --release --target wasm32-unknown-unknown -p mastodon-wasm
 cargo build --release --target wasm32-unknown-unknown -p bluesky-wasm
 cargo test                                        # mapping tests for all three plugins (bluesky-wasm mocks net.fetch)
 cargo test --release -p rasq_wasm_runtime_core    # loads the sample above and round-trips it through wasmi
+cargo build --release -p rasq-cli                 # → target/release/rasq (plugin author CLI)
 ```
 
 `rasq_wasm_runtime_core`'s own cdylib (for whatever Flutter is targeting) is

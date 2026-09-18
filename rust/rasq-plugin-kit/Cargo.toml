@@ -1,0 +1,9 @@
+[package]
+name = "rasq-plugin-kit"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "RASQ wasm プラグインの共通ボイラープレート(ABI / patch / RRL / FOW / ホスト関数)"
+
+[dependencies]
+serde_json = "1"
