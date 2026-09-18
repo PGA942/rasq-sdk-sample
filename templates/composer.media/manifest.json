@@ -10,5 +10,20 @@
   ],
   "permissions": [
     "fow.widget"
+  ],
+  "actions": [
+    {
+      "id": "sample",
+      "slot": "composer.media",
+      "label": "{{display}}",
+      "icon": "auto_fix_high",
+      "tags": [
+        "Filter"
+      ],
+      "accepts": [
+        "image/png",
+        "image/jpeg"
+      ]
+    }
   ]
 }

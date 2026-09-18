@@ -10,5 +10,16 @@
   ],
   "permissions": [
     "fow.widget"
+  ],
+  "actions": [
+    {
+      "id": "transform",
+      "slot": "composer.media",
+      "label": "変形",
+      "icon": "transform",
+      "tags": [
+        "Transform"
+      ]
+    }
   ]
 }

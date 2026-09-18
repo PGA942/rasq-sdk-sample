@@ -125,6 +125,10 @@ def main() -> int:
                 rep.error(f"{label}: action id に ':' は使えません: {a['id']}")
             if "slot" in a and a["slot"] not in m.get("slots", []):
                 rep.error(f"{label}: action {a['id']} の slot {a['slot']} が manifest.slots にありません")
+            if "accepts" in a and a.get("slot") != "composer.media":
+                rep.error(f"{label}: action {a['id']} の accepts は slot = composer.media の宣言にだけ書けます")
+        if "composer.media" in m.get("slots", []) and not any(a.get("slot") == "composer.media" for a in m.get("actions", [])):
+            rep.warn(f"{label}: 加工画面の下段バーのボタン宣言(actions[].slot = composer.media)が無い(ホストが既定の見た目で、画像にだけ出す)")
         if "viewer.overlay" in m.get("slots", []) and not any(a.get("slot") == "viewer.overlay" for a in m.get("actions", [])):
             rep.warn(f"{label}: 全画面アクションバーのボタン宣言(actions[].slot = viewer.overlay)が無い(ホストが既定の見た目で出す)")
 

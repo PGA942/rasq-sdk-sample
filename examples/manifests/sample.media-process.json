@@ -10,5 +10,17 @@
   ],
   "permissions": [
     "fow.widget"
+  ],
+  "actions": [
+    {
+      "id": "process",
+      "slot": "composer.media",
+      "label": "加工",
+      "icon": "auto_fix_high",
+      "tags": [
+        "Filter",
+        "Blur"
+      ]
+    }
   ]
 }

@@ -95,6 +95,13 @@ pub fn check_manifest(v: &Validator, registry: &[Slot], m: &Value, declared_slot
                 f.errors.push(format!("action {} の slot {slot} が manifest.slots {slots:?} にありません", a["id"]));
             }
         }
+        if !a["accepts"].is_null() && a["slot"] != "composer.media" {
+            f.errors.push(format!("action {} の accepts は slot = \"composer.media\" の宣言にだけ書けます", a["id"]));
+        }
+    }
+    // 加工画面の下段バーのボタン宣言(docs/slots.md §2.2 v0.10)。無くても動くが、既定の見た目で画像にだけ出る。
+    if slots.contains(&"composer.media") && !m["actions"].as_array().into_iter().flatten().any(|a| a["slot"] == "composer.media") {
+        f.warnings.push("加工画面の下段バーのボタン宣言(actions[].slot = \"composer.media\")がありません(ホストが name と既定アイコンで、画像にだけ出す)".into());
     }
     // 全画面アクションバーのボタン宣言(docs/slots.md §2.4 v0.9)。無くても動くが、既定の見た目になる。
     if slots.contains(&"viewer.overlay") && !m["actions"].as_array().into_iter().flatten().any(|a| a["slot"] == "viewer.overlay") {
