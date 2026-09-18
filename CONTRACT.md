@@ -35,13 +35,17 @@
   "description": "Misskeyに接続するためのプラグイン。",
   "supportedSns": ["misskey"],           // bluesky|misskey|mastodon|mixi2|other
   "permissions": ["network", "storage.safe", "register_action"],   // §8 操作語彙
-  "actions": [ /* ActionDescriptor[] (§4) */ ],
+  "slots": ["post.action"],              // 差し込む面(schema/slots.json の id、D-005)。SNS プラグインは省略可
+  "roles": ["contentBody"],              // 完全置き換えタイルで保証する構造ロール(replace_tile を持つなら contentBody 必須、V5)
+  "actions": [ /* ActionDescriptor[] (§4)。スロットプラグインは genreTag の代わりに tags(希望スロット) */ ],
   "termsOfService": "## 規約 …",         // Markdown。初回ログイン前に表示(同意が必要)
   "verified": true,                      // ストア審査済み。サイドロードは false
   "official": true
 }
 ```
-JSON Schema: `rasq-sdk-sample/schema/manifest.schema.json`
+JSON Schema: `rasq-sdk-sample/schema/manifest.schema.json`(v0.3)。`call("plugin.manifest")` の答えは先頭に `"schema": "rasq.plugin-manifest/1"` を付ける。
+スロットの一覧と各スロットの契約(ティア / 置き場所 / call / ホスト関数 / 権限 / ライフサイクル)は **`schema/slots.json`**(D-005、`schema/slot-registry.schema.json` の形)。
+`python3 schema/validate.py` がマニフェストと登録簿を突き合わせる。
 
 ---
 
@@ -92,7 +96,10 @@ AccountId = { kind, instance, handle }   key = "kind:instance:handle"
 ```
 - **短押し**(`performAction(actionId, postId)` 引数なし)の中身はプラグインが決める — Misskey 本番: 予測モデルで最有力の絵文字をリアクション。**長押し**は絵文字ピッカー FOW → `args.reaction`。
 - `ActionResult.icon`(`{url}` または `{material}`)で**投稿ごとにアイコンを差し替え**(操作前に予測絵文字のエッジ抽出アイコンを出す等)。差し替えできるのは SNS プラグイン+配下プラグインの `iconPerPost: true` のアクションのみ。他プラグインは視認性のため固定(ホスト検証ゲート V7 が無視)。バンドル用既定アイコン `icon`/`doneIcon` は必須。
-- `ActionRef` = `pluginId:accountKey:pluginVersion:fn`(D-006【提案】)。accountKey は `kind:instance:handle` なので両端から分割。
+- `ActionRef` = `pluginId:accountKey:pluginVersion:fn`(**D-006 確定**、`schema/action-ref.schema.json`)。accountKey は `kind:instance:handle` なので両端から切り出す
+  (最初の `:` の前 = pluginId、最後の `:` の後 = fn、残りの最後の `:` で accountKey / pluginVersion)。pluginId / version / fn は `:` を含まない。
+  **永続キーは別**: `ActionKey` = `slot:<pluginId>:<actionId>`(版を含めない。非表示 / 並び順 / バンドル設定の保存に使う。更新しても設定が残る)。
+  境界メッセージの `scope`(`InstanceScope` = `pluginId:accountKey:pluginVersion:instanceId`)も同じ文法。
 - `performAction(actionId, postId, args)` → `ActionResult{done, count?, message?}`。`args` 例: `{"reaction":"🎉"}`, `{"undo":true}`。
 - 既定アクション(Misskey): `reply`(confirm, interstitial)/`renote`/`reaction`(長押しで絵文字ピッカー FOW)/`favorite`(countSource none)。
 
@@ -176,6 +183,7 @@ PostTile スロット×権限(原典一致): avatar=`decorate_avatar`(審査済�
 
 ## 11. 未決(M3 までに閉じる)
 
-- D-005 content/action を分けたスロット仕様の形式定義(旧 D1〜D10 は素材)
-- D-006 `ActionRef` 形式の確定
-- D-007 WASM ランタイム選定(iOS インタープリタ基準)と境界プロトコル(Snapshot/Patch/Call/Lifecycle)の IDL 化 — `rasq-sdk-sample` 側で行う
+- ~~D-005 content/action を分けたスロット仕様の形式定義~~ → `schema/slots.json` + `schema/slot-registry.schema.json`(ティア / 置き場所 / call / ホスト関数 / 権限 / ライフサイクル / ロール)。仮案(RRL&プラグイン周り §17)の面は `planned` で id を予約
+- ~~D-006 `ActionRef` 形式の確定~~ → `schema/action-ref.schema.json`(ActionRef / ActionKey / InstanceScope)
+- ~~D-007 境界プロトコルの IDL 化~~ → `schema/boundary.schema.json` v0.2 + `schema/host-fn.schema.json` v0.2。WASM ランタイムは **wasmi を第一期の確定**とし、wasm3 / WAMR の実測比較と iOS 実機計測は第二期の課題
+- 残: host_fn の非同期化(v2)、`net.fetch` のストリーミング、モデルマニフェストの配布・審査フロー(PROTOCOL §7)

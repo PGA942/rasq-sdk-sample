@@ -1,0 +1,36 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "sample.post-action",
+  "name": "投稿ボタン(サンプル)",
+  "version": "0.1.0",
+  "kind": "action",
+  "description": "後で読む / 本文をコピー / 引用の下書き — タグで既存ボタンのバンドルに入る",
+  "slots": [
+    "post.action"
+  ],
+  "permissions": [
+    "fow.widget",
+    "storage.safe"
+  ],
+  "actions": [
+    {
+      "id": "later",
+      "label": "後で読む",
+      "icon": "bookmark_add",
+      "tags": [
+        "Favorite",
+        "Bookmark",
+        "Star"
+      ]
+    },
+    {
+      "id": "copy",
+      "label": "本文をコピー",
+      "icon": "content_copy",
+      "tags": [
+        "Copy",
+        "Share"
+      ]
+    }
+  ]
+}

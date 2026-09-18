@@ -1,0 +1,15 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "sample.media-draw",
+  "name": "描画(ペン / 図形)(サンプル)",
+  "version": "0.1.0",
+  "kind": "action",
+  "description": "ペンの軌跡をスプラインで描く、四角 / 丸のオブジェクトを追加して編集",
+  "slots": [
+    "composer.media"
+  ],
+  "permissions": [
+    "fow.widget",
+    "storage.safe"
+  ]
+}

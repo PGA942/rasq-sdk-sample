@@ -1,35 +1,60 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://rasq.io/schema/plugin-manifest-0.2.json",
-  "title": "RASQ PluginManifest (function.json subset, draft v0.2)",
+  "$id": "https://rasq.io/schema/plugin-manifest-0.3.json",
+  "title": "RASQ PluginManifest (function.json subset, v0.3 / rasq.plugin-manifest/1)",
+  "description": "プラグインのマニフェスト。SNS プラグインは function.json(examples/misskey.function.json)、スロットプラグインは call(\"plugin.manifest\") の答え(plugin-sample/CONTRACT.md §1)。v0.3 (D-005/D-006): schema / slots / roles / actions[].tags を正式化。slots の id は schema/slots.json の登録簿にあること。",
   "type": "object",
   "required": ["id", "name", "version", "kind"],
   "additionalProperties": false,
   "properties": {
-    "id": { "type": "string", "pattern": "^[a-z0-9]+(\\.[a-z0-9_-]+)+$", "description": "Stable reverse-DNS id, e.g. rasq.official.misskey" },
+    "schema": { "const": "rasq.plugin-manifest/1", "description": "call(\"plugin.manifest\") の答えは必ず付ける。function.json では省略可" },
+    "id": { "type": "string", "pattern": "^[a-z0-9]+(\\.[a-z0-9_-]+)+$", "description": "逆 DNS 風の安定 id(例 rasq.official.misskey / sample.timeline)。':' を含まない(ActionRef の区切りに使うため)" },
     "name": { "type": "string", "minLength": 1 },
-    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+([-+][0-9A-Za-z.-]+)?$" },
-    "kind": { "type": "string", "enum": ["sns", "action", "view", "trend", "mediaViewer", "postProcessor"] },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+([-+][0-9A-Za-z.-]+)?$", "description": "SemVer。':' を含まない" },
+    "kind": { "$ref": "slot-registry.schema.json#/$defs/kind" },
     "author": { "type": "string" },
     "description": { "type": "string" },
     "supportedSns": { "type": "array", "items": { "type": "string", "enum": ["bluesky", "misskey", "mastodon", "mixi2", "other"] } },
-    "permissions": {
+    "permissions": { "type": "array", "uniqueItems": true, "items": { "$ref": "slot-registry.schema.json#/$defs/permission" } },
+    "slots": {
       "type": "array",
-      "items": { "type": "string", "enum": ["render", "replace_tile", "transform_content", "tag_media", "replace_media", "register_action", "decorate_avatar", "fow.widget", "fow.interstitial", "fow.system", "network", "gpu_ml", "storage.safe", "storage.unsafe", "auto_hook"] }
+      "uniqueItems": true,
+      "items": { "$ref": "slot-registry.schema.json#/$defs/slotId" },
+      "description": "差し込む面(schema/slots.json の id)。ホストはこれを見て call を配り、許可するホスト関数を決める"
+    },
+    "roles": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "slot-registry.schema.json#/$defs/role" },
+      "description": "完全置き換えタイルで保証する構造ロール(V5)。replace_tile を使うなら contentBody が必須"
     },
     "actions": { "type": "array", "items": { "$ref": "#/$defs/actionDescriptor" } },
-    "termsOfService": { "type": "string", "description": "Markdown shown before first login" },
+    "termsOfService": { "type": "string", "description": "Markdown。初回ログイン前に表示(同意が必要)。RASQ 本体・学習の同意とは別に記録する" },
     "verified": { "type": "boolean", "default": false },
     "official": { "type": "boolean", "default": false }
   },
+  "allOf": [
+    {
+      "$comment": "replace_tile を持つなら roles に contentBody(V5)。",
+      "if": { "properties": { "permissions": { "contains": { "const": "replace_tile" } } }, "required": ["permissions"] },
+      "then": { "required": ["roles"], "properties": { "roles": { "contains": { "const": "contentBody" } } } }
+    },
+    {
+      "$comment": "post.action を宣言するなら actions が要る(§2.9)。",
+      "if": { "properties": { "slots": { "contains": { "const": "post.action" } } }, "required": ["slots"] },
+      "then": { "required": ["actions"], "properties": { "actions": { "minItems": 1 } } }
+    }
+  ],
   "$defs": {
     "actionDescriptor": {
       "type": "object",
-      "required": ["id", "genreTag", "label"],
+      "required": ["id", "label"],
       "additionalProperties": false,
+      "description": "アクションバーのボタン 1 つ。SNS プラグインは genreTag(審査で付く)を持ち、スロットプラグイン(post.action)は tags = 希望スロットを持つ。どちらか一方は必須",
       "properties": {
-        "id": { "type": "string" },
-        "genreTag": { "type": "string", "description": "Repost|Reaction|Reply|Quote|Share|Bookmark|... assigned at review" },
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$", "description": "':' を含まない(actionKey の区切り)" },
+        "genreTag": { "type": "string", "description": "Repost|Reaction|Reply|Quote|Share|Bookmark|… 審査時付与。同タグは同スロットに束ねる" },
+        "tags": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "希望スロット(post.action)。既存ボタンの genreTag と比べ、類似度 ≥ 閾値(既定 0.85)でそのバンドルへ" },
         "label": { "type": "string" },
         "icon": { "type": "string" },
         "doneIcon": { "type": "string" },
@@ -37,8 +62,10 @@
         "fow": { "type": "string", "enum": ["none", "widget", "interstitial", "system"], "default": "none" },
         "countSource": { "type": "string", "enum": ["self", "first", "none"], "default": "self" },
         "autoHookForbidden": { "type": "boolean", "default": false },
-        "destructive": { "type": "boolean", "default": false }
-      }
+        "destructive": { "type": "boolean", "default": false },
+        "iconPerPost": { "type": "boolean", "default": false, "description": "投稿ごとにアイコンを差し替え可(SNS プラグインとその配下のみ。D-017 / V7)" }
+      },
+      "anyOf": [{ "required": ["genreTag"] }, { "required": ["tags"] }]
     }
   }
 }

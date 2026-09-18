@@ -1,0 +1,15 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "sample.custom-page",
+  "name": "ページ型(サンプル、計画中)",
+  "version": "0.0.1",
+  "kind": "view",
+  "description": "AsTell / Misskey Play などの移植先。ホストの custom:<pluginId> ルーティングと一緒に決める",
+  "slots": [
+    "page"
+  ],
+  "permissions": [
+    "render",
+    "storage.safe"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "sample.post-share",
+  "name": "共有テンプレート(サンプル)",
+  "version": "0.1.0",
+  "kind": "action",
+  "description": "投稿をテンプレート(リンクのみ / 引用 / 作者に言及)で整えてコンポーザー・コピー・AsTell へ",
+  "slots": [
+    "post.share"
+  ],
+  "permissions": [
+    "fow.widget",
+    "storage.safe"
+  ]
+}

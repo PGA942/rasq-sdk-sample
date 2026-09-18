@@ -1,0 +1,12 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "sample.trend",
+  "name": "ローカルトレンド(サンプル)",
+  "version": "0.1.0",
+  "kind": "trend",
+  "description": "共起辞書と前置一致だけで作るトレンドサジェスト(サーバー無し)",
+  "slots": [
+    "trend.suggest"
+  ],
+  "permissions": []
+}

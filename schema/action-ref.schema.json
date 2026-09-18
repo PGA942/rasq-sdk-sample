@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rasq.io/schema/action-ref-1.0.json",
+  "title": "RASQ ActionRef / ActionKey / InstanceScope (D-006, 確定)",
+  "description": "アクションとプラグインインスタンスを指す文字列の文法。3 つとも ':' 区切りで、両端から切り出す(accountKey 自身が ':' を含むため)。pluginId / pluginVersion / fn / actionId / instanceId は ':' を含まない。\n\n- ActionRef(実行時の完全修飾): pluginId ':' accountKey ':' pluginVersion ':' fn — アカウントごとに違う版を適用できるよう版を含む。ホストが performAction / call を配るときの鍵。\n- ActionKey(永続キー): 'slot' ':' pluginId ':' actionId — 非表示 / 並び順 / バンドル設定の保存に使う。版を含めないので更新しても設定が残る(plugin-sample §2.9)。\n- InstanceScope(境界メッセージの scope): pluginId ':' accountKey ':' pluginVersion ':' instanceId — boundary.schema.json の scope。\n- accountKey: kind ':' instance ':' handle(CONTRACT §3)。\n\n切り出し: 最初の ':' の前が pluginId、最後の ':' の後が fn / instanceId、残りの最後の ':' の前が accountKey、後が pluginVersion。",
+  "$defs": {
+    "pluginId": { "type": "string", "pattern": "^[a-z0-9]+(\\.[a-z0-9_-]+)+$" },
+    "pluginVersion": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+([-+][0-9A-Za-z.-]+)?$" },
+    "snsKind": { "type": "string", "pattern": "^[a-z0-9_-]+$" },
+    "accountKey": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]+:[^:\\s]+:[^:\\s]+$",
+      "description": "kind:instance:handle(例 misskey:misskey.io:yamada)。instance と handle は ':' と空白を含まない"
+    },
+    "fn": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
+    "actionId": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
+    "instanceId": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
+    "actionRef": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(\\.[a-z0-9_-]+)+:[a-z0-9_-]+:[^:\\s]+:[^:\\s]+:\\d+\\.\\d+\\.\\d+([-+][0-9A-Za-z.-]+)?:[A-Za-z0-9_.-]+$",
+      "examples": ["rasq.official.misskey:misskey:misskey.io:yamada:0.1.0:renote", "sample.post-action:misskey:misskey.io:yamada:0.1.0:later"]
+    },
+    "actionKey": {
+      "type": "string",
+      "pattern": "^slot:[a-z0-9]+(\\.[a-z0-9_-]+)+:[A-Za-z0-9_-]+$",
+      "examples": ["slot:sample.post-action:later"]
+    },
+    "instanceScope": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(\\.[a-z0-9_-]+)+:[a-z0-9_-]+:[^:\\s]+:[^:\\s]+:\\d+\\.\\d+\\.\\d+([-+][0-9A-Za-z.-]+)?:[A-Za-z0-9_.-]+$",
+      "examples": ["rasq.official.misskey:misskey:misskey.io:yamada:0.1.0:main"]
+    },
+    "actionRefObject": {
+      "type": "object",
+      "required": ["pluginId", "accountKey", "pluginVersion", "fn"],
+      "additionalProperties": false,
+      "properties": {
+        "pluginId": { "$ref": "#/$defs/pluginId" },
+        "accountKey": { "$ref": "#/$defs/accountKey" },
+        "pluginVersion": { "$ref": "#/$defs/pluginVersion" },
+        "fn": { "$ref": "#/$defs/fn" }
+      }
+    }
+  },
+  "oneOf": [{ "$ref": "#/$defs/actionRef" }, { "$ref": "#/$defs/actionRefObject" }]
+}

@@ -1,0 +1,15 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "sample.astell",
+  "name": "AsTell プラグイン(サンプル)",
+  "version": "0.1.0",
+  "kind": "action",
+  "description": "効果音 / 効果映像 / 定型テキストをルームへ、投稿共有の受け取り",
+  "slots": [
+    "astell.action"
+  ],
+  "permissions": [
+    "fow.widget",
+    "storage.safe"
+  ]
+}

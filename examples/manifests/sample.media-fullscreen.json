@@ -1,0 +1,15 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "sample.media-fullscreen",
+  "name": "QR コード検出(サンプル)",
+  "version": "0.1.0",
+  "kind": "mediaViewer",
+  "description": "全画面ビューワーの画像から QR コードを見つけて枠を重ね、タップでコピー / 開く / ミュート",
+  "slots": [
+    "viewer.overlay"
+  ],
+  "permissions": [
+    "fow.widget",
+    "mute.words"
+  ]
+}

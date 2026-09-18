@@ -1,0 +1,15 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "sample.composer-text",
+  "name": "ハッシュタグ候補(サンプル)",
+  "version": "0.1.0",
+  "kind": "action",
+  "description": "# を打つと最近使ったタグと辞書から候補を出し、タップで本文に挿入",
+  "slots": [
+    "composer.text"
+  ],
+  "permissions": [
+    "fow.widget",
+    "storage.safe"
+  ]
+}
