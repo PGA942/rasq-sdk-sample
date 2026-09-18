@@ -33,6 +33,7 @@
    2 雛形を選ぶ        rasq new <slot> <name>            plugins/<name>/ (Cargo.toml, src/lib.rs, manifest.json)
    3 コーディング      rasq add lib|asset|model <path>   libs/ assets/ models/ + rasq.toml の項目
    4 確認             rasq check / rasq test / rasq dev  wasm32 ビルド + スキーマ + manifest 往復 + cargo test / 取り込みパス
+                      rasq call <name> <fn>             ビルド済みの wasm を wasmi で叩く(ホスト関数の答えを差し込める)
    5 ビルド           rasq build [--release]            dist/<id>-<version>.rasqpkg (+ .sig.json)
    (5')公開           rasq publish --central <url>      Central 管理 API への 3 要求(--dry-run で JSON)
    -                 rasq registry [slots|templates]   同梱の slots.json を表示
@@ -161,6 +162,35 @@ lazy = true
 5. `rasq.toml` の libs / assets / models の実在と、`bundle.json` を組んだときに `bundle.schema.json` を通ること
 
 `rasq test` = `cargo test`(ホスト関数は `rasq-plugin-kit` の `set_host_hook` でモック)。`rasq check --no-test` で分けられる。
+
+`rasq call <name> <fn> [--args JSON|@file] [--reply FN=JSON]… [--then FN]… [--full]`(実装済み)— **ビルド済みの wasm そのもの**を
+wasmi で動かして `call` を叩く。`cargo test` は native で走るので、wasm32 でだけ起きる問題(下の落とし穴)はここでしか見つからない。
+
+- `--args` の値の中の `"@b64:<path>"` はそのファイルの base64 に置き換わる(画像を渡す用)
+- ホスト関数は `--reply 'fow.open={"opened":true}'` のように答えを差し込める。無い fn は `E01`(ホスト無し)。呼ばれた
+  ホスト関数は `host <fn> <args>` として出る。戻りが `{patch: true}` なら続けて `patch()` の中身も出す
+- `--then rmqr.0 --then link.open` のように、同じインスタンスで続けて呼べる(状態を持つプラグインの一連の操作)
+
+```sh
+rasq call rmqr viewer.open --args '{"token":"v1","mimeType":"image/png","width":344,"height":104,"bytesB64":"@b64:plugins/rmqr/tests/fixtures/rmqr_url.png"}' \
+  --reply 'fow.open={"opened":true}' --then rmqr.0 --then link.open --then viewer.close
+```
+
+#### 落とし穴: native テストは通るのに wasm でトラップする
+
+雛形の release プロファイルは `panic = "abort"` なので、wasm の中の panic は `wasm unreachable instruction executed` になる。
+`wasm32-unknown-unknown` には OS が無く、次のものは**コンパイルは通るが実行時に panic する**:
+
+| 呼ぶと panic するもの | よくある入り口 | 代わり |
+|---|---|---|
+| 時刻(`SystemTime::now` / `Instant::now` / `chrono::Utc::now`) | 結果に timestamp を付けるライブラリ(例: `rxing` の Reader が作る `RXingResult`) | 時刻を使わない下位 API を直接呼ぶ。時刻が要るなら呼び出し元(ホストの args)からもらう |
+| 乱数(`getrandom` の既定) | `rand` / `uuid` / ハッシュの種 | 種を args / `storage` からもらう、決定的な生成にする |
+| スレッド / ファイル / ソケット | `rayon`、`std::fs`、`std::net` | 単一スレッド、`storage.*` / `net.fetch`(ホスト関数) |
+
+クレートの「wasm 対応」feature(`wasmbind` / `js` / `wasm_support` など)は js-sys の import を足すものが多く、RASQ のホストは
+`rasq.host_fn` 以外の import を満たせない(`rasq check` が「許されない import」で止める)。
+実例: rMQR の検出プラグイン(`rxing` 0.9)は `cargo test` 12 件が通った状態で `viewer.open` がトラップし、`rasq call` で見つけて
+`FindFinderPatterns` → `SampleRMQR` → `Decode` の下位 API に切り替えた。
 
 `rasq dev [--watch] [--debug]`(実装済み):
 

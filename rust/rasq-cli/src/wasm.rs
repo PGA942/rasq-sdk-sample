@@ -39,18 +39,30 @@ impl Inspection {
     }
 }
 
-struct Plugin {
-    store: Store<()>,
+/// ホスト関数の代役の状態: 決め打ちの応答(fn → value)と、呼ばれた記録。
+#[derive(Default)]
+pub struct HostState {
+    pub replies: std::collections::HashMap<String, Value>,
+    pub log: Vec<(String, Value)>,
+}
+
+pub struct Plugin {
+    store: Store<HostState>,
     memory: Memory,
     instance: wasmi::Instance,
 }
 
 impl Plugin {
     fn load(bytes: &[u8]) -> Result<Self> {
+        Self::load_with(bytes, HostState::default())
+    }
+
+    /// `replies` にある fn は `{ok: true, value}` で答え、それ以外は E01(ホスト無し)。
+    pub fn load_with(bytes: &[u8], host: HostState) -> Result<Self> {
         let engine = Engine::default();
         let module = Module::new(&engine, bytes)?;
-        let mut store = Store::new(&engine, ());
-        let mut linker = <Linker<()>>::new(&engine);
+        let mut store = Store::new(&engine, host);
+        let mut linker = <Linker<HostState>>::new(&engine);
         linker.func_wrap("rasq", "host_fn", host_fn_stub)?;
         let instance = linker.instantiate_and_start(&mut store, &module).context("インスタンス化に失敗")?;
         let memory = instance.get_memory(&store, "memory").ok_or_else(|| anyhow!("export memory がありません"))?;
@@ -77,7 +89,19 @@ impl Plugin {
         Ok(buf)
     }
 
-    fn call(&mut self, fn_name: &str, args: &Value, call_id: &str) -> Result<Value> {
+    /// これまでのホスト関数呼び出し `(fn, args)` を取り出す。
+    pub fn take_host_log(&mut self) -> Vec<(String, Value)> {
+        std::mem::take(&mut self.store.data_mut().log)
+    }
+
+    /// `snapshot()` / `patch()` の答え(境界メッセージ)。
+    pub fn message(&mut self, export: &str) -> Result<Value> {
+        let f: TypedFunc<(), u64> = self.typed(export)?;
+        let packed = f.call(&mut self.store, ()).with_context(|| format!("{export}() がトラップしました"))?;
+        serde_json::from_slice(&self.take(packed)?).with_context(|| format!("{export} の答えが JSON ではありません"))
+    }
+
+    pub fn call(&mut self, fn_name: &str, args: &Value, call_id: &str) -> Result<Value> {
         let f = self.write(fn_name.as_bytes())?;
         let a = self.write(args.to_string().as_bytes())?;
         let c = self.write(call_id.as_bytes())?;
@@ -92,13 +116,21 @@ impl Plugin {
     }
 }
 
-/// `rasq.host_fn` の代役: 何を頼まれても `E01`(ホスト無し)。
-fn host_fn_stub(mut caller: Caller<'_, ()>, ptr: u32, len: u32) -> Result<u64, wasmi::Error> {
+/// `rasq.host_fn` の代役: 決め打ちの応答があればそれを、無ければ `E01`(ホスト無し)。呼び出しは記録する。
+fn host_fn_stub(mut caller: Caller<'_, HostState>, ptr: u32, len: u32) -> Result<u64, wasmi::Error> {
     let memory = caller.get_export("memory").and_then(|e| e.into_memory()).ok_or_else(|| wasmi::Error::new("no memory"))?;
     let mut req = vec![0u8; len as usize];
     memory.read(&caller, ptr as usize, &mut req).map_err(|e| wasmi::Error::new(e.to_string()))?;
-    let call_id = serde_json::from_slice::<Value>(&req).ok().and_then(|v| v["callId"].as_str().map(String::from)).unwrap_or_default();
-    let resp = json!({"callId": call_id, "ok": false, "error": {"code": "E01", "message": "rasq check: no host"}}).to_string();
+    let req: Value = serde_json::from_slice(&req).unwrap_or(Value::Null);
+    let call_id = req["callId"].as_str().unwrap_or("").to_string();
+    let fn_name = req["fn"].as_str().unwrap_or("").to_string();
+    let host = caller.data_mut();
+    host.log.push((fn_name.clone(), req["args"].clone()));
+    let resp = match host.replies.get(&fn_name) {
+        Some(v) => json!({"callId": call_id, "ok": true, "value": v}),
+        None => json!({"callId": call_id, "ok": false, "error": {"code": "E01", "message": "rasq: no host"}}),
+    }
+    .to_string();
     let alloc = caller
         .get_export("alloc")
         .and_then(|e| e.into_func())
