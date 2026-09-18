@@ -37,8 +37,11 @@ wasm plugin sample and the native runtime that hosts it inside Flutter.
   (`../docs/cli.md`, D-244): `init` / `new <slot> <name>` (from
   `../templates/`) / `check` (wasm32 build → exports → `plugin.manifest`
   round-trip through wasmi → manifest schema + slot registry → `cargo test`) /
-  `build --raw` / `registry`. Schemas, templates and the kit are embedded, so
-  it works offline.
+  `build --raw` / `registry` / `token` (access tokens in
+  `~/.config/rasq/credentials.toml`, 0600, never on argv) / `dev [--watch]`
+  (build → verify → absolute paths for rasq-client's dev screen +
+  `.rasq/dev.json`). Schemas, templates and the kit are embedded, so it works
+  offline.
 - [`rasq_wasm_runtime_core/`](rasq_wasm_runtime_core) — a native cdylib that
   embeds [`wasmi`](https://crates.io/crates/wasmi) (a pure-Rust WASM
   *interpreter*, chosen per D-007 because iOS forbids JIT'ing runtimes) and

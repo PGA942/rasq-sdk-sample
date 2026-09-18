@@ -6,8 +6,8 @@
 > 流れそのものは [`../README.md`](../README.md#sdkcliの想定フローユーザー指定) の 5 段。ここはそれを
 > コマンド・ディレクトリ・ファイル形式・ホスト側の前提まで落としたもの。
 >
-> **実装状況**: §9 の ①②(kit の引き上げ、雛形 10 個、`init / new / check / test / build --raw / registry`)は
-> [`../rust/rasq-cli`](../rust/rasq-cli) に実装済み。③ `token / dev`、④ `.rasqpkg` + `key`、⑤ `publish` は未実装。
+> **実装状況**: §9 の ①②③(kit の引き上げ、雛形 10 個、`init / new / check / test / build --raw / registry`、
+> `token set|list|remove` / `dev [--watch]`)は [`../rust/rasq-cli`](../rust/rasq-cli) に実装済み。④ `.rasqpkg` + `key`、⑤ `publish` は未実装。
 
 ## 0. 決めたこと(要約)
 
@@ -161,13 +161,26 @@ lazy = true
 
 `rasq test` = `cargo test`(ホスト関数は `rasq-plugin-kit` の `set_host_hook` でモック)。`rasq check --no-test` で分けられる。
 
-`rasq dev`:
+`rasq dev [--watch] [--debug]`(実装済み):
 
-- debug ビルドし、rasq-client の「WASMプラグイン試験 (dev)」に入れる**絶対パス**(子ごと)を表示する。`--watch` で変更のたびに再ビルド
-- 土台に流すデータ: `credentials.toml` からトークンを引き、`.rasq/dev.json` に `{ accountKey, host, tokenRef }` を書く。
+- ビルド(既定 release: wasm はインタープリタで動くので debug は数 MB になり遅い。`--debug` で切り替え)→ `rasq check` と同じ往復検査
+  → rasq-client の「WASMプラグイン試験 (dev)」に入れる**絶対パス**(sns と子ごと)を表示する。`--watch` は sns/ / plugins/ / kit/ / rasq.toml の
+  mtime を 1 秒ごとに見て、変わったら再ビルドして出し直す(Ctrl-C で止める。依存を増やさないためポーリング)
+- 土台に流すデータ: `rasq.toml` の `account`(`[base]` か `[sns]`)から `credentials.toml` を引き、`.rasq/dev.json`(`rasq.dev/1`)に
+  `{account, host, tokenRef: "credentials:<accountKey>", base, sns, plugins: [{id, slot, wasm}]}` を書く。トークンそのものは書かない。
   第一期の dev 画面は単体 wasm の読み込みなので、**土台のデータが要るスロット**(`post.*` / `tl` など)はホスト側が既に持つアカウントで
   動かし、トークンは SNS プラグイン自体を作るときの `sns.login` 確認に使う
-- 第二期: `rasq dev --serve` で `http://<host>:7391/` にワークスペースを出し、dev 画面に「ワークスペースから読み込み」を足してホットリロード
+- 第二期: `rasq dev --serve` で `http://<host>:7391/` にワークスペースを出し、dev 画面に「ワークスペースから読み込み」(= `dev.json` の読み込み)を足してホットリロード
+
+`rasq token`(実装済み、D-244e):
+
+- `rasq token set <kind:instance:handle> [--from-env VAR] [--host HOST] [--no-workspace]` — 端末なら非表示入力、パイプなら標準入力の 1 行、
+  `--from-env` なら環境変数。**argv では受け取らない**(シェル履歴に残るため)。`~/.config/rasq/credentials.toml`(ディレクトリ 0700 / ファイル 0600、
+  `RASQ_CREDENTIALS` で場所を変えられる)に `[accounts."<accountKey>"] host / token / updated_at` として保存し、ワークスペース内なら
+  `rasq.toml` の `[base].account` か `[sns].account` に accountKey だけ書く。`--host` はテスト用サーバーに向けるとき(既定は accountKey の instance)
+- `rasq token list` — accountKey / host / 更新時刻と、トークンの先頭 4 文字だけ
+- `rasq token remove <accountKey>`
+- Central のトークン(`[central."<host>"]`)は同じファイルに置く想定(⑤ publish で使う)
 
 ## 6. ビルド(`rasq build`)と配布物
 
@@ -232,12 +245,12 @@ Central の管理 API(`rasq-central/src/admin/mod.rs`)に順に投げる。ト�
 - `rust/rasq-plugin-kit`: plugin-sample の `kit/src/lib.rs` をそのまま移す(D-244i)。`rasq init` がワークスペースの `kit/` に写し、雛形は `path = "../../kit"`
 - `templates/<slot>/`: §3 の 9 つ + `sns`。`{{id}}` / `{{name}}` / `{{display}}` / `{{slot}}` / `{{kit_path}}` の置換だけ(テンプレートエンジンは使わない)
 - CI(`.gitlab-ci.yml`): `rust` ジョブで `rasq-cli` を組み、全雛形を `new → check` する
-- 順番: ✅ ① kit 引き上げ + 雛形 → ✅ ② `init / new / check / build --raw` → ③ `token / dev` → ④ `build`(.rasqpkg)+ `key` → ⑤ `publish`。
+- 順番: ✅ ① kit 引き上げ + 雛形 → ✅ ② `init / new / check / build --raw` → ✅ ③ `token / dev` → ④ `build`(.rasqpkg)+ `key` → ⑤ `publish`。
   ①〜② で今日の plugin-sample と同じものが CLI から作れる
 
 ## 10. 未決
 
 - `wasm.call` の同期呼び出しでライブラリの大きな入出力(画像)をどう渡すか(base64 か線形メモリ共有か)。第二期の計測と一緒に決める
 - 他人の土台に対する `requires` をホストがどう解決するか(バージョン範囲の比較と、土台の更新で子が壊れたときの縮退)
-- `credentials.toml` を OS のキーチェーンに移すか(第一期はファイル 0600)
+- `credentials.toml` を OS のキーチェーンに移すか(第一期はファイル 0600。`rpassword` で非表示入力)
 - 作者の自己申請 API(WF p9)の形。`--dry-run` の出力をそのまま受け取れる形にする

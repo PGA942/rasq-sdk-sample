@@ -1,8 +1,9 @@
 //! `rasq` — RASQ プラグイン作者向け CLI(docs/cli.md、D-244)。
 //!
-//! 第一期の範囲: `init` / `new` / `check` / `test` / `build --raw` / `registry`。
-//! `token` / `dev` / `.rasqpkg` / `publish` は docs/cli.md §9 の順で足す。
+//! 第一期の範囲(①〜③): `init` / `new` / `check` / `test` / `build --raw` / `registry` / `token` / `dev`。
+//! `.rasqpkg` + `key`(④)と `publish`(⑤)は docs/cli.md §9 の順で足す。
 
+mod credentials;
 mod embed;
 mod schema;
 mod wasm;
@@ -80,6 +81,42 @@ enum Cmd {
         #[arg(value_enum, default_value_t = What::Slots)]
         what: What,
     },
+    /// Access Token(データを流すアカウント)。~/.config/rasq/credentials.toml(0600)に置き、リポジトリには accountKey だけ書く
+    Token {
+        #[command(subcommand)]
+        cmd: TokenCmd,
+    },
+    /// 確認用ビルド: ビルド → 往復検査 → rasq-client の「WASMプラグイン試験 (dev)」に入れる絶対パスを出す(+ .rasq/dev.json)
+    Dev {
+        /// 変更のたびに再ビルドして出し直す(Ctrl-C で止める)
+        #[arg(long)]
+        watch: bool,
+        /// debug プロファイルで組む(既定は release: wasm はインタープリタで動くので debug は大きく遅い)
+        #[arg(long)]
+        debug: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum TokenCmd {
+    /// トークンを保存する。端末なら非表示入力、パイプなら標準入力の 1 行、--from-env なら環境変数(argv では受け取らない)
+    Set {
+        /// kind:instance:handle(例 misskey:misskey.io:yamada)
+        account_key: String,
+        /// トークンを環境変数から読む
+        #[arg(long, value_name = "VAR")]
+        from_env: Option<String>,
+        /// 接続先(既定は accountKey の instance。テスト用サーバーに向けるとき)
+        #[arg(long)]
+        host: Option<String>,
+        /// rasq.toml の [base]/[sns] の account に書かない
+        #[arg(long)]
+        no_workspace: bool,
+    },
+    /// 保存してあるアカウント(トークンは出さない)
+    List,
+    /// トークンを消す
+    Remove { account_key: String },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -106,6 +143,8 @@ fn run() -> Result<()> {
         }
         Cmd::Build { raw, no_build } => build(raw, no_build),
         Cmd::Registry { what } => registry(what),
+        Cmd::Token { cmd } => token(cmd),
+        Cmd::Dev { watch, debug } => dev(watch, debug),
     }
 }
 
@@ -132,7 +171,7 @@ fn init(dir: PathBuf, sns: Option<String>, base: Option<PathBuf>, owned: bool, n
         let display = id.rsplit('.').next().unwrap_or("sns").to_string();
         let vars = [("id", id.as_str()), ("name", "sns"), ("display", display.as_str()), ("slot", "sns"), ("kit_path", "../kit")];
         embed::render_template("sns", &dir.join("sns"), &vars)?;
-        ws.sns = Some(Sns { id: id.clone(), dir: "sns".into() });
+        ws.sns = Some(Sns { id: id.clone(), dir: "sns".into(), account: None });
         println!("SNS プラグイン {id} の雛形を sns/ に作りました");
     }
     if let Some(src) = base {
@@ -211,9 +250,12 @@ fn cargo(root: &Path, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-fn build_wasm(root: &Path) -> Result<()> {
-    cargo(root, &["build", "--release", "--target", "wasm32-unknown-unknown"])
-        .context("wasm32 ビルドに失敗(rustup target add wasm32-unknown-unknown は済んでいますか)")
+fn build_wasm(root: &Path, profile: &str) -> Result<()> {
+    let mut args = vec!["build", "--target", "wasm32-unknown-unknown"];
+    if profile == "release" {
+        args.insert(1, "--release");
+    }
+    cargo(root, &args).context("wasm32 ビルドに失敗(rustup target add wasm32-unknown-unknown は済んでいますか)")
 }
 
 fn cargo_version(dir: &Path) -> Option<String> {
@@ -223,24 +265,43 @@ fn cargo_version(dir: &Path) -> Option<String> {
 
 fn check(no_build: bool, no_test: bool) -> Result<()> {
     let (root, ws) = Workspace::find()?;
-    let targets = ws.targets(&root);
-    if targets.is_empty() {
+    if ws.targets(&root).is_empty() {
         bail!("ビルド対象がありません(rasq new <slot> <name>)");
     }
     if !no_build {
-        build_wasm(&root)?;
+        build_wasm(&root, "release")?;
     }
+    let v = verify(&root, &ws, "release")?;
+    println!("{} targets, {} errors, {} warnings", v.targets, v.errors, v.warnings);
+    if v.errors > 0 {
+        bail!("rasq check に失敗しました");
+    }
+    if !no_test {
+        cargo(&root, &["test"])?;
+    }
+    Ok(())
+}
+
+struct Verified {
+    targets: usize,
+    errors: usize,
+    warnings: usize,
+}
+
+/// docs/cli.md §5 の 2〜5: export / import → plugin.manifest の往復 → スキーマ + 登録簿 → libs / assets / models の実在。
+fn verify(root: &Path, ws: &Workspace, profile: &str) -> Result<Verified> {
+    let targets = ws.targets(root);
     let validator = schema::manifest_validator()?;
     let reg = embed::registry()?;
     let mut errors = 0usize;
     let mut warnings = 0usize;
     for t in &targets {
-        let label = t.dir.strip_prefix(&root).unwrap_or(&t.dir).display().to_string();
+        let label = t.dir.strip_prefix(root).unwrap_or(&t.dir).display().to_string();
         let mut errs: Vec<String> = Vec::new();
         let mut warns: Vec<String> = Vec::new();
 
         // 1. wasm の export / import
-        let wasm_path = t.wasm_path(&root, "release");
+        let wasm_path = t.wasm_path(root, profile);
         let bytes = match std::fs::read(&wasm_path) {
             Ok(b) => b,
             Err(e) => {
@@ -291,7 +352,7 @@ fn check(no_build: bool, no_test: bool) -> Result<()> {
         let size = bytes.len();
         report(&label, &errs, &warns);
         if errs.is_empty() {
-            println!("  ok: {} ({} KB)", wasm_path.strip_prefix(&root).unwrap_or(&wasm_path).display(), size / 1024);
+            println!("  ok: {} ({} KB)", wasm_path.strip_prefix(root).unwrap_or(&wasm_path).display(), size / 1024);
         }
         errors += errs.len();
         warnings += warns.len();
@@ -304,15 +365,7 @@ fn check(no_build: bool, no_test: bool) -> Result<()> {
             errors += 1;
         }
     }
-
-    println!("{} targets, {errors} errors, {warnings} warnings", targets.len());
-    if errors > 0 {
-        bail!("rasq check に失敗しました");
-    }
-    if !no_test {
-        cargo(&root, &["test"])?;
-    }
-    Ok(())
+    Ok(Verified { targets: targets.len(), errors, warnings })
 }
 
 fn report(label: &str, errs: &[String], warns: &[String]) {
@@ -331,7 +384,7 @@ fn build(raw: bool, no_build: bool) -> Result<()> {
         println!("note: .rasqpkg は第 ④ 段(docs/cli.md §6)。今は --raw と同じく生の .wasm を dist/ に出します");
     }
     if !no_build {
-        build_wasm(&root)?;
+        build_wasm(&root, "release")?;
     }
     let dist = root.join("dist");
     std::fs::create_dir_all(&dist)?;
@@ -349,6 +402,183 @@ fn build(raw: bool, no_build: bool) -> Result<()> {
 
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+// ---------------------------------------------------------------------------
+// token(docs/cli.md D-244e)
+// ---------------------------------------------------------------------------
+
+fn token(cmd: TokenCmd) -> Result<()> {
+    match cmd {
+        TokenCmd::Set { account_key, from_env, host, no_workspace } => {
+            let (kind, instance, handle) = credentials::parse_account_key(&account_key)?;
+            let host = host.unwrap_or_else(|| instance.to_string());
+            let tok = credentials::read_token(from_env.as_deref(), &format!("{handle}@{instance} ({kind})"))?;
+            let mut c = credentials::load()?;
+            c.accounts.insert(account_key.clone(), credentials::Account { host: host.clone(), token: tok.clone(), updated_at: credentials::now() });
+            credentials::save(&c)?;
+            println!("保存しました: {account_key} → {}(host = {host}, token = {})", credentials::path()?.display(), credentials::mask(&tok));
+            if !no_workspace {
+                if let Ok((root, mut ws)) = Workspace::find() {
+                    if ws.set_account(&account_key) {
+                        ws.save(&root)?;
+                        println!("rasq.toml の account に {account_key} を書きました(トークンは書きません)");
+                    } else {
+                        println!("rasq.toml に [base] も [sns] も無いので account は書きません(スロットプラグイン単体)");
+                    }
+                }
+            }
+        }
+        TokenCmd::List => {
+            let c = credentials::load()?;
+            println!("{}:", credentials::path()?.display());
+            if c.accounts.is_empty() && c.central.is_empty() {
+                println!("  (なし)");
+            }
+            for (k, a) in &c.accounts {
+                println!("  {k:<40} host = {:<24} token = {:<14} {}", a.host, credentials::mask(&a.token), a.updated_at);
+            }
+            for (k, a) in &c.central {
+                println!("  central {k:<32} token = {:<14} {}", credentials::mask(&a.token), a.updated_at);
+            }
+        }
+        TokenCmd::Remove { account_key } => {
+            let mut c = credentials::load()?;
+            if c.accounts.remove(&account_key).is_none() {
+                bail!("{account_key} は保存されていません");
+            }
+            credentials::save(&c)?;
+            println!("消しました: {account_key}");
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// dev(docs/cli.md D-244g)
+// ---------------------------------------------------------------------------
+
+fn dev(watch: bool, debug: bool) -> Result<()> {
+    let (root, ws) = Workspace::find()?;
+    if ws.targets(&root).is_empty() {
+        bail!("ビルド対象がありません(rasq new <slot> <name>)");
+    }
+    let profile = if debug { "debug" } else { "release" };
+    dev_once(&root, &ws, profile)?;
+    if !watch {
+        return Ok(());
+    }
+    println!("--watch: 変更を待っています(Ctrl-C で止める)");
+    let mut last = snapshot_mtimes(&root, &ws);
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        let now = snapshot_mtimes(&root, &ws);
+        if now != last {
+            println!("\n変更を検知 → 再ビルド");
+            // 保存直後のもう 1 回の変更を拾うため少し待つ
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            if let Err(e) = dev_once(&root, &ws, profile) {
+                eprintln!("error: {e:#}");
+            }
+            last = snapshot_mtimes(&root, &ws);
+        }
+    }
+}
+
+fn dev_once(root: &Path, ws: &Workspace, profile: &str) -> Result<()> {
+    build_wasm(root, profile)?;
+    let v = verify(root, ws, profile)?;
+    let abs = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+
+    // データを流すアカウント(トークンは credentials.toml にあり、ここには参照だけ)
+    let account = ws.account().map(String::from);
+    let mut host = None;
+    let mut token_ref = None;
+    if let Some(k) = &account {
+        match credentials::load()?.accounts.get(k) {
+            Some(a) => {
+                host = Some(a.host.clone());
+                token_ref = Some(format!("credentials:{k}"));
+            }
+            None => println!("warn: rasq.toml の account {k} のトークンが無い(rasq token set {k})"),
+        }
+    }
+    let mut plugins = Vec::new();
+    let mut sns = None;
+    for t in ws.targets(root) {
+        let wasm = abs(&t.wasm_path(root, profile));
+        match &t.slot {
+            Some(slot) => plugins.push(serde_json::json!({"id": t.id, "slot": slot, "wasm": wasm})),
+            None => sns = Some(serde_json::json!({"id": t.id, "wasm": wasm})),
+        }
+    }
+    let base = ws.base.as_ref().map(|b| {
+        let wasm = std::fs::read_dir(root.join("base")).ok().and_then(|d| d.filter_map(|e| e.ok().map(|e| e.path())).find(|p| p.extension().is_some_and(|x| x == "wasm")));
+        serde_json::json!({"id": b.id, "version": b.version, "wasm": wasm.map(|p| abs(&p))})
+    });
+    let dev_json = serde_json::json!({
+        "schema": "rasq.dev/1",
+        "builtAt": credentials::now(),
+        "profile": profile,
+        "account": account,
+        "host": host,
+        "tokenRef": token_ref,
+        "base": base,
+        "sns": sns,
+        "plugins": plugins,
+    });
+    std::fs::create_dir_all(root.join(".rasq"))?;
+    std::fs::write(root.join(".rasq/dev.json"), serde_json::to_string_pretty(&dev_json)?)?;
+
+    println!();
+    if v.errors > 0 {
+        println!("{} errors(上の ERROR を直してから読み込む)", v.errors);
+    }
+    println!("rasq-client 「WASMプラグイン試験 (dev)」→ .wasm のパスからインポート:");
+    if let Some(s) = &dev_json["sns"].as_object() {
+        println!("  {:<32} {}", s["id"].as_str().unwrap_or(""), s["wasm"].as_str().unwrap_or(""));
+    }
+    for p in dev_json["plugins"].as_array().into_iter().flatten() {
+        println!("  {:<32} {}", p["id"].as_str().unwrap_or(""), p["wasm"].as_str().unwrap_or(""));
+    }
+    match (&account, &host) {
+        (Some(k), Some(h)) => println!("データ: {k}(host = {h}、トークンは credentials.toml。第一期の dev 画面はホストの既存アカウントで動くため、この参照は .rasq/dev.json に書くだけ)"),
+        (None, _) => println!("データ: アカウント未設定(rasq token set <kind:instance:handle> で土台に流すアカウントを決める)"),
+        _ => {}
+    }
+    println!("→ {}", root.join(".rasq/dev.json").display());
+    Ok(())
+}
+
+/// 監視対象(sns/ と plugins/*/ の src と manifest.json / Cargo.toml、kit/、rasq.toml)の mtime。
+fn snapshot_mtimes(root: &Path, ws: &Workspace) -> Vec<(PathBuf, std::time::SystemTime)> {
+    let mut out = Vec::new();
+    let mut dirs: Vec<PathBuf> = ws.targets(root).into_iter().map(|t| t.dir).collect();
+    dirs.push(root.join("kit"));
+    for d in dirs {
+        walk(&d, &mut out);
+    }
+    if let Ok(m) = std::fs::metadata(root.join(workspace::FILE)).and_then(|m| m.modified()) {
+        out.push((root.join(workspace::FILE), m));
+    }
+    out.sort();
+    out
+}
+
+fn walk(dir: &Path, out: &mut Vec<(PathBuf, std::time::SystemTime)>) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.filter_map(Result::ok) {
+        let p = e.path();
+        let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        if name == "target" || name.starts_with('.') {
+            continue;
+        }
+        if p.is_dir() {
+            walk(&p, out);
+        } else if let Ok(m) = e.metadata().and_then(|m| m.modified()) {
+            out.push((p, m));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

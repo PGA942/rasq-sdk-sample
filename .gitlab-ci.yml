@@ -43,6 +43,8 @@ rust:
     - for s in post.transform tl trend.suggest viewer.overlay composer.media composer.text astell.action post.share post.action; do "$RASQ" new "$s" "$(echo "$s" | tr . -)"; done
     - "$RASQ" check
     - "$RASQ" build --raw --no-build
+    - RASQ_TOKEN=ci-dummy-token "$RASQ" token set other:example.test:ci --from-env RASQ_TOKEN && "$RASQ" token list
+    - "$RASQ" dev && test -f .rasq/dev.json && "$RASQ" token remove other:example.test:ci
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH

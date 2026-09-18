@@ -51,6 +51,9 @@ pub struct Base {
 pub struct Sns {
     pub id: String,
     pub dir: String,
+    /// `sns.login` の確認に使うアカウント(トークンは credentials.toml)。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -179,6 +182,24 @@ impl Workspace {
             v.push(Target { dir: root.join("plugins").join(&p.name), package: p.name.clone(), id: p.id.clone(), slot: Some(p.slot.clone()) });
         }
         v
+    }
+
+    /// データを流すアカウント(`[base].account` か `[sns].account`)。
+    pub fn account(&self) -> Option<&str> {
+        self.base.as_ref().and_then(|b| b.account.as_deref()).or_else(|| self.sns.as_ref().and_then(|s| s.account.as_deref()))
+    }
+
+    /// `rasq token set` が書く先。土台も sns も無ければ None(スロットプラグイン単体)。
+    pub fn set_account(&mut self, key: &str) -> bool {
+        if let Some(b) = &mut self.base {
+            b.account = Some(key.into());
+            true
+        } else if let Some(s) = &mut self.sns {
+            s.account = Some(key.into());
+            true
+        } else {
+            false
+        }
     }
 
     pub fn plugin(&self, name: &str) -> Option<&PluginEntry> {

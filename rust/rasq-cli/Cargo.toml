@@ -15,6 +15,8 @@ clap = { version = "4", features = ["derive"] }
 include_dir = "0.7"
 # resolve-http / resolve-file は使わない(schema/ を同梱して with_resource で登録する)。
 jsonschema = { version = "0.30", default-features = false }
+# token の非表示入力(端末のとき)。
+rpassword = "7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
