@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:rasq_wasm_runtime/rasq_wasm_runtime.dart';
 import 'package:test/test.dart';
@@ -98,5 +99,25 @@ void main() {
     final result = jsonDecode(plugin.call(fn: 'storageRoundTrip', argsJson: '{"key":"k","value":1}', callId: 'call-3')) as Map<String, dynamic>;
     expect(result['ok'], false);
     expect((result['error'] as Map)['code'], 'E00');
+  });
+
+  group('zstd (.rasqpkg の展開, D-034)', () {
+    final packed = File('test/fixtures/hello.txt.zst').readAsBytesSync();
+    final expected = utf8.encode('RASQ zstd fixture ' * 4096);
+
+    test('decompresses a zstd -19 frame', () {
+      expect(rasqZstdDecompress(packed), expected);
+    });
+
+    test('refuses an output larger than maxOutput (decompression bomb guard)', () {
+      expect(() => rasqZstdDecompress(packed, maxOutput: expected.length - 1), throwsA(isA<RasqZstdException>()));
+      expect(rasqZstdDecompress(packed, maxOutput: expected.length), expected);
+    });
+
+    test('rejects garbage, truncated and empty input', () {
+      expect(() => rasqZstdDecompress(Uint8List.fromList(utf8.encode('not zstd'))), throwsA(isA<RasqZstdException>()));
+      expect(() => rasqZstdDecompress(Uint8List.sublistView(packed, 0, packed.length ~/ 2)), throwsA(isA<RasqZstdException>()));
+      expect(() => rasqZstdDecompress(Uint8List(0)), throwsA(isA<RasqZstdException>()));
+    });
   });
 }
