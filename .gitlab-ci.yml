@@ -48,6 +48,15 @@ rust:
     - $RASQ dev
     - test -f .rasq/dev.json
     - $RASQ token remove other:example.test:ci
+    - $RASQ key init && $RASQ key show
+    - $RASQ build --raw --no-build
+    - $RASQ inspect dist/ci.test.sns-0.1.0.rasqpkg
+    # 他人の土台として読み込み、子ごとの .rasqpkg(requires 付き)を出す
+    - rm -rf /tmp/rasq-e2e-third && mkdir -p /tmp/rasq-e2e-third && cd /tmp/rasq-e2e-third
+    - $RASQ init --base /tmp/rasq-e2e/dist/ci.test.sns-0.1.0.rasqpkg --namespace ci.third
+    - $RASQ new post.share tpl
+    - $RASQ build
+    - $RASQ inspect dist/ci.third.tpl-0.1.0.rasqpkg
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH

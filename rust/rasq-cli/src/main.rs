@@ -1,10 +1,12 @@
 //! `rasq` — RASQ プラグイン作者向け CLI(docs/cli.md、D-244)。
 //!
-//! 第一期の範囲(①〜③): `init` / `new` / `check` / `test` / `build --raw` / `registry` / `token` / `dev`。
-//! `.rasqpkg` + `key`(④)と `publish`(⑤)は docs/cli.md §9 の順で足す。
+//! 第一期の範囲(①〜④): `init` / `new` / `check` / `test` / `build [--raw]` / `registry` / `token` / `dev` / `key` / `inspect`。
+//! `publish`(⑤)は docs/cli.md §9 の順で足す。
 
 mod credentials;
 mod embed;
+mod key;
+mod pkg;
 mod schema;
 mod wasm;
 mod workspace;
@@ -33,8 +35,8 @@ enum Cmd {
         /// 自分で SNS プラグインを作る(id を指定。土台は読まない)
         #[arg(long, value_name = "ID")]
         sns: Option<String>,
-        /// 土台の SNS プラグイン(manifest.json と .wasm があるディレクトリ)。.rasqpkg は第 ④ 段
-        #[arg(long, value_name = "DIR")]
+        /// 土台の SNS プラグイン(.rasqpkg、または manifest.json と .wasm があるディレクトリ)
+        #[arg(long, value_name = "PKG|DIR")]
         base: Option<PathBuf>,
         /// 土台が自分のもの(子を同梱する、D-244c)
         #[arg(long)]
@@ -68,13 +70,28 @@ enum Cmd {
     },
     /// cargo test(ホスト関数は kit の set_host_hook でモック)
     Test,
-    /// デプロイ向けビルド。第一期は --raw(子ごとの .wasm を dist/ へ)だけ
+    /// デプロイ向けビルド: dist/<id>-<version>.rasqpkg(+ 開発者署名 .sig.json)。--raw なら生の .wasm も
     Build {
-        /// 生の .wasm を dist/ に出す(今のホストが読める形。.rasqpkg は第 ④ 段)
+        /// 生の .wasm も dist/ に出す(今のホストのパス読み込み / ストアの生 wasm 配布(D-168)向け)
         #[arg(long)]
         raw: bool,
         #[arg(long)]
         no_build: bool,
+        /// 開発者鍵で署名しない
+        #[arg(long)]
+        no_sign: bool,
+    },
+    /// 開発者鍵(ed25519)。サイドロード用の署名に使う。ストア署名は Central 側
+    Key {
+        #[command(subcommand)]
+        cmd: KeyCmd,
+    },
+    /// .rasqpkg の中身を目次(bundle.json)と突き合わせ、.sig.json があれば署名も確かめる
+    Inspect {
+        pkg: PathBuf,
+        /// 中身をこのディレクトリに展開する
+        #[arg(long, value_name = "DIR")]
+        extract: Option<PathBuf>,
     },
     /// 同梱の登録簿 / 雛形を表示
     Registry {
@@ -95,6 +112,18 @@ enum Cmd {
         #[arg(long)]
         debug: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum KeyCmd {
+    /// 鍵を作る(~/.config/rasq/dev-key.toml、0600)
+    Init {
+        /// 既にあっても作り直す
+        #[arg(long)]
+        force: bool,
+    },
+    /// 公開鍵(base64)と指紋
+    Show,
 }
 
 #[derive(Subcommand)]
@@ -141,7 +170,9 @@ fn run() -> Result<()> {
             let (root, _) = Workspace::find()?;
             cargo(&root, &["test"])
         }
-        Cmd::Build { raw, no_build } => build(raw, no_build),
+        Cmd::Build { raw, no_build, no_sign } => build(raw, no_build, no_sign),
+        Cmd::Key { cmd } => key_cmd(cmd),
+        Cmd::Inspect { pkg, extract } => inspect(&pkg, extract.as_deref()),
         Cmd::Registry { what } => registry(what),
         Cmd::Token { cmd } => token(cmd),
         Cmd::Dev { watch, debug } => dev(watch, debug),
@@ -184,8 +215,34 @@ fn init(dir: PathBuf, sns: Option<String>, base: Option<PathBuf>, owned: bool, n
     Ok(())
 }
 
-/// `manifest.json` + `*.wasm` のディレクトリを base/ に写す(kind = sns だけ)。
+/// 土台を base/ に写す(kind = sns だけ): `.rasqpkg` なら展開、ディレクトリなら `manifest.json` + `*.wasm`。
 fn load_base(src: &Path, dest: &Path) -> Result<Base> {
+    if src.is_file() {
+        let bytes = std::fs::read(src).with_context(|| format!("{} を読めません", src.display()))?;
+        let ins = pkg::inspect(&bytes)?;
+        if !ins.problems.is_empty() {
+            bail!("{} に問題があります:\n  {}", src.display(), ins.problems.join("\n  "));
+        }
+        let root = &ins.bundle["root"];
+        if root["kind"] != "sns" {
+            bail!("土台は root.kind = sns の配布物だけです: {}", root["kind"]);
+        }
+        let find = |p: &str| ins.entries.iter().find(|e| e.path == p).map(|e| e.bytes.clone()).ok_or_else(|| anyhow!("{p} が配布物にありません"));
+        let manifest = find(root["manifest"].as_str().unwrap_or(""))?;
+        let wasm_path = root["wasm"]["path"].as_str().unwrap_or("");
+        let wasm = find(wasm_path)?;
+        std::fs::create_dir_all(dest)?;
+        std::fs::write(dest.join("manifest.json"), &manifest)?;
+        std::fs::write(dest.join(Path::new(wasm_path).file_name().unwrap()), &wasm)?;
+        std::fs::write(dest.join(pkg::BUNDLE), &ins.entries[0].bytes)?;
+        return Ok(Base {
+            id: root["id"].as_str().unwrap_or("").into(),
+            version: root["version"].as_str().unwrap_or("0.0.0").into(),
+            source: format!("file:{}", src.display()),
+            owned: false,
+            account: None,
+        });
+    }
     let manifest_path = src.join("manifest.json");
     let m: Value = serde_json::from_slice(&std::fs::read(&manifest_path).with_context(|| format!("{} を読めません", manifest_path.display()))?)?;
     if m["kind"] != "sns" {
@@ -378,26 +435,138 @@ fn report(label: &str, errs: &[String], warns: &[String]) {
     }
 }
 
-fn build(raw: bool, no_build: bool) -> Result<()> {
+fn build(raw: bool, no_build: bool, no_sign: bool) -> Result<()> {
     let (root, ws) = Workspace::find()?;
-    if !raw {
-        println!("note: .rasqpkg は第 ④ 段(docs/cli.md §6)。今は --raw と同じく生の .wasm を dist/ に出します");
+    if ws.targets(&root).is_empty() {
+        bail!("ビルド対象がありません(rasq new <slot> <name>)");
     }
     if !no_build {
         build_wasm(&root, "release")?;
     }
+    let v = verify(&root, &ws, "release")?;
+    if v.errors > 0 {
+        bail!("{} errors(rasq check を通してから)", v.errors);
+    }
     let dist = root.join("dist");
     std::fs::create_dir_all(&dist)?;
-    for t in ws.targets(&root) {
-        let src = t.wasm_path(&root, "release");
-        let bytes = std::fs::read(&src).with_context(|| format!("{} がありません(rasq check を先に)", src.display()))?;
-        let out = dist.join(src.file_name().unwrap());
-        std::fs::write(&out, &bytes)?;
-        let digest = Sha512::digest(&bytes);
-        println!("{}  {} bytes  sha512:{}", out.strip_prefix(&root).unwrap_or(&out).display(), bytes.len(), hex(&digest));
+
+    if raw {
+        for t in ws.targets(&root) {
+            let src = t.wasm_path(&root, "release");
+            let bytes = std::fs::read(&src)?;
+            let out = dist.join(src.file_name().unwrap());
+            std::fs::write(&out, &bytes)?;
+            println!("{}  {} bytes  sha512:{}", out.strip_prefix(&root).unwrap_or(&out).display(), bytes.len(), hex(&Sha512::digest(&bytes)));
+        }
     }
-    println!("rasq-client: 「WASMプラグイン試験 (dev)」→ .wasm のパスからインポート に上の絶対パス({})を入れる", dist.display());
+
+    let signer = if no_sign {
+        None
+    } else {
+        match key::load()? {
+            Some((k, sk)) => {
+                println!("署名: 開発者鍵 {}(公開鍵の指紋 {})", key::path()?.display(), key::fingerprint(&k.public));
+                Some(sk)
+            }
+            None => {
+                println!("note: 開発者鍵が無いので署名しません(rasq key init で作る。--no-sign で黙らせる)");
+                None
+            }
+        }
+    };
+    for p in pkg::plan(&root, &ws, "release")? {
+        let bytes = pkg::serialize(&p)?;
+        let out = dist.join(&p.file_name);
+        std::fs::write(&out, &bytes)?;
+        let digest: [u8; 64] = Sha512::digest(&bytes).into();
+        println!("{}", pkg::describe(&p));
+        println!("  {}  {} bytes  sha512:{}", out.strip_prefix(&root).unwrap_or(&out).display(), bytes.len(), hex(&digest));
+        if let Some(sk) = &signer {
+            let sig = key::sign(sk, &digest);
+            let sp = key::sig_path(&out);
+            std::fs::write(&sp, serde_json::to_string_pretty(&sig)?)?;
+            println!("  {}", sp.strip_prefix(&root).unwrap_or(&sp).display());
+        }
+    }
+    if raw {
+        println!("rasq-client: 「WASMプラグイン試験 (dev)」→ .wasm のパスからインポート に上の絶対パス({})を入れる", dist.display());
+    } else {
+        println!("note: 今のホストは .rasqpkg をまだ展開しない(M4 の 4 番)。端末で試すなら --raw の .wasm を使う");
+    }
     Ok(())
+}
+
+fn key_cmd(cmd: KeyCmd) -> Result<()> {
+    match cmd {
+        KeyCmd::Init { force } => {
+            let k = key::init(force)?;
+            println!("作りました: {}\n  public = {}\n  指紋 = {}", key::path()?.display(), k.public, key::fingerprint(&k.public));
+            println!("この公開鍵をホストに伝えると、サイドロード時に「開発者鍵」として検証される(WF P-23)。秘密は共有しない");
+        }
+        KeyCmd::Show => match key::load()? {
+            Some((k, _)) => println!("{}\n  alg = {}\n  public = {}\n  指紋 = {}\n  created = {}", key::path()?.display(), k.alg, k.public, key::fingerprint(&k.public), k.created_at),
+            None => bail!("鍵がありません(rasq key init)"),
+        },
+    }
+    Ok(())
+}
+
+fn inspect(path: &Path, extract: Option<&Path>) -> Result<()> {
+    let bytes = std::fs::read(path).with_context(|| format!("{} を読めません", path.display()))?;
+    let ins = pkg::inspect(&bytes)?;
+    let b = &ins.bundle;
+    println!("{}  {} bytes  sha512:{}", path.display(), bytes.len(), hex(&Sha512::digest(&bytes)));
+    println!("bundle: {} sdk {} createdAt {}", b["schema"].as_str().unwrap_or("?"), b["sdk"].as_str().unwrap_or("?"), b["createdAt"].as_str().unwrap_or("?"));
+    println!("root:   {} {} ({})", b["root"]["id"].as_str().unwrap_or(""), b["root"]["version"].as_str().unwrap_or(""), b["root"]["kind"].as_str().unwrap_or(""));
+    if let Some(r) = b["root"]["requires"].as_array() {
+        for x in r {
+            println!("  requires {} {}", x["id"].as_str().unwrap_or(""), x["version"].as_str().unwrap_or(""));
+        }
+    }
+    for c in b["children"].as_array().into_iter().flatten() {
+        println!("child:  {} {} ({}) slot {}", c["id"].as_str().unwrap_or(""), c["version"].as_str().unwrap_or(""), c["kind"].as_str().unwrap_or(""), c["template"].as_str().unwrap_or("-"));
+    }
+    for l in b["libs"].as_array().into_iter().flatten() {
+        println!("lib:    {} exports {:?}", l["name"].as_str().unwrap_or(""), l["exports"]);
+    }
+    for a in b["assets"].as_array().into_iter().flatten() {
+        println!("asset:  {} ({})", a["path"].as_str().unwrap_or(""), a["kind"].as_str().unwrap_or(""));
+    }
+    for m in b["models"].as_array().into_iter().flatten() {
+        println!("model:  {} lazy={}", m["manifest"].as_str().unwrap_or(""), m["lazy"]);
+    }
+    println!("files:");
+    for e in &ins.entries {
+        println!("  {:>9}  {}", e.bytes.len(), e.path);
+    }
+    let sp = key::sig_path(path);
+    if sp.is_file() {
+        let sig: Value = serde_json::from_slice(&std::fs::read(&sp)?)?;
+        let digest: [u8; 64] = Sha512::digest(&bytes).into();
+        match key::verify(&sig, &digest) {
+            Ok(pk) => println!("署名: ok(開発者鍵 指紋 {})", key::fingerprint(&pk)),
+            Err(e) => println!("署名: NG — {e}"),
+        }
+    } else {
+        println!("署名: なし({} が無い)", sp.file_name().unwrap().to_string_lossy());
+    }
+    if let Some(dir) = extract {
+        for e in &ins.entries {
+            let out = dir.join(&e.path);
+            std::fs::create_dir_all(out.parent().unwrap())?;
+            std::fs::write(&out, &e.bytes)?;
+        }
+        println!("展開: {}", dir.display());
+    }
+    if ins.problems.is_empty() {
+        println!("目次と中身: ok");
+        Ok(())
+    } else {
+        for p in &ins.problems {
+            println!("  ERROR: {p}");
+        }
+        bail!("{} 件の問題", ins.problems.len());
+    }
 }
 
 fn hex(b: &[u8]) -> String {

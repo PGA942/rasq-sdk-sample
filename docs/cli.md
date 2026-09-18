@@ -6,8 +6,9 @@
 > 流れそのものは [`../README.md`](../README.md#sdkcliの想定フローユーザー指定) の 5 段。ここはそれを
 > コマンド・ディレクトリ・ファイル形式・ホスト側の前提まで落としたもの。
 >
-> **実装状況**: §9 の ①②③(kit の引き上げ、雛形 10 個、`init / new / check / test / build --raw / registry`、
-> `token set|list|remove` / `dev [--watch]`)は [`../rust/rasq-cli`](../rust/rasq-cli) に実装済み。④ `.rasqpkg` + `key`、⑤ `publish` は未実装。
+> **実装状況**: §9 の ①〜④(kit の引き上げ、雛形 10 個、`init / new / check / test / build [--raw] / registry`、
+> `token set|list|remove` / `dev [--watch]`、`.rasqpkg` の `build` / `key init|show` / `inspect`)は
+> [`../rust/rasq-cli`](../rust/rasq-cli) に実装済み。⑤ `publish` は未実装。
 
 ## 0. 決めたこと(要約)
 
@@ -182,7 +183,11 @@ lazy = true
 - `rasq token remove <accountKey>`
 - Central のトークン(`[central."<host>"]`)は同じファイルに置く想定(⑤ publish で使う)
 
-## 6. ビルド(`rasq build`)と配布物
+## 6. ビルド(`rasq build`)と配布物(実装済み)
+
+`rasq build [--raw] [--no-sign] [--no-build]` は release の wasm32 ビルド → `rasq check` と同じ往復検査(エラーがあれば止まる)→
+`dist/<root.id>-<root.version>.rasqpkg`(+ `.sig.json`)。`--raw` を付けると生の `.wasm` も `dist/` に出す(今のホストのパス読み込み用)。
+`rasq inspect <x.rasqpkg> [--extract DIR]` が目次と中身(sha512 / sizeBytes / `SHA512SUMS` / 余分なファイル)と `.sig.json` を確かめる。
 
 `dist/<root.id>-<root.version>.rasqpkg`:
 
@@ -197,16 +202,24 @@ models/<x>.model.json (+ 本体、lazy でなければ)
 SHA512SUMS                  # 目次と同じ値の一覧(手で確かめる用)
 ```
 
-- 圧縮は zstd(レベル 19)、tar は POSIX、パスは `bundle.schema.json` の `path` の文法(`..` / 先頭 `/` 不可)
+- 圧縮は zstd(レベル 19、フレームのチェックサム付きなので 1 バイトの破損も `Data corruption detected` で止まる)、tar は GNU、
+  パスは `bundle.schema.json` の `path` の文法(`..` / 先頭 `/` / 先頭 `.` 不可)。`bundle.json` は組む前に `bundle.schema.json` で検査する
 - `dist/<…>.rasqpkg.sig.json` = `{ "alg": "ed25519", "publicKey": "<base64>", "signature": "<base64>", "digest": "sha512:<hex>" }`。
-  鍵は `rasq key init` で `~/.config/rasq/dev-key.ed25519` に作る。ホストのサイドロード(WF P-23 `PluginImportPanel`)は
-  この鍵で検証して「開発者鍵」の警告を出す。ストア署名は Central が付ける(D-034)ので CLI は関与しない
-- `owned = false` のワークスペースで `rasq build` すると、`[[plugins]]` **ごとに** root = その子の `.rasqpkg` を出し、
-  `root.requires = [{ id: base.id, version: "^<base.version>" }]` を書く。同梱はしない
+  鍵は `rasq key init` で `~/.config/rasq/dev-key.toml`(0600、`RASQ_DEV_KEY` で場所を変えられる)に作り、`rasq key show` が公開鍵と
+  指紋(公開鍵の SHA-512 先頭 8 バイト)を出す。署名対象は配布物バイト列の SHA-512 ダイジェスト(生 64 バイト)で、ホストの
+  `verifyArtifact` と同じ。鍵が無ければ `build` は署名せずに注意だけ出す(`--no-sign` で黙る)。ホストのサイドロード(WF P-23
+  `PluginImportPanel`)はこの鍵で検証して「開発者鍵」の警告を出す。ストア署名は Central が付ける(D-034)ので CLI は関与しない
+- `[sns]` のワークスペースは root = sns、`[base] owned = true` は root = `base/` の土台で、どちらも `[[plugins]]` を `children` に同梱する
+  (子の id が `<root>.` で始まらなければ止まる)。`owned = false`(他人の土台)や土台無しでは `[[plugins]]` **ごとに** root = その子の
+  `.rasqpkg` を出し、土台があれば `root.requires = [{ id: base.id, version: "^<base.version>" }]` を書く。同梱はしない
+- `[[libs]]` は wasm の export が `exports` にあることを wasmi で確かめて `libs/<file>` に、`[[assets]]` はそのパスのまま、`[[models]]` は
+  manifest と(`lazy = false` なら)`runtimes.*.file` / `tokenizer.file` の本体を入れる。`lazy = true` は manifest だけ + `artifactId = model-<name>`
+- `rasq init --base <x.rasqpkg>` は `inspect` と同じ検査を通してから root(`kind = sns` のみ)の manifest / wasm / `bundle.json` を `base/` に置く
 
 ホスト側の現状: ストアのインストールは `.rasqpkg` をまだ展開せず、配布物が生の wasm(`\0asm`)ならスロット登録する(D-168)。
-そのため第一期の `rasq build --raw` は子 1 つにつき `.wasm` をそのまま `dist/` に出す(今日の plugin-sample の `dist/` と同じ)。
-`.rasqpkg` の展開・検証(M4 の 4 番、D-034)が入り次第 `--raw` は不要になる。
+そのため `rasq build --raw` は子 1 つにつき `.wasm` もそのまま `dist/` に出す(今日の plugin-sample の `dist/` と同じ)。
+`.rasqpkg` の展開・検証(M4 の 4 番、D-034)が入り次第 `--raw` は不要になる。ホスト側の展開は `rasq inspect` と同じ手順
+(zstd → tar → 先頭 `bundle.json` → スキーマ → sha512 / sizeBytes → `SHA512SUMS` → `.sig.json`)で書ける。
 
 ## 7. 公開(`rasq publish`)
 
@@ -232,20 +245,20 @@ Central の管理 API(`rasq-central/src/admin/mod.rs`)に順に投げる。ト�
 | 項目 | 第一期の CLI | ホストの状態 |
 |---|---|---|
 | 単体 wasm のパス読み込み | 使う | あり(D-078) |
-| `.rasqpkg` の展開・検証・`bundle.json` の解釈 | `--raw` で回避 | 無し(M4 の 4 番) |
+| `.rasqpkg` の展開・検証・`bundle.json` の解釈 | 出す(`--raw` で生 wasm も) | 無し(M4 の 4 番。`rasq inspect` が参考実装) |
 | `wasm.call`(lib / child) | 目次に書くだけ | 未配線(`host-functions.md`) |
 | 添付の読み出し `storage.get({ns: "asset"})` | 目次に書くだけ | 無し(この文書で提案。`ns` を 1 つ足す形が最小) |
-| 開発者鍵の検証とサイドロード警告 | `.sig.json` を出す | 無し(WF P-23) |
+| 開発者鍵の検証とサイドロード警告 | `.sig.json` を出す(`rasq key`) | 無し(WF P-23) |
 | dev サーバーからの読み込み | 使わない | 第二期 |
 
 ## 9. 実装計画
 
-- `rust/rasq-cli`(bin `rasq`): `clap` / `serde` / `toml` / `jsonschema` / `wasmi` / `sha2` / `ed25519-dalek` / `tar` + `zstd` / `reqwest`(publish のみ)。
+- `rust/rasq-cli`(bin `rasq`): `clap` / `serde` / `toml` / `jsonschema` / `wasmi` / `sha2` / `ed25519-dalek` + `getrandom` / `tar` + `zstd` / `rpassword` / `reqwest`(publish のみ、未)。
   `schema/*.json` と `templates/` は `include_dir!` で同梱し、`rasq registry` はその同梱物を出す
 - `rust/rasq-plugin-kit`: plugin-sample の `kit/src/lib.rs` をそのまま移す(D-244i)。`rasq init` がワークスペースの `kit/` に写し、雛形は `path = "../../kit"`
 - `templates/<slot>/`: §3 の 9 つ + `sns`。`{{id}}` / `{{name}}` / `{{display}}` / `{{slot}}` / `{{kit_path}}` の置換だけ(テンプレートエンジンは使わない)
 - CI(`.gitlab-ci.yml`): `rust` ジョブで `rasq-cli` を組み、全雛形を `new → check` する
-- 順番: ✅ ① kit 引き上げ + 雛形 → ✅ ② `init / new / check / build --raw` → ✅ ③ `token / dev` → ④ `build`(.rasqpkg)+ `key` → ⑤ `publish`。
+- 順番: ✅ ① kit 引き上げ + 雛形 → ✅ ② `init / new / check / build --raw` → ✅ ③ `token / dev` → ✅ ④ `build`(.rasqpkg)+ `key` + `inspect` → ⑤ `publish`。
   ①〜② で今日の plugin-sample と同じものが CLI から作れる
 
 ## 10. 未決

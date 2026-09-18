@@ -7,6 +7,11 @@ use serde_json::Value;
 
 /// 同梱スキーマをすべて `https://rasq.io/schema/<name>` と `$id` で登録して、`manifest.schema.json` の検証器を作る。
 pub fn manifest_validator() -> Result<Validator> {
+    validator("manifest.schema.json")
+}
+
+/// 同梱スキーマ `name` の検証器(相対 $ref は同梱の他スキーマで解決)。
+pub fn validator(name: &str) -> Result<Validator> {
     let mut docs: Vec<(String, Value)> = Vec::new();
     for f in embed::SCHEMA.files() {
         let name = f.path().file_name().unwrap().to_string_lossy().into_owned();
@@ -30,8 +35,19 @@ pub fn manifest_validator() -> Result<Validator> {
             opts = opts.with_resource(id.to_string(), res);
         }
     }
-    let manifest = embed::schema_json("manifest.schema.json")?;
-    opts.build(&manifest).map_err(|e| anyhow::anyhow!("manifest.schema.json を組めません: {e}"))
+    let schema = embed::schema_json(name)?;
+    opts.build(&schema).map_err(|e| anyhow::anyhow!("{name} を組めません: {e}"))
+}
+
+/// スキーマ違反を文字列で(先頭 8 件)。
+pub fn violations(v: &Validator, doc: &Value) -> Vec<String> {
+    v.iter_errors(doc)
+        .take(8)
+        .map(|e| {
+            let path = e.instance_path.to_string();
+            format!("{}: {}", if path.is_empty() { "(root)".into() } else { path }, e)
+        })
+        .collect()
 }
 
 pub struct Findings {
