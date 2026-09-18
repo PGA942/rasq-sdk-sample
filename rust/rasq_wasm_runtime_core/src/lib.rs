@@ -456,6 +456,55 @@ fn serde_error_json(e: &RasqWasmError) -> String {
     format!("{{\"ok\":false,\"error\":{{\"code\":\"C02\",\"message\":{message:?}}}}}")
 }
 
+// ---- zstd(.rasqpkg の展開、D-034)------------------------------------------
+// ホスト(Dart)には zstd の復号器が無いので、ここに 1 関数だけ持つ。出力は `max_out` バイトで打ち切る
+// (小さな入力から巨大な出力を作る展開爆弾の対策)。
+
+/// zstd を展開する。失敗(壊れた入力 / `max_out` 超え)は Err。
+pub fn zstd_decompress(input: &[u8], max_out: usize) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let mut dec = ruzstd::decoding::StreamingDecoder::new(input).map_err(|e| format!("zstd header: {e}"))?;
+    let mut out = Vec::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = dec.read(&mut buf).map_err(|e| format!("zstd: {e}"))?;
+        if n == 0 {
+            return Ok(out);
+        }
+        if out.len() + n > max_out {
+            return Err(format!("zstd: output exceeds {max_out} bytes"));
+        }
+        out.extend_from_slice(&buf[..n]);
+    }
+}
+
+/// Decompresses a zstd frame. Returns a buffer owned by the caller (free it
+/// with `rasq_bytes_free(ptr, *out_len)`), or null on failure: corrupt input,
+/// or an output larger than `max_out` bytes. `*out_len` is set on success.
+#[no_mangle]
+pub extern "C" fn rasq_zstd_decompress(bytes_ptr: *const u8, bytes_len: usize, max_out: usize, out_len: *mut usize) -> *mut u8 {
+    if bytes_ptr.is_null() || out_len.is_null() {
+        return std::ptr::null_mut();
+    }
+    let input = unsafe { slice::from_raw_parts(bytes_ptr, bytes_len) };
+    match zstd_decompress(input, max_out) {
+        Ok(out) => {
+            let boxed = out.into_boxed_slice();
+            unsafe { *out_len = boxed.len() };
+            Box::into_raw(boxed) as *mut u8
+        }
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Frees a buffer returned by `rasq_zstd_decompress`.
+#[no_mangle]
+pub extern "C" fn rasq_bytes_free(ptr: *mut u8, len: usize) {
+    if !ptr.is_null() {
+        unsafe { drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len))) };
+    }
+}
+
 /// Instantiate a wasm module from raw bytes (no host-function handler:
 /// `rasq.host_fn` answers E00). Returns null on failure.
 #[no_mangle]
@@ -710,6 +759,32 @@ mod tests {
         assert!(result.contains(r#""count":1"#), "{result}");
         let snapshot = instance.snapshot().expect("snapshot");
         assert!(snapshot.contains("ネイティブfetchの投稿"), "{snapshot}");
+    }
+
+    #[test]
+    fn zstd_round_trip_limit_and_garbage() {
+        let raw: Vec<u8> = (0..200_000u32).flat_map(|i| (i % 251).to_le_bytes()).collect();
+        let packed = zstd::encode_all(&raw[..], 19).unwrap();
+        assert_eq!(zstd_decompress(&packed, raw.len()).unwrap(), raw);
+        // 上限を 1 バイトでも超えたら失敗(展開爆弾の対策)
+        assert!(zstd_decompress(&packed, raw.len() - 1).unwrap_err().contains("exceeds"));
+        // zstd でない入力 / 途中で切れた入力
+        assert!(zstd_decompress(b"not zstd at all", 1 << 20).is_err());
+        assert!(zstd_decompress(&packed[..packed.len() / 2], 1 << 30).is_err());
+        // 1 バイト化けた入力(フレームのチェックサム)
+        let mut bad = packed.clone();
+        let mid = bad.len() / 2;
+        bad[mid] ^= 0x55;
+        assert!(zstd_decompress(&bad, 1 << 30).is_err() || zstd_decompress(&bad, 1 << 30).unwrap() != raw);
+
+        // C ABI: 長さが返り、解放できる。失敗は null
+        let mut n: usize = 0;
+        let p = rasq_zstd_decompress(packed.as_ptr(), packed.len(), raw.len(), &mut n);
+        assert!(!p.is_null());
+        assert_eq!(unsafe { slice::from_raw_parts(p, n) }, &raw[..]);
+        rasq_bytes_free(p, n);
+        assert!(rasq_zstd_decompress(packed.as_ptr(), packed.len(), 10, &mut n).is_null());
+        assert!(rasq_zstd_decompress(b"xx".as_ptr(), 2, 100, &mut n).is_null());
     }
 
     #[test]

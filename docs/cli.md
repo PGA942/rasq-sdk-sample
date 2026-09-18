@@ -283,10 +283,10 @@ rasq publish --central http://100.91.218.56:8080 [--channel stable|beta] [--note
 | 項目 | 第一期の CLI | ホストの状態 |
 |---|---|---|
 | 単体 wasm のパス読み込み | 使う | あり(D-078) |
-| `.rasqpkg` の展開・検証・`bundle.json` の解釈 | 出す(`--raw` で生 wasm も) | 無し(M4 の 4 番。`rasq inspect` が参考実装) |
+| `.rasqpkg` の展開・検証・`bundle.json` の解釈 | 出す(`--raw` で生 wasm も) | **あり**(rasq-client `lib/features/store/rasqpkg.dart`。zstd はランタイム内蔵の `rasqZstdDecompress` = 純 Rust の ruzstd、tar 以降は Dart。`rasq inspect` と同じ手順で、ストアのインストール / 再起動時の取り直し / dev 画面のサイドロードが通る) |
 | `wasm.call`(lib / child) | 目次に書くだけ | 未配線(`host-functions.md`) |
 | 添付の読み出し `storage.get({ns: "asset"})` | 目次に書くだけ | 無し(この文書で提案。`ns` を 1 つ足す形が最小) |
-| 開発者鍵の検証とサイドロード警告 | `.sig.json` を出す(`rasq key`) | 無し(WF P-23) |
+| 開発者鍵の検証とサイドロード警告 | `.sig.json` を出す(`rasq key`) | dev 画面の `.rasqpkg` 取り込みで検証して指紋を表示(WF P-23 の専用パネルは未) |
 | dev サーバーからの読み込み | 使わない | 第二期 |
 
 ## 9. 実装計画

@@ -141,3 +141,34 @@ class RasqWasmPlugin {
     return value;
   }
 }
+
+/// zstd の展開に失敗した(壊れた入力 / 出力が上限を超えた)。
+class RasqZstdException implements Exception {
+  const RasqZstdException(this.message);
+  final String message;
+  @override
+  String toString() => 'RasqZstdException: $message';
+}
+
+/// `.rasqpkg`(zstd 圧縮 tar、D-034)の展開に使う zstd の復号。ランタイム内蔵の純 Rust 実装(ruzstd)なので
+/// 全プラットフォームで同じ。[maxOutput] を超える出力は失敗にする(展開爆弾の対策。既定 256 MiB)。
+Uint8List rasqZstdDecompress(Uint8List input, {int maxOutput = 256 * 1024 * 1024}) {
+  if (input.isEmpty) throw const RasqZstdException('empty input');
+  final inPtr = malloc<ffi.Uint8>(input.length);
+  final outLen = malloc<ffi.IntPtr>();
+  try {
+    inPtr.asTypedList(input.length).setAll(0, input);
+    final out = bindings.rasq_zstd_decompress(inPtr, input.length, maxOutput, outLen);
+    if (out == ffi.nullptr) {
+      throw RasqZstdException('not a valid zstd frame, or the output exceeds $maxOutput bytes');
+    }
+    try {
+      return Uint8List.fromList(out.asTypedList(outLen.value));
+    } finally {
+      bindings.rasq_bytes_free(out, outLen.value);
+    }
+  } finally {
+    malloc.free(inPtr);
+    malloc.free(outLen);
+  }
+}

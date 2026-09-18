@@ -100,3 +100,26 @@ typedef RasqHostFnCallbackFunction = ffi.Pointer<ffi.Char> Function(
 /// (the runtime frees it), or NULL for "unhandled" (becomes an E00 error).
 typedef RasqHostFnCallback =
     ffi.Pointer<ffi.NativeFunction<RasqHostFnCallbackFunction>>;
+
+/// Decompresses a zstd frame (.rasqpkg = zstd-compressed tar, D-034). Returns a
+/// buffer owned by the caller (free with rasq_bytes_free(ptr, *out_len)), or
+/// NULL on failure: corrupt input, or an output larger than `max_out` bytes
+/// (decompression-bomb guard). `*out_len` is set on success.
+@ffi.Native<
+  ffi.Pointer<ffi.Uint8> Function(
+    ffi.Pointer<ffi.Uint8>,
+    ffi.IntPtr,
+    ffi.IntPtr,
+    ffi.Pointer<ffi.IntPtr>,
+  )
+>()
+external ffi.Pointer<ffi.Uint8> rasq_zstd_decompress(
+  ffi.Pointer<ffi.Uint8> bytes_ptr,
+  int bytes_len,
+  int max_out,
+  ffi.Pointer<ffi.IntPtr> out_len,
+);
+
+/// Frees a buffer returned by rasq_zstd_decompress.
+@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>, ffi.IntPtr)>()
+external void rasq_bytes_free(ffi.Pointer<ffi.Uint8> ptr, int len);

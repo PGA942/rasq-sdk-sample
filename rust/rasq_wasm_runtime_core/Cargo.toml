@@ -22,5 +22,10 @@ ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 wgpu = "22"
 pollster = "0.3"
 base64 = "0.22"
+# .rasqpkg(D-034: zstd 圧縮 tar)の展開。純 Rust の復号器なので C ツールチェーン無しで iOS / Android にもそのまま
+# クロスコンパイルできる(圧縮は要らない: 作るのは rasq CLI 側)。
+ruzstd = "0.8"
 
 [dev-dependencies]
+# テストで圧縮側を作るためだけ(C の zstd)。ランタイム本体には入らない。
+zstd = "0.13"
