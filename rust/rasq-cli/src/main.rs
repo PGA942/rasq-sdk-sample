@@ -1,6 +1,6 @@
 //! `rasq` — RASQ プラグイン作者向け CLI(docs/cli.md、D-244)。
 //!
-//! 第一期(①〜⑤): `init` / `new` / `check` / `test` / `build [--raw]` / `registry` / `token` / `dev` / `key` / `inspect` / `publish`。
+//! 第一期(①〜⑤): `init` / `new` / `check` / `test` / `call` / `build [--raw]` / `registry` / `token` / `dev` / `key` / `inspect` / `publish`。
 
 mod credentials;
 mod embed;
@@ -70,6 +70,25 @@ enum Cmd {
     },
     /// cargo test(ホスト関数は kit の set_host_hook でモック)
     Test,
+    /// ビルド済みの wasm を wasmi で動かして call を 1 つ(以上)叩く。ホスト関数は --reply で答えを差し込める(無ければ E01)
+    Call {
+        /// プラグインの名前(plugins/<name>、SNS プラグインは sns)
+        name: String,
+        /// 呼ぶ fn(例 viewer.open)
+        r#fn: String,
+        /// args の JSON。@path でファイルから。値の中の "@b64:<path>" はそのファイルの base64 に置き換える
+        #[arg(long, default_value = "{}")]
+        args: String,
+        /// ホスト関数の答え: fn=JSON(例 --reply 'fow.open={"opened":true}')。何度でも
+        #[arg(long, value_name = "FN=JSON")]
+        reply: Vec<String>,
+        /// 続けて呼ぶ fn(同じインスタンスで。args は {})。何度でも
+        #[arg(long, value_name = "FN")]
+        then: Vec<String>,
+        /// 長い文字列(base64 など)を縮めずに出す
+        #[arg(long)]
+        full: bool,
+    },
     /// デプロイ向けビルド: dist/<id>-<version>.rasqpkg(+ 開発者署名 .sig.json)。--raw なら生の .wasm も
     Build {
         /// 生の .wasm も dist/ に出す(今のホストのパス読み込み / ストアの生 wasm 配布(D-168)向け)
@@ -199,6 +218,7 @@ fn run() -> Result<()> {
             let (root, _) = Workspace::find()?;
             cargo(&root, &["test"])
         }
+        Cmd::Call { name, r#fn, args, reply, then, full } => call_cmd(&name, &r#fn, &args, &reply, &then, full),
         Cmd::Build { raw, no_build, no_sign } => build(raw, no_build, no_sign),
         Cmd::Key { cmd } => key_cmd(cmd),
         Cmd::Inspect { pkg, extract } => inspect(&pkg, extract.as_deref()),
@@ -453,6 +473,86 @@ fn verify(root: &Path, ws: &Workspace, profile: &str) -> Result<Verified> {
         }
     }
     Ok(Verified { targets: targets.len(), errors, warnings })
+}
+
+/// `"@b64:<path>"` をファイルの base64 に置き換える(画像を args に入れる用)。
+fn expand_b64(v: &mut Value, root: &Path) -> Result<()> {
+    match v {
+        Value::String(s) => {
+            if let Some(p) = s.strip_prefix("@b64:") {
+                use base64::Engine;
+                let bytes = std::fs::read(root.join(p)).or_else(|_| std::fs::read(p)).with_context(|| format!("{p} を読めません"))?;
+                *s = base64::engine::general_purpose::STANDARD.encode(bytes);
+            }
+        }
+        Value::Array(a) => {
+            for x in a {
+                expand_b64(x, root)?;
+            }
+        }
+        Value::Object(o) => {
+            for (_, x) in o.iter_mut() {
+                expand_b64(x, root)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// 表示用: 長い文字列を縮める。
+fn shorten(v: &Value) -> Value {
+    match v {
+        Value::String(s) if s.chars().count() > 160 => Value::String(format!("{}…({} 文字)", s.chars().take(60).collect::<String>(), s.chars().count())),
+        Value::Array(a) => Value::Array(a.iter().map(shorten).collect()),
+        Value::Object(o) => Value::Object(o.iter().map(|(k, x)| (k.clone(), shorten(x))).collect()),
+        other => other.clone(),
+    }
+}
+
+fn call_cmd(name: &str, fn_name: &str, args: &str, replies: &[String], then: &[String], full: bool) -> Result<()> {
+    let (root, ws) = Workspace::find()?;
+    let t = ws.targets(&root).into_iter().find(|t| t.package == name).ok_or_else(|| anyhow!("{name} はワークスペースにありません"))?;
+    let wasm_path = t.wasm_path(&root, "release");
+    let bytes = std::fs::read(&wasm_path).with_context(|| format!("{} がありません(rasq check / rasq dev を先に)", wasm_path.display()))?;
+    let text = match args.strip_prefix('@') {
+        Some(p) => std::fs::read_to_string(p).with_context(|| format!("{p} を読めません"))?,
+        None => args.to_string(),
+    };
+    let mut args: Value = serde_json::from_str(&text).context("--args が JSON ではありません")?;
+    expand_b64(&mut args, &root)?;
+    let mut host = wasm::HostState::default();
+    for r in replies {
+        let (k, v) = r.split_once('=').ok_or_else(|| anyhow!("--reply は FN=JSON の形です: {r}"))?;
+        host.replies.insert(k.to_string(), serde_json::from_str(v).with_context(|| format!("--reply {k} の値が JSON ではありません"))?);
+    }
+    let show = |v: &Value| serde_json::to_string_pretty(&if full { v.clone() } else { shorten(v) }).unwrap_or_default();
+    let mut p = wasm::Plugin::load_with(&bytes, host)?;
+    p.message("snapshot")?;
+    let mut calls = vec![(fn_name.to_string(), args)];
+    calls.extend(then.iter().map(|f| (f.clone(), serde_json::json!({}))));
+    let mut failed = false;
+    for (i, (f, a)) in calls.iter().enumerate() {
+        let started = std::time::Instant::now();
+        let r = p.call(f, a, &format!("rasq-call-{i}"))?;
+        println!("call {f} ({} ms) →", started.elapsed().as_millis());
+        if r["ok"] == true {
+            println!("{}", show(&r["value"]));
+        } else {
+            failed = true;
+            println!("ERROR {}", show(&r["error"]));
+        }
+        for (hf, ha) in p.take_host_log() {
+            println!("  host {hf} {}", show(&ha));
+        }
+        if r["value"]["patch"] == true {
+            println!("  patch {}", show(&p.message("patch")?));
+        }
+    }
+    if failed {
+        bail!("call が失敗しました");
+    }
+    Ok(())
 }
 
 fn report(label: &str, errs: &[String], warns: &[String]) {

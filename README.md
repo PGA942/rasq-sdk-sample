@@ -41,12 +41,13 @@ Misskey アダプタ(`packages/sns_misskey`)で検証したものを、ここで
 
 プラグイン作者向けの CLI は次の流れになる想定。ここに書いておき、実装時に `schema/` の登録簿とマニフェストを土台にする。
 コマンド・ディレクトリ・配布物の形まで落とした設計は [`docs/cli.md`](docs/cli.md)(D-244)。
-**実装済み(第一期 ①〜⑤)**: [`rust/rasq-cli`](rust/rasq-cli) の `rasq init / new / check / test / build [--raw] / registry / token / dev / key / inspect / publish` と、
+**実装済み(第一期 ①〜⑤)**: [`rust/rasq-cli`](rust/rasq-cli) の `rasq init / new / check / test / call / build [--raw] / registry / token / dev / key / inspect / publish` と、
 [`templates/`](templates)(stable 9 スロット + sns の雛形)、[`rust/rasq-plugin-kit`](rust/rasq-plugin-kit)(kit の正典)。
 
 ```sh
 cd rust && cargo build --release -p rasq-cli          # → rust/target/release/rasq
 rasq init --namespace net.example && rasq new post.action later && rasq check && rasq build --raw
+rasq call later post.action --args '{"token":"t","actionId":"hello","post":{"body":"abc"},"account":{}}'   # wasm そのものを wasmi で叩く
 rasq token set misskey:misskey.io:yamada   # トークンは非表示入力 → ~/.config/rasq/credentials.toml(0600)
 rasq dev --watch                           # ビルド → 往復検査 → dev 画面に入れる絶対パス(変更のたびに再ビルド)
 rasq key init && rasq build                # dist/<id>-<version>.rasqpkg(zstd tar + bundle.json)+ 開発者署名 .sig.json

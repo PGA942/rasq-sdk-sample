@@ -42,6 +42,9 @@ rust:
     - $RASQ init --sns ci.test.sns --namespace ci.test
     - for s in post.transform tl trend.suggest viewer.overlay composer.media composer.text astell.action post.share post.action; do $RASQ new $s $(echo $s | tr . -); done
     - $RASQ check
+    # wasm そのものを wasmi で叩く(native の cargo test では見つからない wasm だけの panic を拾う)
+    - $RASQ call post-transform post.transform --args '{"posts":[{"id":"a","body":"こんにちは 世界"}]}' | tee /tmp/call.out && grep -q "こんにちは👋" /tmp/call.out
+    - $RASQ call post-share post.share --args '{"token":"s","post":{"body":"本文"},"account":{},"link":"https://example.com/p/1"}' --reply 'fow.open={"opened":true}' --then share.copy --then post.share.close | tee /tmp/call2.out && grep -q "host clipboard.set" /tmp/call2.out && grep -q "host fow.close" /tmp/call2.out
     - $RASQ build --raw --no-build
     - RASQ_TOKEN=ci-dummy-token $RASQ token set other:example.test:ci --from-env RASQ_TOKEN
     - $RASQ token list
