@@ -67,11 +67,16 @@ fn write_dir(dir: &Dir<'_>, base: &Path, dest: &Path, vars: &[(&str, &str)], wri
         if let Some(p) = out.parent() {
             std::fs::create_dir_all(p)?;
         }
-        let mut text = String::from_utf8(f.contents().to_vec()).with_context(|| format!("雛形 {} が UTF-8 ではありません", f.path().display()))?;
-        for (k, v) in vars {
-            text = text.replace(&format!("{{{{{k}}}}}"), v);
+        // 文字のファイルは `{{key}}` を置き換える。画像など(UTF-8 でないもの)はそのまま写す。
+        match String::from_utf8(f.contents().to_vec()) {
+            Ok(mut text) => {
+                for (k, v) in vars {
+                    text = text.replace(&format!("{{{{{k}}}}}"), v);
+                }
+                std::fs::write(&out, text).with_context(|| format!("{} を書けません", out.display()))?;
+            }
+            Err(_) => std::fs::write(&out, f.contents()).with_context(|| format!("{} を書けません", out.display()))?,
         }
-        std::fs::write(&out, text).with_context(|| format!("{} を書けません", out.display()))?;
         written.push(rel.to_string_lossy().into_owned());
     }
     for d in dir.dirs() {

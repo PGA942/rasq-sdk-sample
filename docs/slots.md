@@ -1,4 +1,4 @@
-# RASQ スロットプラグイン契約 v0.10(正典)
+# RASQ スロットプラグイン契約 v0.11(正典)
 
 > **ここが正典。** 以前は `orgate-question/plugin-sample/*/CONTRACT.md` に同じ文書が複製されていたが、v0.8 から
 > 各リポジトリの `CONTRACT.md` はこのファイルへのポインタだけになった。節番号(§2.1〜§2.9 / §3 / §4 / §5)は複製時代のまま。
@@ -99,7 +99,11 @@
   動画 / 音声: **元のファイルをそのまま**渡し、`media.commit` の結果で添付を差し替えて加工画面を閉じる。
 - **宣言が 1 つも無い**プラグイン(v0.9 まで)は、プラグイン名 + 既定アイコンのボタン 1 つが**画像にだけ**出る
   (`actionId` は付かない)。`rasq check` は警告を出す。
-- `accepts` は `slot: "composer.media"` の宣言にだけ書ける。`actions[].slot` は `manifest.slots` にあるスロットだけ。
+- **`output`(v0.11)** = `media.commit` の結果の置き方。`"replace"`(既定)= 背景を差し替える。`"sticker"` = 結果(透過つきの画像が
+  望ましい)を**ステッカーのレイヤー**として今の絵の上に置く(背景は変えない。ユーザーは動かす / 拡縮 / 回転 / 削除ができる)。
+  ジェネレーター(QR コード、吹き出し、枠、AI 生成の切り抜きなど)向け。入力は従来どおり今の見た目の 1 枚(無視してよい)。
+  加工画面のステッカー一覧にも「プラグインで作る」として並ぶ。動画 / 音声のバーでは `replace` と同じ扱い。
+- `accepts` / `output` は `slot: "composer.media"` の宣言にだけ書ける。`actions[].slot` は `manifest.slots` にあるスロットだけ。
 
 **ジャンル**は既定 5 種 + カスタム。既定の id は固定(ホストがラベル / アイコンを持つ):
 
@@ -253,6 +257,36 @@ TL プラグインはタブではなく、簡略カスタマイズ UI / ノー�
 - ボタンの id はホスト側で `slot:<pluginId>:<actionId>` になる(非表示 / 並び順の保存に使う)= **ActionKey**
   ([`../schema/action-ref.schema.json`](../schema/action-ref.schema.json)、D-006)。版を含めないので、プラグインを更新しても設定が残る。
   実行時にホストが使う完全修飾の `ActionRef`(`pluginId:accountKey:pluginVersion:fn`)とは別物。
+
+### 2.10 アセットパック — `kind: "assets"`(v0.11、スロットではない)
+
+**wasm を持たない配布物**。中身は画像だけで、ホストは読むだけ(コードは動かない / 権限も無い)。そのぶん審査は軽い
+(画像の内容と権利の確認だけ)。今の使い道は加工画面の**ステッカー**(`use: "sticker"`)。
+
+```json
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "net.example.stickers", "name": "ねこステッカー", "version": "0.1.0", "kind": "assets",
+  "description": "ねこのステッカー 12 枚",
+  "assets": [
+    { "id": "cat-1", "path": "stickers/cat-1.png", "use": "sticker", "label": "ねこ 1", "tags": ["cat"] }
+  ]
+}
+```
+
+- `assets[]`: `id`(パック内で一意)/ `path`(パックのディレクトリからの相対パス = 配布物の中のパス)/ `use` / `label` / `tags`。
+- 画像は **PNG / JPEG / WebP / GIF**(中身のマジックナンバーで判定、拡張子と一致すること)、**1 枚 2 MiB・合計 16 MiB・256 枚**まで。
+- `slots` / `permissions` / `actions` / `roles` は書けない。土台(SNS プラグイン)にも依らない(`requires` 無し)。
+  ほかの `kind` のマニフェストは `assets` を書けない(プラグインに同梱するファイルは rasq.toml の `[[assets]]`)。
+- 配布物(`.rasqpkg`): `bundle.json` の `root` は `{id, version, kind: "assets", manifest}` で **`wasm` を持たない**。`children` / `libs` /
+  `models` は空、`assets[]` は全部 `kind: "image"` で `sha512` / `sizeBytes` 必須([`bundle.schema.json`](../schema/bundle.schema.json))。
+  署名 / ハッシュの扱いはほかの配布物と同じ。
+- CLI: `rasq new assets <name>` → `packs/<name>/`(`manifest.json` + `stickers/`)、rasq.toml に `[[packs]]`。`rasq check` は
+  スキーマ / 形式 / 大きさ / 書き忘れ(ディレクトリにあるのに `assets` に無い画像 = 警告)を見る(wasm のビルドは要らない)。
+  `rasq build` はパックごとに配布物 1 つ、`rasq publish` は掲載のカテゴリを `assets` にする。コードのプラグインと同じ
+  ワークスペースに置ける。
+- ホスト(rasq-client): インストールすると画像を端末に保存し、加工画面の「ステッカー」に**パックごとの節**で並ぶ。
+  ホストは配布物に wasm が 1 つでも入っていたらアセットパックとして扱わない(入れ物に紛れ込ませない)。
 
 ## 3. RRL のホスト拡張(rasq-client D-167 以降。古いホストは無視/⚠ボックス)
 

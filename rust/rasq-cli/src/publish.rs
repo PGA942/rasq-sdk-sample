@@ -144,6 +144,13 @@ fn listing(ws: &Workspace, manifest: &Value) -> Value {
     if let Some(c) = l.and_then(|l| l.category.clone()) {
         v["category"] = json!(c);
     }
+    // アセットパックは同じワークスペースのプラグインと掲載を分ける: 名前 / 説明は自分の manifest、カテゴリは assets。
+    if manifest["kind"] == "assets" {
+        v["name"] = manifest["name"].clone();
+        v["summary"] = json!(desc.chars().take(80).collect::<String>());
+        v["description"] = json!(desc);
+        v["category"] = json!("assets");
+    }
     if let Some(u) = l.and_then(|l| l.icon_url.clone()) {
         v["iconUrl"] = json!(u);
     }

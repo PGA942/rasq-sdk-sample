@@ -95,6 +95,9 @@ pub fn check_manifest(v: &Validator, registry: &[Slot], m: &Value, declared_slot
                 f.errors.push(format!("action {} の slot {slot} が manifest.slots {slots:?} にありません", a["id"]));
             }
         }
+        if !a["output"].is_null() && a["slot"] != "composer.media" {
+            f.errors.push(format!("action {} の output は slot = \"composer.media\" の宣言にだけ書けます", a["id"]));
+        }
         if !a["accepts"].is_null() && a["slot"] != "composer.media" {
             f.errors.push(format!("action {} の accepts は slot = \"composer.media\" の宣言にだけ書けます", a["id"]));
         }

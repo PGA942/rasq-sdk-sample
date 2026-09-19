@@ -131,7 +131,7 @@ pub fn plan(root: &Path, ws: &Workspace, profile: &str) -> Result<Vec<Package>> 
         let root_json = json!({"id": rb.id, "version": rb.version, "kind": "sns", "manifest": "manifest.json", "wasm": file_json(&rb.wasm_name, &rb.wasm)});
         out.push(assemble(root_json, children, &extras, entries)?);
     } else {
-        if plugins.is_empty() {
+        if plugins.is_empty() && ws.packs.is_empty() {
             bail!("配布するものがありません(rasq new <slot> <name>)");
         }
         let requires = ws.base.as_ref().map(|b| json!([{"id": b.id, "version": format!("^{}", b.version)}]));
@@ -208,6 +208,11 @@ fn assemble(root_json: Value, children: Vec<Value>, extras: &Extras, mut entries
     for e in &extras.entries {
         entries.push(Entry { path: e.path.clone(), bytes: e.bytes.clone() });
     }
+    assemble_with(root_json, children, extras.libs.clone(), extras.assets.clone(), extras.models.clone(), entries)
+}
+
+/// 目次を組み立てて bundle.schema.json で確かめる。
+pub fn assemble_with(root_json: Value, children: Vec<Value>, libs: Vec<Value>, assets: Vec<Value>, models: Vec<Value>, entries: Vec<Entry>) -> Result<Package> {
     let mut seen = BTreeMap::new();
     for e in &entries {
         check_path(&e.path)?;
@@ -221,9 +226,9 @@ fn assemble(root_json: Value, children: Vec<Value>, extras: &Extras, mut entries
         "createdAt": crate::credentials::now(),
         "root": root_json,
         "children": children,
-        "libs": extras.libs,
-        "assets": extras.assets,
-        "models": extras.models,
+        "libs": libs,
+        "assets": assets,
+        "models": models,
     });
     let v = schema::validator("bundle.schema.json")?;
     let errs = schema::violations(&v, &bundle);

@@ -11,7 +11,7 @@ Misskey アダプタ(`packages/sns_misskey`)で検証したものを、ここで
 - [`docs/host-functions.md`](docs/host-functions.md) — ホスト関数(storage / net.fetch / alert / fow.* / ml.infer)
 - [`docs/fow.md`](docs/fow.md) — FOW 拡張面(open/close・anchor・親子・surface patch・ライフサイクル)
 - [`docs/sns-boundary.md`](docs/sns-boundary.md) — SNS 抽象関数(`sns.*`)と Post ワイヤ `rasq.post/1`
-- [`docs/slots.md`](docs/slots.md) — **スロットプラグイン契約(正典、v0.10)**: 9 スロットの call / ホスト関数 / FOW の着き方。機械可読な登録簿は [`schema/slots.json`](schema/slots.json)。
+- [`docs/slots.md`](docs/slots.md) — **スロットプラグイン契約(正典、v0.11)**: 9 スロットの call / ホスト関数 / FOW の着き方。機械可読な登録簿は [`schema/slots.json`](schema/slots.json)。
 - [`docs/cli.md`](docs/cli.md) — **`rasq` CLI の設計(D-244)**: ワークスペース(`rasq.toml`)、雛形、配下へのバンドル、`.rasqpkg` の目次 [`schema/bundle.schema.json`](schema/bundle.schema.json)、確認・ビルド・公開。
   `plugin-sample/*/CONTRACT.md` はここへのポインタ
 

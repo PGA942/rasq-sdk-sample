@@ -35,7 +35,7 @@
   "$defs": {
     "slotId": { "type": "string", "pattern": "^[a-z][a-zA-Z0-9]*(\\.[a-z][a-zA-Z0-9]*)*$" },
     "tier": { "enum": ["content", "media", "action", "avatar", "full", "page"] },
-    "kind": { "enum": ["sns", "action", "view", "trend", "mediaViewer", "postProcessor"] },
+    "kind": { "enum": ["sns", "action", "view", "trend", "mediaViewer", "postProcessor", "assets"] },
     "permission": {
       "enum": ["render", "replace_tile", "transform_content", "tag_media", "replace_media", "register_action", "decorate_avatar", "fow.widget", "fow.interstitial", "fow.system", "network", "gpu_ml", "storage.safe", "storage.unsafe", "auto_hook", "mute.words"]
     },

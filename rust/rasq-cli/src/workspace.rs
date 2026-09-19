@@ -21,6 +21,9 @@ pub struct Workspace {
     pub sns: Option<Sns>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<PluginEntry>,
+    /// アセットパック(`packs/<name>/`、wasm 無し。docs/slots.md §2.10)。パックごとに配布物 1 つ。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub packs: Vec<PackEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub libs: Vec<Lib>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -89,6 +92,12 @@ pub struct PluginEntry {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct PackEntry {
+    pub name: String,
+    pub id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Lib {
     pub name: String,
     pub path: String,
@@ -134,6 +143,7 @@ impl Workspace {
             base: None,
             sns: None,
             plugins: vec![],
+            packs: vec![],
             libs: vec![],
             assets: vec![],
             models: vec![],

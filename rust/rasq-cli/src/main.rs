@@ -5,6 +5,7 @@
 mod credentials;
 mod embed;
 mod key;
+mod pack;
 mod pkg;
 mod publish;
 mod schema;
@@ -317,8 +318,11 @@ fn load_base(src: &Path, dest: &Path) -> Result<Base> {
 fn new(slot: &str, name: &str, id: Option<String>, display: Option<String>, allow_planned: bool) -> Result<()> {
     let (root, mut ws) = Workspace::find()?;
     workspace::valid_name(name)?;
-    if name == "sns" || name == "kit" || ws.plugin(name).is_some() {
+    if name == "sns" || name == "kit" || ws.plugin(name).is_some() || ws.packs.iter().any(|p| p.name == name) {
         bail!("その名前は使えません(予約語か既にある): {name}");
+    }
+    if slot == "assets" {
+        return new_pack(&root, ws, name, id, display);
     }
     let reg = embed::registry()?;
     let s = reg.iter().find(|s| s.id == slot).ok_or_else(|| anyhow!("slot {slot} は登録簿にありません(rasq registry)"))?;
@@ -342,6 +346,40 @@ fn new(slot: &str, name: &str, id: Option<String>, display: Option<String>, allo
     println!("plugins/{name}/ を作りました(id = {id}, slot = {slot}): {}", files.join(", "));
     println!("  次: src/lib.rs の handle を書く → rasq check");
     Ok(())
+}
+
+/// `rasq new assets <name>`: アセットパック(wasm 無し、`packs/<name>/`)。土台に依らないので id は常に `<namespace>.<name>`。
+fn new_pack(root: &Path, mut ws: Workspace, name: &str, id: Option<String>, display: Option<String>) -> Result<()> {
+    let id = id.unwrap_or_else(|| format!("{}.{name}", ws.namespace()));
+    workspace::valid_plugin_id(&id)?;
+    let display = display.unwrap_or_else(|| name.to_string());
+    let dest = root.join("packs").join(name);
+    if dest.exists() {
+        bail!("{} が既にあります", dest.display());
+    }
+    let vars = [("id", id.as_str()), ("name", name), ("display", display.as_str())];
+    let files = embed::render_template("assets", &dest, &vars)?;
+    ws.packs.push(workspace::PackEntry { name: name.into(), id: id.clone() });
+    ws.save(root)?;
+    println!("packs/{name}/ を作りました(id = {id}, kind = assets): {}", files.join(", "));
+    println!("  次: stickers/ に画像を置いて manifest.json の assets に書く → rasq check");
+    Ok(())
+}
+
+/// アセットパックの検査(wasm のビルドは要らない)。戻りは (errors, warnings)。
+fn verify_packs(root: &Path, ws: &Workspace) -> Result<(usize, usize, Vec<pack::Checked>)> {
+    let (mut errors, mut warnings, mut out) = (0, 0, Vec::new());
+    for p in &ws.packs {
+        let c = pack::check(&root.join("packs").join(&p.name), p)?;
+        report(&format!("packs/{}", p.name), &c.errors, &c.warnings);
+        if c.errors.is_empty() {
+            println!("  ok: {} 枚 ({} KB)", c.files.len(), c.files.iter().map(|(_, b)| b.len()).sum::<usize>() / 1024);
+        }
+        errors += c.errors.len();
+        warnings += c.warnings.len();
+        out.push(c);
+    }
+    Ok((errors, warnings, out))
 }
 
 // ---------------------------------------------------------------------------
@@ -372,18 +410,23 @@ fn cargo_version(dir: &Path) -> Option<String> {
 
 fn check(no_build: bool, no_test: bool) -> Result<()> {
     let (root, ws) = Workspace::find()?;
-    if ws.targets(&root).is_empty() {
+    let has_code = !ws.targets(&root).is_empty();
+    if !has_code && ws.packs.is_empty() {
         bail!("ビルド対象がありません(rasq new <slot> <name>)");
     }
-    if !no_build {
+    if has_code && !no_build {
         build_wasm(&root, "release")?;
     }
-    let v = verify(&root, &ws, "release")?;
+    let mut v = if has_code { verify(&root, &ws, "release")? } else { Verified { targets: 0, errors: 0, warnings: 0 } };
+    let (pe, pw, packs) = verify_packs(&root, &ws)?;
+    v.targets += packs.len();
+    v.errors += pe;
+    v.warnings += pw;
     println!("{} targets, {} errors, {} warnings", v.targets, v.errors, v.warnings);
     if v.errors > 0 {
         bail!("rasq check に失敗しました");
     }
-    if !no_test {
+    if has_code && !no_test {
         cargo(&root, &["test"])?;
     }
     Ok(())
@@ -573,15 +616,17 @@ fn build(raw: bool, no_build: bool, no_sign: bool) -> Result<()> {
 /// dist/ を作る。戻りは (ファイル名, bundle.json)。
 fn build_in(root: &Path, ws: &Workspace, raw: bool, no_build: bool, no_sign: bool) -> Result<Vec<(String, Value)>> {
     let root = root.to_path_buf();
-    if ws.targets(&root).is_empty() {
+    let has_code = !ws.targets(&root).is_empty();
+    if !has_code && ws.packs.is_empty() {
         bail!("ビルド対象がありません(rasq new <slot> <name>)");
     }
-    if !no_build {
+    if has_code && !no_build {
         build_wasm(&root, "release")?;
     }
-    let v = verify(&root, ws, "release")?;
-    if v.errors > 0 {
-        bail!("{} errors(rasq check を通してから)", v.errors);
+    let code_errors = if has_code { verify(&root, ws, "release")?.errors } else { 0 };
+    let (pack_errors, _, packs) = verify_packs(&root, ws)?;
+    if code_errors + pack_errors > 0 {
+        bail!("{} errors(rasq check を通してから)", code_errors + pack_errors);
     }
     let dist = root.join("dist");
     std::fs::create_dir_all(&dist)?;
@@ -611,7 +656,11 @@ fn build_in(root: &Path, ws: &Workspace, raw: bool, no_build: bool, no_sign: boo
         }
     };
     let mut built = Vec::new();
-    for p in pkg::plan(&root, ws, "release")? {
+    let mut planned = if has_code { pkg::plan(&root, ws, "release")? } else { Vec::new() };
+    for c in &packs {
+        planned.push(pack::package(c)?);
+    }
+    for p in planned {
         let bytes = pkg::serialize(&p)?;
         let out = dist.join(&p.file_name);
         std::fs::write(&out, &bytes)?;
@@ -629,7 +678,7 @@ fn build_in(root: &Path, ws: &Workspace, raw: bool, no_build: bool, no_sign: boo
     if raw {
         println!("rasq-client: 「WASMプラグイン試験 (dev)」→ .wasm のパスからインポート に上の絶対パス({})を入れる", dist.display());
     } else {
-        println!("note: 今のホストは .rasqpkg をまだ展開しない(M4 の 4 番)。端末で試すなら --raw の .wasm を使う");
+        println!("rasq-client: 「WASMプラグイン試験 (dev)」→ パスからインポート に dist/ の .rasqpkg を入れるか、rasq publish でストアへ");
     }
     Ok(built)
 }

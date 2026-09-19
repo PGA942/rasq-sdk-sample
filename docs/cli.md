@@ -115,6 +115,7 @@ lazy = true
 - 生成される `manifest.json` は `manifest.schema.json` v0.3 に合う形で、`id` は §0 D-244c の規則で決める
   (`owned = true` → `<base.id>.<name>`、そうでなければ `<namespace>.<name>`)、`slots = [<slot>]`、`permissions` は
   登録簿の `permissions.required` をそのまま入れる
+- **`rasq new assets <name>`** はスロットではなく**アセットパック**(`kind: "assets"`、wasm 無し、[slots.md §2.10](slots.md))を `packs/<name>/` に作り、rasq.toml に `[[packs]]`(`name` / `id`)を足す。id は土台に依らず常に `<namespace>.<name>`。`rasq check` / `build` / `publish` はコードのプラグインと一緒に扱う(パックだけのワークスペースなら Rust のビルドは走らない)
 - 生成直後に `rasq check` が通る状態であること(雛形の CI: SDK 側 `rust` ジョブで全雛形を `rasq new` → `check`)
 
 雛形の対応表(第一期、登録簿の stable 9 スロット):

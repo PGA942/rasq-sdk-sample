@@ -5,6 +5,14 @@
   "description": ".rasqpkg(D-034: zstd 圧縮 tar)の先頭に置く目次。root(この配布物の主プラグイン)と、その配下にバンドルされる子プラグイン / wasm 化ライブラリ / アセット / モデルを列挙し、ホストはこれを見て wasm.call の親子関係(構成許可)と展開先を決める。ハッシュはすべて配布物内のファイルに対する SHA-512(hex)。CLI(docs/cli.md)が `rasq build` で生成し、手書きしない。",
   "type": "object",
   "required": ["schema", "root", "children", "libs", "assets", "models"],
+  "allOf": [
+    {
+      "$comment": "アセットパック(root.kind = assets、契約 v0.11): wasm / children / libs / models 無し、assets は画像だけ(sha512 / sizeBytes 必須)。それ以外の root は wasm が要る。",
+      "if": { "properties": { "root": { "properties": { "kind": { "const": "assets" } }, "required": ["kind"] } } },
+      "then": { "properties": { "root": { "not": { "required": ["wasm"] } }, "children": { "maxItems": 0 }, "libs": { "maxItems": 0 }, "models": { "maxItems": 0 }, "assets": { "minItems": 1, "items": { "properties": { "kind": { "const": "image" } }, "required": ["path", "kind", "sha512", "sizeBytes"] } } } },
+      "else": { "properties": { "root": { "required": ["wasm"] } } }
+    }
+  ],
   "additionalProperties": false,
   "properties": {
     "schema": { "const": "rasq.bundle/1" },
@@ -13,7 +21,7 @@
     "createdAt": { "type": "string", "format": "date-time" },
     "root": {
       "type": "object",
-      "required": ["id", "version", "kind", "manifest", "wasm"],
+      "required": ["id", "version", "kind", "manifest"],
       "additionalProperties": false,
       "description": "この配布物の主プラグイン。ストアの掲載 id = root.id、版 = root.version(Central の publish_version はマニフェストの id/version と突き合わせる)",
       "properties": {
