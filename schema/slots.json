@@ -240,7 +240,8 @@
           "ホストの加工画面(ネイティブの編集 + 下段バー)の上に重なる編集パネル(中央プレビュー + 下付きの第 2 階層)",
           "下段バーのボタンは manifest の actions[{slot: \"composer.media\"}] で宣言(無ければ name と既定アイコンのボタン 1 つ、画像だけ)。並べ替え / バンドルはホスト",
           "出る添付の種類は宣言の accepts(省略 = image/*)。受けない mimeType は C01",
-          "パラメーターは第 3 階層 = 下付き FOW"
+          "パラメーターは第 3 階層 = 下付き FOW",
+          "output: \"filter\" の宣言はカスタムフィルター: filter.preview(描画リスト)→ 完了のとき overlay はホストが焼き込み、pixels は filter.apply"
         ]
       },
       "calls": [
@@ -248,7 +249,9 @@
         "media.edit",
         "media.action",
         "media.commit",
-        "media.cancel"
+        "media.cancel",
+        "filter.preview",
+        "filter.apply"
       ],
       "hostFns": [
         "composer.media.preview",
