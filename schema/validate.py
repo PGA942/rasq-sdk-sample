@@ -125,6 +125,8 @@ def main() -> int:
                 rep.error(f"{label}: action id に ':' は使えません: {a['id']}")
             if "slot" in a and a["slot"] not in m.get("slots", []):
                 rep.error(f"{label}: action {a['id']} の slot {a['slot']} が manifest.slots にありません")
+            if "output" in a and a.get("slot") != "composer.media":
+                rep.error(f"{label}: action {a['id']} の output は slot = composer.media の宣言にだけ書けます")
             if "accepts" in a and a.get("slot") != "composer.media":
                 rep.error(f"{label}: action {a['id']} の accepts は slot = composer.media の宣言にだけ書けます")
         if "composer.media" in m.get("slots", []) and not any(a.get("slot") == "composer.media" for a in m.get("actions", [])):

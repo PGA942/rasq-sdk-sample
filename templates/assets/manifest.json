@@ -1,0 +1,11 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "{{id}}",
+  "name": "{{display}}",
+  "version": "0.1.0",
+  "kind": "assets",
+  "description": "{{display}}(rasq new assets の雛形)",
+  "assets": [
+    { "id": "sample", "path": "stickers/sample.png", "use": "sticker", "label": "サンプル", "tags": ["sample"] }
+  ]
+}

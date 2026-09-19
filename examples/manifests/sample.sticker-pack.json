@@ -1,0 +1,25 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "sample.sticker-pack",
+  "name": "ステッカー(サンプル)",
+  "version": "0.1.0",
+  "kind": "assets",
+  "description": "加工画面のステッカーに足す画像のパック(wasm 無し)",
+  "assets": [
+    {
+      "id": "star",
+      "path": "stickers/star.png",
+      "use": "sticker",
+      "label": "ほし",
+      "tags": [
+        "shape"
+      ]
+    },
+    {
+      "id": "heart",
+      "path": "stickers/heart.webp",
+      "use": "sticker",
+      "label": "ハート"
+    }
+  ]
+}
