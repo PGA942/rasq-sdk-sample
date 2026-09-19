@@ -76,7 +76,7 @@
         "genreTag": { "type": "string", "description": "Repost|Reaction|Reply|Quote|Share|Bookmark|… 審査時付与。同タグは同スロットに束ねる" },
         "tags": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "希望スロット(post.action)。既存ボタンの genreTag と比べ、類似度 ≥ 閾値(既定 0.85)でそのバンドルへ" },
         "slot": { "$ref": "slot-registry.schema.json#/$defs/slotId", "description": "このボタンが属するスロット(v0.9)。省略 = post.action(投稿のアクションバー)。\"viewer.overlay\" = 全画面アクションバーの ON / OFF ボタンの見た目(label / icon / tags)の宣言で、押したときの call は無い(ホストが有効 / 無効を切り替える)。\"composer.media\" = 加工画面の下段バーのボタン(v0.10): 押すとそのプラグインの編集セッション(media.edit に actionId = この id)が開く。manifest.slots にあるスロットだけ" },
-        "output": { "enum": ["replace", "sticker"], "default": "replace", "description": "media.commit の結果の置き方(v0.11、slot = \"composer.media\" だけ)。replace = 背景を差し替える(従来)。sticker = 結果(透過つきの画像)を**ステッカーのレイヤー**として今の絵の上に置く(ジェネレーターなど。背景は変えない)" },
+        "output": { "enum": ["replace", "sticker", "filter"], "default": "replace", "description": "media.commit の結果の置き方(v0.11、slot = \"composer.media\" だけ)。replace = 背景を差し替える(従来)。sticker = 結果(透過つきの画像)を**ステッカーのレイヤー**として今の絵の上に置く(ジェネレーターなど。背景は変えない)" },
         "accepts": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^(\\*|\\*/\\*|[a-z]+/(\\*|[A-Za-z0-9.+-]+)|\\.[A-Za-z0-9]{1,8})$" }, "description": "このボタンが出る添付の種類(v0.10、slot = \"composer.media\" だけ)。MIME の型(\"image/*\" / \"video/mp4\" / \"audio/*\")か拡張子(\".gif\")。省略 = [\"image/*\"]。音声だけのファイルは動画の加工画面で扱う" },
         "label": { "type": "string" },
         "icon": { "type": "string" },
