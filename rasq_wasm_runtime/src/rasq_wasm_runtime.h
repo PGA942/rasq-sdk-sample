@@ -36,6 +36,34 @@ FFI_PLUGIN_EXPORT char *rasq_wasm_string_dup(const char *s);
 // calling thread blocks for the duration of each request.
 FFI_PLUGIN_EXPORT void rasq_wasm_set_native_fetch(RasqWasmInstance *instance, bool enabled);
 
+// Overrides the per-invocation fuel budget (roughly "instructions executed";
+// default = rasq_wasm_fuel_budget_media()). Every snapshot/patch/call is
+// refuelled to this amount; a guest that burns through it fails with error
+// code E02 ("plugin exceeded its execution budget") instead of wedging the
+// calling thread forever. 0 = every call fails immediately (hard stop).
+FFI_PLUGIN_EXPORT void rasq_wasm_set_fuel_per_call(RasqWasmInstance *instance, uint64_t fuel);
+
+// Recommended budgets, measured against plugin-sample/dist. The default a
+// fresh instance starts with is the *media* one, so an embedder that never
+// calls the setter is already correct for the heavy case; call the setter
+// with the standard budget for plugins that do not process bitmaps.
+//
+// The axis is whether the plugin touches bitmaps (the `composer.media` slot,
+// or the replace_media/tag_media permissions) — NOT the manifest `kind`:
+// the heaviest sample plugin (sample.media-process, 2.1G fuel for one
+// media.edit) declares kind "action", while "mediaViewer" is the lightest
+// thing measured (118K). `kind` says where a plugin plugs in, not what it
+// costs.
+FFI_PLUGIN_EXPORT uint64_t rasq_wasm_fuel_budget_media(void);
+FFI_PLUGIN_EXPORT uint64_t rasq_wasm_fuel_budget_standard(void);
+
+// Overrides the wall-clock budget of one runtime-native net.fetch, in
+// milliseconds (default 15000). Only meaningful with
+// rasq_wasm_set_native_fetch(.., true): when the embedder serves net.fetch
+// itself, bounding that call is the embedder's job — fuel does not tick
+// while a host function blocks.
+FFI_PLUGIN_EXPORT void rasq_wasm_set_fetch_timeout_ms(RasqWasmInstance *instance, uint64_t timeout_ms);
+
 // Frees an instance created by rasq_wasm_instantiate.
 FFI_PLUGIN_EXPORT void rasq_wasm_destroy(RasqWasmInstance *instance);
 
