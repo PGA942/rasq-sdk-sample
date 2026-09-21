@@ -342,6 +342,14 @@ fn media_wire(m: &Value) -> Value {
 }
 
 fn poll_wire(poll: &Value) -> Value {
+    // ホスト契約の `voted` は「閲覧者が投票した選択肢の番号の並び」
+    // (`votedIndices` になる)。Mastodon の `voted` は真偽値なので、番号は
+    // `own_votes` から取る。未投票・未ログイン(`own_votes` 無し)は空の並び。
+    let voted: Vec<Value> = if poll["voted"].as_bool() == Some(false) {
+        Vec::new()
+    } else {
+        as_list(poll["own_votes"].clone()).into_iter().filter(Value::is_u64).collect()
+    };
     json!({
         "options": as_list(poll["options"].clone())
             .iter()
@@ -349,7 +357,7 @@ fn poll_wire(poll: &Value) -> Value {
             .collect::<Vec<Value>>(),
         "multiple": poll["multiple"].as_bool().unwrap_or(false),
         "expiresAt": poll["expires_at"],
-        "voted": poll["voted"].as_bool().unwrap_or(false),
+        "voted": voted,
     })
 }
 
@@ -1243,6 +1251,44 @@ mod tests {
     fn acct_splits_into_handle_and_instance() {
         assert_eq!(split_acct("alice", "mastodon.social"), ("alice", "mastodon.social"));
         assert_eq!(split_acct("bob@mstdn.jp", "mastodon.social"), ("bob", "mstdn.jp"));
+    }
+
+    /// `voted` は真偽値ではなく、投票した選択肢の番号の並び(ホストの
+    /// `pollFrom` が `votedIndices` として読む)。真偽値を送ると閲覧者の票が
+    /// 失われる(以前はタイムラインごと落ちた)。
+    #[test]
+    fn poll_voted_is_the_list_of_own_vote_indices() {
+        let poll = |extra: Value| {
+            let mut p = json!({
+                "options": [
+                    { "title": "A", "votes_count": 3 },
+                    { "title": "B", "votes_count": 1 },
+                    { "title": "C", "votes_count": 0 },
+                ],
+                "multiple": true,
+                "expires_at": "2026-01-01T00:00:00.000Z",
+            });
+            for (k, v) in extra.as_object().unwrap() {
+                p[k] = v.clone();
+            }
+            p
+        };
+        let w = poll_wire(&poll(json!({ "voted": true, "own_votes": [0, 2] })));
+        assert_eq!(w["voted"], json!([0, 2]));
+        assert_eq!(w["options"][0], json!({ "text": "A", "votes": 3 }));
+        // 未投票は空の並び。
+        assert_eq!(poll_wire(&poll(json!({ "voted": false, "own_votes": [] })))["voted"], json!([]));
+        // 未ログインの取得(公開トレンド等)は `voted` / `own_votes` 自体が無い。
+        assert_eq!(poll_wire(&poll(json!({})))["voted"], json!([]));
+        // `voted: false` なのに番号が残っていても票として扱わない。
+        assert_eq!(poll_wire(&poll(json!({ "voted": false, "own_votes": [1] })))["voted"], json!([]));
+        // 投稿のワイヤにもそのまま載る。
+        let status = json!({
+            "id": "1", "created_at": "2025-01-01T00:00:00.000Z", "content": "<p>q</p>",
+            "account": { "id": "9", "acct": "alice", "username": "alice" },
+            "poll": poll(json!({ "voted": true, "own_votes": [1] })),
+        });
+        assert_eq!(post_wire(&status, "mastodon.social")["poll"]["voted"], json!([1]));
     }
 
     /// D-100/D-112: ブーストは中身へ展開し、外側の id と投稿者を載せる。
