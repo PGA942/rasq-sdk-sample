@@ -31,6 +31,15 @@
         "Copy",
         "Share"
       ]
+    },
+    {
+      "id": "quoteDraft",
+      "label": "引用の下書き",
+      "icon": "format_quote",
+      "tags": [
+        "Quote",
+        "Repost"
+      ]
     }
   ]
 }
