@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:ffi' as ffi;
 import 'dart:typed_data';
 
@@ -125,6 +126,23 @@ class RasqWasmPlugin {
       bindings.rasq_wasm_set_fetch_hosts(_instance, csv.cast());
     } finally {
       malloc.free(csv);
+    }
+  }
+
+  /// The `net.fetch` request shapes this instance has seen for the first time
+  /// since the previous call. Each entry is `{hash, shape}` — no values, only
+  /// host / method / path template / query keys / header names / body key
+  /// skeleton — or a single `{overflow: true}` once the per-instance cap is
+  /// exceeded. Drain after every call when reporting to the store.
+  List<Map<String, Object?>> takeFetchShapes() {
+    _checkNotDestroyed();
+    final ptr = bindings.rasq_wasm_take_fetch_shapes(_instance);
+    if (ptr == ffi.nullptr) return const [];
+    try {
+      final decoded = jsonDecode(ptr.cast<Utf8>().toDartString());
+      return [for (final e in (decoded as List)) (e as Map).cast<String, Object?>()];
+    } finally {
+      bindings.rasq_wasm_free_string(ptr);
     }
   }
 

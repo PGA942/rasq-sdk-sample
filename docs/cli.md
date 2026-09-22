@@ -216,7 +216,7 @@ rasq call rmqr viewer.open --args '{"token":"v1","mimeType":"image/png","width":
 
 ## 6. ビルド(`rasq build`)と配布物(実装済み)
 
-`rasq build [--raw] [--no-sign] [--no-build]` は release の wasm32 ビルド → `rasq check` と同じ往復検査(エラーがあれば止まる)→
+`rasq build [--raw] [--no-sign] [--no-build] [--with-source]` は release の wasm32 ビルド → `rasq check` と同じ往復検査(エラーがあれば止まる)→
 `dist/<root.id>-<root.version>.rasqpkg`(+ `.sig.json`)。`--raw` を付けると生の `.wasm` も `dist/` に出す(今のホストのパス読み込み用)。
 `rasq inspect <x.rasqpkg> [--extract DIR]` が目次と中身(sha512 / sizeBytes / `SHA512SUMS` / 余分なファイル)と `.sig.json` を確かめる。
 
@@ -247,6 +247,24 @@ SHA512SUMS                  # 目次と同じ値の一覧(手で確かめる用)
   manifest と(`lazy = false` なら)`runtimes.*.file` / `tokenizer.file` の本体を入れる。`lazy = true` は manifest だけ + `artifactId = model-<name>`
 - `rasq init --base <x.rasqpkg>` は `inspect` と同じ検査を通してから root(`kind = sns` のみ)の manifest / wasm / `bundle.json` を `base/` に置く
 
+### 審査用のソース(`--with-source`)
+
+`rasq build --with-source` は配布物と別に `dist/<root.id>-<root.version>.source.tar.zst` を出す。中身はワークスペースのうち
+自分で書いた部分 — `rasq.toml` / `Cargo.toml` / `Cargo.lock` と、ビルド対象のディレクトリ(`sns` / `plugins/<name>`、`base/` は
+`owned = true` のとき、`[[libs]]` のディレクトリ)— で、`target/` / `dist/` / `.git` / 隠しファイル / symlink は入らない
+(合計 32 MiB、1 ファイル 4 MiB、4000 ファイルまで)。先頭の `SOURCE.json`(`rasq.source/1`)に、どの wasm のソースか
+(`wasm[].sha512` = 配布物の目次と同じ値)、ツールチェーン(`rustc --version` / `cargo --version`)、ビルドコマンド、
+ファイル一覧とそのハッシュ(`treeSha512`)を書く。
+
+**配布はされない。** `rasq publish --with-source` が `PUT …/artifacts/source?kind=source` で送り、Central は公開の
+manifest / artifacts から除いて、審査(rasq-judge の 3 段目 = 大きな更新の深い読み)だけが読む。審査から求められる
+(Web コンソールに「ビルドコマンドの変更のお知らせ」が出る / `GET /dev/plugins` の `sourceRequired`)と、以後の版は
+これが無いと自動承認されない。開発者トークンで後から付けるなら `POST /api/v1/dev/plugins/{id}/versions/{v}/source`
+(本文 = tar.zst。審査を通った版には付けられない)。
+
+再現ビルドの検証はしていない: ソースとバイナリの一致は開発者の申告で、審査は wasm から拾った文字列の差分を裏取りに使う。
+ツールチェーンとコマンドを記録しておくのは、後から再現ビルドで検証する道を残すため。
+
 ホスト側の現状: ストアのインストールは `.rasqpkg` をまだ展開せず、配布物が生の wasm(`\0asm`)ならスロット登録する(D-168)。
 そのため `rasq build --raw` は子 1 つにつき `.wasm` もそのまま `dist/` に出す(今日の plugin-sample の `dist/` と同じ)。
 `.rasqpkg` の展開・検証(M4 の 4 番、D-034)が入り次第 `--raw` は不要になる。ホスト側の展開は `rasq inspect` と同じ手順
@@ -255,7 +273,7 @@ SHA512SUMS                  # 目次と同じ値の一覧(手で確かめる用)
 ## 7. 公開(`rasq publish`、実装済み)
 
 ```
-rasq publish --central http://100.91.218.56:8080 [--channel stable|beta] [--notes-file NOTES.md] [--dry-run] [--skip-listing] [--no-make-current] [--no-build]
+rasq publish --central http://100.91.218.56:8080 [--channel stable|beta] [--notes-file NOTES.md] [--dry-run] [--skip-listing] [--no-make-current] [--no-build] [--with-source]
 ```
 
 既定では `rasq build` を通してから(`--no-build` で `dist/` のものをそのまま)、配布物ごとに Central の管理 API
@@ -271,6 +289,7 @@ rasq publish --central http://100.91.218.56:8080 [--channel stable|beta] [--note
 3. `PUT /api/v1/admin/plugins/{id}/versions/{version}/artifacts/bundle?kind=bundle`(`Content-Type: application/zstd`)… `.rasqpkg` のバイト列。
    応答の `artifact.sha512` が手元と一致することを確かめ、ストア署名と `storePublicKey` を表示する
 4. `lazy` のモデルごとに `PUT …/artifacts/<artifactId>?kind=model&lazy=true`(`runtimes.*.file` の本体。手元に無ければ飛ばして案内)
+5. `--with-source` なら `PUT …/artifacts/source?kind=source`(`Content-Type: application/zstd`)… `dist/<…>.source.tar.zst`(§6。配布されない)
 
 `--dry-run` は要求を `dist/publish/<pkg>/NN-<label>.json`(+ 配布物は `.bin` と `bodySha512`)に書き出すだけ(トークン不要、
 `Authorization` は `Bearer $RASQ_CENTRAL_TOKEN` のまま)。Central を触れない作者はこれを審査側に渡す(WF p9 の「公開申請」が

@@ -134,6 +134,11 @@ const FETCH_IO_TIMEOUT_MS: u64 = 10_000;
 /// 画像/動画サムネの実寸より十分大きく、TL の JSON なら桁が違う。
 const MAX_FETCH_BODY_BYTES: u64 = 32 * 1024 * 1024;
 
+/// 1 インスタンスが控える通信の形の上限。素直なプラグインは API の口の数(数十)で
+/// 収まる。超えたら数えるのをやめ、超えたこと自体を 1 度だけ報告する — 形を毎回
+/// 少し変えて再審査を浪費させる(または埋もれさせる)プラグインを作れるため。
+const MAX_FETCH_SHAPES: usize = 256;
+
 /// Host-function callback provided by the embedder (Dart via FFI).
 ///
 /// `request` is a NUL-terminated `rasq.hostfn/1` JSON string. The returned
@@ -156,6 +161,13 @@ struct HostState {
     /// **空 = どこにも繋げない**(fail-closed): 埋込側が設定を忘れた時点で
     /// 黙って全開になる既定値にはしない。
     fetch_hosts: Vec<String>,
+    /// 通信の形の控え (D-004 の続き、審査の再読み用)。このインスタンスが
+    /// 出した `net.fetch` の**値を持たない形**のハッシュ。埋込側が
+    /// `rasq_wasm_take_fetch_shapes` で初めて見た形だけを引き取る。
+    fetch_shapes_seen: std::collections::BTreeSet<String>,
+    fetch_shapes_new: Vec<serde_json::Value>,
+    /// 形の数が [`MAX_FETCH_SHAPES`] を超えた(以後は数えない)。それ自体を 1 度だけ報告する。
+    fetch_shapes_overflow: bool,
     /// 線形メモリ / テーブルの成長を止める `ResourceLimiter`。`Store` は
     /// ユーザーデータ経由でしか limiter を引けないのでここに同居させる。
     limits: StoreLimits,
@@ -241,6 +253,9 @@ impl RasqWasmInstance {
                 native_fetch: false,
                 fetch_timeout_ms: DEFAULT_FETCH_TIMEOUT_MS,
                 fetch_hosts: Vec::new(),
+                fetch_shapes_seen: Default::default(),
+                fetch_shapes_new: Vec::new(),
+                fetch_shapes_overflow: false,
                 limits,
             },
         );
@@ -291,6 +306,11 @@ impl RasqWasmInstance {
     #[cfg(test)]
     fn set_fetch_hosts(&mut self, hosts: &[&str]) {
         self.store.data_mut().fetch_hosts = hosts.iter().map(|h| h.to_ascii_lowercase()).collect();
+    }
+
+    #[cfg(test)]
+    fn take_fetch_shapes(&mut self) -> Vec<serde_json::Value> {
+        std::mem::take(&mut self.store.data_mut().fetch_shapes_new)
     }
 
     fn typed_func<Params, Results>(&mut self, name: &'static str) -> Result<TypedFunc<Params, Results>, RasqWasmError>
@@ -375,6 +395,26 @@ fn host_fn_impl(mut caller: Caller<'_, HostState>, ptr: u32, len: u32) -> Result
     memory
         .read(&caller, ptr as usize, &mut request)
         .map_err(|e| wasmi::Error::new(format!("host_fn: bad request buffer: {e}")))?;
+
+    // 通信の形の控え: ネイティブ経路でも埋込側の経路でも、要求はここを通る。
+    if let Ok(req) = serde_json::from_slice::<serde_json::Value>(&request) {
+        if req["fn"] == "net.fetch" {
+            if let Some((hash, shape)) = fetch_shape(&req["args"]) {
+                let st = caller.data_mut();
+                if st.fetch_shapes_seen.contains(&hash) {
+                    // 既知
+                } else if st.fetch_shapes_seen.len() >= MAX_FETCH_SHAPES {
+                    if !st.fetch_shapes_overflow {
+                        st.fetch_shapes_overflow = true;
+                        st.fetch_shapes_new.push(serde_json::json!({"overflow": true}));
+                    }
+                } else {
+                    st.fetch_shapes_seen.insert(hash.clone());
+                    st.fetch_shapes_new.push(serde_json::json!({"hash": hash, "shape": shape}));
+                }
+            }
+        }
+    }
 
     // Native net.fetch short-circuit (D-023): parse the envelope; when the fn
     // is net.fetch and native fetch is enabled, answer inside the runtime.
@@ -585,6 +625,111 @@ fn gpu_compute_response(req: &serde_json::Value) -> serde_json::Value {
     }
     let output = base64::engine::general_purpose::STANDARD.encode(slice.get_mapped_range().as_ref());
     serde_json::json!({"callId": call_id, "ok": true, "value": {"output": output, "placement": "device"}})
+}
+
+/// FNV-1a (64 bit) を 16 桁の hex に。重複の判定に使うだけで、衝突耐性は要らない
+/// (形そのものも一緒に送る)。埋込側の Web ワーカー (JS) も同じ計算をする。
+fn fnv1a64(s: &str) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{h:016x}")
+}
+
+/// パスの区画を型に落とす。値(id / ユーザー名 / ハッシュ)を残さない。
+fn path_segment_kind(seg: &str) -> String {
+    let s = seg;
+    if s.is_empty() {
+        return String::new();
+    }
+    if s.bytes().all(|b| b.is_ascii_digit()) {
+        return "{n}".into();
+    }
+    if s.len() == 36 && s.bytes().filter(|b| *b == b'-').count() == 4 && s.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
+        return "{uuid}".into();
+    }
+    if s.len() >= 16 && s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return "{hex}".into();
+    }
+    if s.starts_with('@') || s.contains('@') {
+        return "{acct}".into();
+    }
+    if s.len() > 24 || s.bytes().any(|b| !(b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')) {
+        return "{s}".into();
+    }
+    // 短い英数字(API の名前: notes, timelines, v1, show.json)はそのまま。
+    s.to_ascii_lowercase()
+}
+
+/// JSON の骨組み: キーは残し、値は型だけにする。配列は先頭の要素の骨組み。深さ 4 まで。
+fn json_skeleton(v: &serde_json::Value, depth: usize) -> serde_json::Value {
+    use serde_json::Value;
+    if depth >= 4 {
+        return Value::String("…".into());
+    }
+    match v {
+        Value::Object(o) => {
+            let mut out = serde_json::Map::new();
+            for (k, x) in o.iter().take(64) {
+                out.insert(k.clone(), json_skeleton(x, depth + 1));
+            }
+            Value::Object(out)
+        }
+        Value::Array(a) => Value::Array(a.first().map(|x| vec![json_skeleton(x, depth + 1)]).unwrap_or_default()),
+        Value::String(_) => Value::String("s".into()),
+        Value::Number(_) => Value::String("n".into()),
+        Value::Bool(_) => Value::String("b".into()),
+        Value::Null => Value::Null,
+    }
+}
+
+/// `net.fetch` の引数から**値を持たない形**を取る: host / method / path のテンプレート /
+/// query のキー / ヘッダ名 / JSON 本文のキー構造。戻りは (hash, shape)。
+///
+/// 値(トークン、本文、ユーザー名)はここで落ちるので、端末の外には出ない。
+/// 審査 (rasq-judge) は、承認済みの版に初めて現れた形があれば、その版を読み直す。
+fn fetch_shape(args: &serde_json::Value) -> Option<(String, serde_json::Value)> {
+    use serde_json::Value;
+    let url = args["url"].as_str()?;
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return None;
+    }
+    let host = url_host(url);
+    let rest = url.splitn(2, "://").nth(1).unwrap_or("");
+    let after_authority = rest.find('/').map(|i| &rest[i..]).unwrap_or("/");
+    let (path, query) = match after_authority.split_once('?') {
+        Some((p, q)) => (p, q.split('#').next().unwrap_or("")),
+        None => (after_authority.split('#').next().unwrap_or("/"), ""),
+    };
+    let template: Vec<String> = path.split('/').filter(|s| !s.is_empty()).map(path_segment_kind).collect();
+    let mut query_keys: Vec<String> = query.split('&').filter(|s| !s.is_empty()).map(|kv| kv.split('=').next().unwrap_or("").to_ascii_lowercase()).collect();
+    query_keys.sort();
+    query_keys.dedup();
+    let mut headers: Vec<String> = args["headers"].as_object().map(|h| h.keys().map(|k| k.to_ascii_lowercase()).collect()).unwrap_or_default();
+    headers.sort();
+    headers.dedup();
+    let body = match &args["body"] {
+        Value::Null => Value::String("none".into()),
+        Value::String(s) => match serde_json::from_str::<Value>(s) {
+            Ok(j) if j.is_object() || j.is_array() => json_skeleton(&j, 0),
+            _ => Value::String("text".into()),
+        },
+        Value::Object(o) if o.get("b64").is_some_and(Value::is_string) => Value::String("bytes".into()),
+        other => json_skeleton(other, 0),
+    };
+    let shape = serde_json::json!({
+        "host": host,
+        "method": args["method"].as_str().unwrap_or("GET").to_ascii_uppercase(),
+        "path": format!("/{}", template.join("/")),
+        "query": query_keys,
+        "headers": headers,
+        "body": body,
+    });
+    // serde_json の Map は既定で BTreeMap = キー順が安定なので、to_string が正規形になる。
+    let canonical = shape.to_string();
+    Some((fnv1a64(&canonical), shape))
 }
 
 /// URL のホスト部(小文字、userinfo とポートは落とす)。スキーム付きの URL だけ渡すこと。
@@ -865,6 +1010,23 @@ pub extern "C" fn rasq_wasm_set_fetch_hosts(instance: *mut RasqWasmInstance, hos
         .collect();
 }
 
+/// Takes the `net.fetch` request shapes this instance has seen for the first
+/// time since the previous call: a JSON array of `{hash, shape}` (or a single
+/// `{overflow: true}` once the per-instance cap is exceeded). Shapes carry no
+/// values — host, method, a path template, query keys, header names and the
+/// key skeleton of a JSON body. Free with `rasq_wasm_free_string`.
+#[no_mangle]
+pub extern "C" fn rasq_wasm_take_fetch_shapes(instance: *mut RasqWasmInstance) -> *mut c_char {
+    if instance.is_null() {
+        return std::ptr::null_mut();
+    }
+    let instance = unsafe { &mut *instance };
+    let taken = std::mem::take(&mut instance.store.data_mut().fetch_shapes_new);
+    CString::new(serde_json::Value::Array(taken).to_string())
+        .map(CString::into_raw)
+        .unwrap_or(std::ptr::null_mut())
+}
+
 /// Overrides the per-invocation fuel budget (default [`FUEL_PER_CALL`]).
 ///
 /// Fuel is what stops a runaway plugin: every `call`/`snapshot`/`patch` is
@@ -1088,6 +1250,18 @@ mod tests {
         assert!(after.contains("【CW: ネタバレ】"), "{after}");
         assert!(after.contains(r#""instance":"misskey.example""#), "{after}"); // local user → fetch host
         assert!(after.contains(r#""instance":"other.example""#), "{after}"); // remote user → note host
+
+        // 通信の形: 埋込側の経路 (callback) でも控えられる。値は入らない。
+        let shapes = instance.take_fetch_shapes();
+        assert_eq!(shapes.len(), 1, "{shapes:?}");
+        assert_eq!(shapes[0]["shape"]["host"], "misskey.example");
+        assert_eq!(shapes[0]["shape"]["method"], "POST");
+        assert_eq!(shapes[0]["hash"].as_str().unwrap().len(), 16);
+        let s = shapes[0].to_string();
+        assert!(!s.contains("limit\":10") && !s.contains("\"i\":"), "値が漏れている: {s}");
+        // 2 回目は既知なので何も出ない。
+        instance.call("timeline", r#"{"host":"misskey.example","limit":10}"#, "call-t2").expect("call");
+        assert!(instance.take_fetch_shapes().is_empty());
         assert!(after.contains(r#""count":5"#), "{after}"); // renote count in ActionBar states
     }
 
@@ -1184,6 +1358,45 @@ mod tests {
             .call("timeline", r#"{"host":"native.example","baseUrl":"http://127.0.0.1:9","limit":5}"#, "call-other")
             .expect("call");
         assert!(result.contains("E01"), "{result}");
+    }
+
+    #[test]
+    fn fetch_shape_drops_values_and_keeps_structure() {
+        let args = serde_json::json!({
+            "method": "post",
+            "url": "https://Misskey.IO/api/users/9abcdef012345678/notes?limit=10&sinceId=abc#frag",
+            "headers": {"Content-Type": "application/json", "Authorization": "Bearer SECRET-TOKEN"},
+            "body": serde_json::json!({"i": "SECRET", "limit": 10, "tags": ["a", "b"], "opts": {"withFiles": true}}).to_string(),
+        });
+        let (hash, shape) = fetch_shape(&args).unwrap();
+        assert_eq!(hash.len(), 16);
+        assert_eq!(shape["host"], "misskey.io");
+        assert_eq!(shape["method"], "POST");
+        assert_eq!(shape["path"], "/api/users/{hex}/notes");
+        assert_eq!(shape["query"], serde_json::json!(["limit", "sinceid"]));
+        assert_eq!(shape["headers"], serde_json::json!(["authorization", "content-type"]));
+        assert_eq!(shape["body"], serde_json::json!({"i": "s", "limit": "n", "opts": {"withFiles": "b"}, "tags": ["s"]}));
+        let s = shape.to_string();
+        assert!(!s.contains("SECRET") && !s.contains("9abcdef0"), "{s}");
+        // 同じ形なら同じハッシュ、値が違っても同じ。
+        let args2 = serde_json::json!({"method": "POST", "url": "https://misskey.io/api/users/00000000deadbeef/notes?sinceId=zzz&limit=5",
+            "headers": {"authorization": "Bearer other", "content-type": "application/json"},
+            "body": serde_json::json!({"i": "x", "limit": 1, "tags": ["z"], "opts": {"withFiles": false}}).to_string()});
+        assert_eq!(fetch_shape(&args2).unwrap().0, hash);
+        // 空の配列と中身のある配列は別の形(要素の骨組みを残すため。同じ口で 2 種類までにしかならない)。
+        let args4 = serde_json::json!({"method": "POST", "url": "https://misskey.io/api/users/00000000deadbeef/notes?sinceId=zzz&limit=5",
+            "headers": {"authorization": "Bearer other", "content-type": "application/json"},
+            "body": serde_json::json!({"i": "x", "limit": 1, "tags": [], "opts": {"withFiles": false}}).to_string()});
+        assert_ne!(fetch_shape(&args4).unwrap().0, hash);
+        // ホストが違えば別の形。
+        let args3 = serde_json::json!({"method": "POST", "url": "https://collect.example/api/users/00000000deadbeef/notes"});
+        assert_ne!(fetch_shape(&args3).unwrap().0, hash);
+        // 本文の種類。
+        assert_eq!(fetch_shape(&serde_json::json!({"url": "https://a.test/x", "body": {"b64": "AAAA"}})).unwrap().1["body"], "bytes");
+        assert_eq!(fetch_shape(&serde_json::json!({"url": "https://a.test/x", "body": "plain text"})).unwrap().1["body"], "text");
+        assert_eq!(fetch_shape(&serde_json::json!({"url": "https://a.test/x"})).unwrap().1["body"], "none");
+        assert_eq!(fetch_shape(&serde_json::json!({"url": "https://a.test/@alice/statuses/123456/reblog"})).unwrap().1["path"], "/{acct}/statuses/{n}/reblog");
+        assert!(fetch_shape(&serde_json::json!({"url": "ftp://a.test/x"})).is_none());
     }
 
     #[test]

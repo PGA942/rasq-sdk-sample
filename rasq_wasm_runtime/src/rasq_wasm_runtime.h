@@ -68,6 +68,16 @@ FFI_PLUGIN_EXPORT uint64_t rasq_wasm_fuel_budget_standard(void);
 // host changes.
 FFI_PLUGIN_EXPORT void rasq_wasm_set_fetch_hosts(RasqWasmInstance *instance, const char *hosts);
 
+// Takes the net.fetch request *shapes* this instance has seen for the first
+// time since the previous call, as a JSON array of {hash, shape} (or a single
+// {overflow: true} once the per-instance cap is exceeded). A shape carries no
+// values: host, method, a path template ("/api/users/{hex}/notes"), query
+// keys, header names and the key skeleton of a JSON body. The embedder
+// reports first-seen shapes to the store (with the user's consent) so the
+// review can re-read a version whose traffic pattern changed. Never NULL
+// for a live instance; free with rasq_wasm_free_string.
+FFI_PLUGIN_EXPORT char *rasq_wasm_take_fetch_shapes(RasqWasmInstance *instance);
+
 // Overrides the wall-clock budget of one runtime-native net.fetch, in
 // milliseconds (default 15000). Only meaningful with
 // rasq_wasm_set_native_fetch(.., true): when the embedder serves net.fetch
