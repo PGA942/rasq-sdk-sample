@@ -9,7 +9,130 @@
 
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::slice;
-use wasmi::{Caller, Engine, Instance, Linker, Memory, Module, Store, TypedFunc};
+use std::time::Duration;
+use wasmi::{
+    Caller, Config, Engine, Instance, Linker, Memory, Module, Store, StoreLimits,
+    StoreLimitsBuilder, TrapCode, TypedFunc,
+};
+
+// ---- リソース上限 (D-007 ランタイムの続き) --------------------------------
+//
+// プラグインはサンドボックスの外へは出られない。が、「出られない」ことと
+// 「暴れない」ことは別の話で、無限ループ 1 本あれば呼び出し側スレッド
+// (アプリではワーカー isolate)は永久に帰ってこない。サンドボックス破りより
+// **枯渇**のほうが現実的な攻撃面なので、燃料(命令数)・線形メモリ・
+// 壁時計(ネイティブ net.fetch)の 3 本で上限を張る。
+//
+// 数字はここに集約してある — 端末や審査区分ごとに詰めたくなる値なので、
+// 実行時にも `rasq_wasm_set_fuel_per_call` / `rasq_wasm_set_fetch_timeout_ms`
+// で上書きできるようにしてある。
+
+// 燃料の実測値(release ビルド・wasmi インタプリタ / plugin-sample dist)。
+// 1 呼び出しで焼く燃料は **プラグインの種別ではなく、渡されたピクセル数**で
+// 決まる。桁で並べておく:
+//
+//   プラグイン(宣言 kind)          重い呼び出し              燃料      所要
+//   trend_plugin      (trend)       snapshot                  117 K   < 1 ms
+//   timeline_plugin   (view)        snapshot                  117 K   < 1 ms
+//   post_process_plugin(postProc.)  snapshot                  117 K   < 1 ms
+//   media_fullscreen  (mediaViewer) snapshot                  118 K   < 1 ms
+//   misskey サンプル   (sns)         timeline(TL 再構築)      2.0 M    ~2 ms
+//   media_transform   (action)      media.edit  2048×1536   2.149 G   2.8 s
+//   media_process     (action)      media.edit  2048×1536   2.149 G   2.7 s
+//   media_process     (action)      media.action(sticker)   0.640 G   0.6 s
+//   media_process     (action)      media.commit 2048×1536  1.368 G   3.2 s
+//   media_process     (action)      media.edit  4032×3024   8.465 G  12.6 s ←上限外
+//
+// ここから 2 つ分かる:
+//
+// 1. **kind では切れない。** 一番重い media_process は `action` を名乗り、
+//    一番軽い media_fullscreen が `mediaViewer` である(manifest.schema.json
+//    の kind は「どのスロットに刺さるか」であって計算量の宣言ではない)。
+//    kind 別テーブルにすると `action` を最重量に合わせる羽目になり、ただの
+//    タップ 1 個のアクションプラグインにも数 G の縄を渡すことになる —
+//    切る軸そのものが間違っている。切るなら「ビットマップを触るか」で、それは
+//    スロット (`composer.media`) と権限 (`replace_media` / `tag_media`) に
+//    出ている。下の 2 本の推奨値はその軸。
+// 2. **費用は入力画像で決まる。** 同じ 2048×1536 なら 4 つの media 系
+//    プラグインが揃って 2.149 G — プラグイン差ではなく画素数の関数。
+//    だから「余裕」は実装差ではなく入力サイズの振れに対して取る。
+
+/// 1 回の `call` / `snapshot` / `patch` に与える燃料(wasmi の既定コストでは
+/// ほぼ「実行命令数」)の既定値。
+///
+/// 上限は **契約上の作業サイズ(長辺 ≤ 2048、media.edit がそこへ縮小する)**
+/// で測った最悪値 2.149 G の約 2.8 倍。余裕分は入力画像の振れ幅に充ててあり、
+/// 素材がおよそ 9 MP までなら通る。それ以上(12 MP のカメラ写真 = 8.465 G)は
+/// E02 で落ちる — これは**意図した線**で、インタプリタで 12.6 秒ブロック
+/// するのは上限を緩める理由ではなく、ホストが `media.edit` に渡す前に
+/// 縮小すべきという話。
+///
+/// 壁時計で見ると、この環境(release)の実効は画像処理で 0.4〜1.0 G fuel/s
+/// なので、上限いっぱいで 6〜15 秒。**目標ではなく天井**である点に注意:
+/// 正当な 2048 の編集は 2.7〜3.2 秒で、天井は暴走時にしか触らない。
+/// ビットマップを触らないプラグインには [`FUEL_BUDGET_STANDARD`] まで
+/// 絞ることを勧める(埋込側が `rasq_wasm_set_fuel_per_call` で上書き)。
+const FUEL_PER_CALL: u64 = FUEL_BUDGET_MEDIA;
+
+/// ビットマップを扱うプラグイン(`composer.media` スロット、`replace_media` /
+/// `tag_media` 権限)向けの推奨値 = 既定値。上の計算のとおり実測最悪値の
+/// 約 2.8 倍。
+const FUEL_BUDGET_MEDIA: u64 = 6_000_000_000;
+
+/// それ以外すべての推奨値。ビットマップを触らないプラグインの実測最悪値は
+/// misskey サンプルの TL 再構築 2.0 M(スロット系サンプルは 1.0 M 以下)で、
+/// 5000 万はそこに 24 倍の余裕。この予算なら暴走しても 0.1 秒台で止まる —
+/// 軽い種別にまで 6 G を配ると「上限がある」と言えなくなる。
+/// 埋込側が manifest を読んだ時点で `rasq_wasm_set_fuel_per_call` で適用する
+/// (この値は `rasq_wasm_fuel_budget_standard()` からも引ける)。
+const FUEL_BUDGET_STANDARD: u64 = 50_000_000;
+
+/// ゲスト線形メモリの上限(バイト)。256 MiB = 4096 ページ。
+///
+/// media_process の実測ピークは契約上の作業サイズ(2048×1536)の
+/// `media.commit` で **111 MiB**(base64 の引数 + デコード後 RGBA +
+/// フル解像度の合成先が同時に載る)。当初 128 MiB にしていたが、これは
+/// 実測ピークの 1.15 倍しかなく、12 MP のカメラ写真では 185 MiB に達して
+/// E03 で落ちていた。256 MiB = 実測ピークの約 2.3 倍。
+///
+/// この値は [`FUEL_PER_CALL`] と揃えてある: 燃料が許すサイズ(〜9 MP)なら
+/// メモリ側が先に落ちない、という関係。どちらが先に効くか分からない組は
+/// 原因究明が難しくなるので、**燃料のほうが先に当たる**ように取ってある。
+///
+/// なお wasm の線形メモリは縮まない。12 MP を 1 枚編集したインスタンスは
+/// 以後ずっと 185 MiB を抱えるので、埋込側は `media.commit` /
+/// `media.cancel` のあとインスタンスを捨てること。
+const MAX_MEMORY_BYTES: usize = 256 * 1024 * 1024;
+
+/// テーブル(funcref)要素数の上限。`table.grow` 経由でホスト側の
+/// Vec を膨らませる枯渇経路を塞ぐためのもので、通常の `dyn Trait` 相当の
+/// 間接呼び出しなら数千要素も使わない。
+const MAX_TABLE_ELEMENTS: usize = 100_000;
+
+/// ネイティブ `net.fetch` (D-023) の壁時計上限(ミリ秒・呼び出し全体)。
+///
+/// 燃料は純粋な計算しか縛れない。host_fn の中でブロッキング HTTP を待って
+/// いる間、ゲストは 1 命令も実行しないので燃料は減らない — つまり遅い
+/// (あるいは意図的に引き延ばされた)サーバーは燃料を素通りして呼び出し
+/// スレッドを占有できる。従来と同じ 15 秒だが、値を定数へ出して「ここが
+/// 壁時計の上限である」ことを明示する。スレッドは足さない:
+/// ureq 側に接続/読み/書き/全体のタイムアウトが揃っているので、それを
+/// 使い切るほうが構造が増えなくて済む。
+const DEFAULT_FETCH_TIMEOUT_MS: u64 = 15_000;
+
+/// 接続確立までの上限。名前解決 + TCP + TLS が 5 秒かかる先は、全体 15 秒を
+/// 待たせるより早めに B01 で返したほうがプラグインの再試行が回る。
+const FETCH_CONNECT_TIMEOUT_MS: u64 = 5_000;
+
+/// 1 回の read/write が止まってよい上限(slowloris 対策)。全体上限より
+/// 短くしておかないと「1 バイトずつ送り続ける」相手に全体上限いっぱい
+/// 付き合うことになる。
+const FETCH_IO_TIMEOUT_MS: u64 = 10_000;
+
+/// レスポンス本文の読み取り上限(バイト)。`read_to_end` は相手が送るだけ
+/// ホスト RAM を食うので、ゲストのメモリ上限とは別に口を絞る。32 MiB は
+/// 画像/動画サムネの実寸より十分大きく、TL の JSON なら桁が違う。
+const MAX_FETCH_BODY_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Host-function callback provided by the embedder (Dart via FFI).
 ///
@@ -26,12 +149,19 @@ struct HostState {
     /// calling thread) instead of going through the embedder callback —
     /// mobile hosts have no synchronous HTTP bridge (D-023).
     native_fetch: bool,
+    /// 壁時計の上限。ネイティブ `net.fetch` 一回ぶんの全体タイムアウト。
+    fetch_timeout_ms: u64,
+    /// 線形メモリ / テーブルの成長を止める `ResourceLimiter`。`Store` は
+    /// ユーザーデータ経由でしか limiter を引けないのでここに同居させる。
+    limits: StoreLimits,
 }
 
 pub struct RasqWasmInstance {
     store: Store<HostState>,
     memory: Memory,
     instance: Instance,
+    /// 「1 回の呼び出し」に配る燃料。呼び出しごとに積み直す(`refuel`)。
+    fuel_per_call: u64,
 }
 
 #[derive(Debug)]
@@ -39,11 +169,37 @@ enum RasqWasmError {
     Wasmi(wasmi::Error),
     MissingExport(&'static str),
     Utf8,
+    /// 燃料切れ = プラグインが暴走した(無限ループ・爆発的な再帰)。
+    /// 埋込側が「暴走」と「クラッシュ」を切り分けられるよう、一般の
+    /// トラップとは別の口にしてある — 前者はプラグインの無効化/再審査、
+    /// 後者は単にそのタイル 1 枚の縮退、と処置が違う (PROTOCOL §3.4)。
+    FuelExhausted,
+    /// 線形メモリ(またはテーブル)が上限を超えて伸びようとした。
+    /// 同じく「クラッシュ」とは別枠。
+    MemoryLimit,
 }
 
 impl From<wasmi::Error> for RasqWasmError {
     fn from(e: wasmi::Error) -> Self {
-        RasqWasmError::Wasmi(e)
+        // 枯渇系だけは先に掬い出す。wasmi は燃料切れも成長拒否もトラップ
+        // として返してくるので、ここで分類しないと埋込側からは
+        // 「プラグインが落ちた」と見分けがつかない。
+        match e.as_trap_code() {
+            Some(TrapCode::OutOfFuel) => return RasqWasmError::FuelExhausted,
+            Some(TrapCode::GrowthOperationLimited) => return RasqWasmError::MemoryLimit,
+            _ => {}
+        }
+        // インスタンス化時(まだ実行に入っていない)の拒否はトラップでは
+        // なくエラー種別で届く。初期メモリが上限を超えるモジュールがここ。
+        match e.kind() {
+            wasmi::errors::ErrorKind::Memory(
+                wasmi::errors::MemoryError::ResourceLimiterDeniedAllocation,
+            )
+            | wasmi::errors::ErrorKind::Table(
+                wasmi::errors::TableError::ResourceLimiterDeniedAllocation,
+            ) => RasqWasmError::MemoryLimit,
+            _ => RasqWasmError::Wasmi(e),
+        }
     }
 }
 
@@ -55,9 +211,37 @@ impl From<wasmi::errors::MemoryError> for RasqWasmError {
 
 impl RasqWasmInstance {
     fn load(wasm_bytes: &[u8], callback: Option<RasqHostFnCallback>, user_data: usize) -> Result<Self, RasqWasmError> {
-        let engine = Engine::default();
+        // 燃料計測は翻訳時に計測命令を埋め込む方式なので、Engine を作る前に
+        // Config で入れておく必要がある(`Engine::default()` では後から
+        // 有効にできない)。
+        let mut config = Config::default();
+        config.consume_fuel(true);
+        let engine = Engine::new(&config);
         let module = Module::new(&engine, wasm_bytes)?;
-        let mut store = Store::new(&engine, HostState { callback, user_data, native_fetch: false });
+        let limits = StoreLimitsBuilder::new()
+            .memory_size(MAX_MEMORY_BYTES)
+            .table_elements(MAX_TABLE_ELEMENTS)
+            // 上限に当たった `memory.grow` は -1 ではなくトラップにする。
+            // 仕様どおり -1 を返すと、ゲストのアロケータはたいてい
+            // null → abort/unreachable で落ちるので、どのみちプラグインは
+            // 死ぬ。それなら原因の分かる形(E03)で落としたほうが、
+            // 「プラグインのバグ」と「上限に当てた」を運用で切り分けられる。
+            .trap_on_grow_failure(true)
+            .build();
+        let mut store = Store::new(
+            &engine,
+            HostState {
+                callback,
+                user_data,
+                native_fetch: false,
+                fetch_timeout_ms: DEFAULT_FETCH_TIMEOUT_MS,
+                limits,
+            },
+        );
+        store.limiter(|state| &mut state.limits);
+        // start セクション / instantiate もゲストコードなので、給油前だと
+        // 「燃料 0」で即死する。ロード時にも 1 回分積んでおく。
+        store.set_fuel(FUEL_PER_CALL)?;
         let mut linker = Linker::new(&engine);
         // PROTOCOL.md §4.1: (import "rasq" "host_fn" (func (param i32 i32) (result i64))).
         // Always provided; without a registered callback it answers E00 so a
@@ -73,7 +257,19 @@ impl RasqWasmInstance {
             store,
             memory,
             instance,
+            fuel_per_call: FUEL_PER_CALL,
         })
+    }
+
+    /// 呼び出しの入り口で燃料を積み直す。
+    ///
+    /// ロード時に一度だけ積む方式だと、長生きしたインスタンスほど使える
+    /// 計算量が減っていき、正当なプラグインがいつか理由もなく落ちる
+    /// (しかも「何回目の呼び出しで落ちるか」は端末の履歴依存になる)。
+    /// 予算はあくまで「1 呼び出しあたり」で、呼び出しをまたいで繰り越さない。
+    fn refuel(&mut self) -> Result<(), RasqWasmError> {
+        self.store.set_fuel(self.fuel_per_call)?;
+        Ok(())
     }
 
     #[cfg(test)]
@@ -116,6 +312,7 @@ impl RasqWasmInstance {
     }
 
     fn snapshot(&mut self) -> Result<String, RasqWasmError> {
+        self.refuel()?;
         let f: TypedFunc<(), i64> = self.typed_func("snapshot")?;
         let packed = f.call(&mut self.store, ())?;
         let bytes = self.read_packed(packed)?;
@@ -123,6 +320,7 @@ impl RasqWasmInstance {
     }
 
     fn patch(&mut self) -> Result<String, RasqWasmError> {
+        self.refuel()?;
         let f: TypedFunc<(), i64> = self.typed_func("patch")?;
         let packed = f.call(&mut self.store, ())?;
         let bytes = self.read_packed(packed)?;
@@ -130,6 +328,9 @@ impl RasqWasmInstance {
     }
 
     fn call(&mut self, fn_name: &str, args_json: &str, call_id: &str) -> Result<String, RasqWasmError> {
+        // 引数の書き込み(ゲストの `alloc`)から結果の読み出しまでが 1 回の
+        // 呼び出し。同じ予算で回す — `alloc` の中で無限ループしても止まる。
+        self.refuel()?;
         let (fn_ptr, fn_len) = self.write_bytes(fn_name.as_bytes())?;
         let (args_ptr, args_len) = self.write_bytes(args_json.as_bytes())?;
         let (call_id_ptr, call_id_len) = self.write_bytes(call_id.as_bytes())?;
@@ -169,7 +370,8 @@ fn host_fn_impl(mut caller: Caller<'_, HostState>, ptr: u32, len: u32) -> Result
     if caller.data().native_fetch {
         if let Ok(req) = serde_json::from_slice::<serde_json::Value>(&request) {
             if req["fn"] == "net.fetch" {
-                let response = native_fetch_response(&req);
+                let timeout_ms = caller.data().fetch_timeout_ms;
+                let response = native_fetch_response(&req, timeout_ms);
                 return write_response(&mut caller, memory, response.to_string().as_bytes());
             }
         }
@@ -373,7 +575,7 @@ fn gpu_compute_response(req: &serde_json::Value) -> serde_json::Value {
     serde_json::json!({"callId": call_id, "ok": true, "value": {"output": output, "placement": "device"}})
 }
 
-fn native_fetch_response(req: &serde_json::Value) -> serde_json::Value {
+fn native_fetch_response(req: &serde_json::Value, timeout_ms: u64) -> serde_json::Value {
     let call_id = req["callId"].clone();
     let args = &req["args"];
     let method = args["method"].as_str().unwrap_or("GET").to_uppercase();
@@ -381,7 +583,17 @@ fn native_fetch_response(req: &serde_json::Value) -> serde_json::Value {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return serde_json::json!({"callId": call_id, "ok": false, "error": {"code": "B03", "message": format!("bad url: {url}")}});
     }
-    let mut request = ureq::request(&method, url).timeout(std::time::Duration::from_secs(15));
+    // 壁時計の締め: 全体 (timeout) に加えて、接続・read・write それぞれにも
+    // 上限を入れる。全体だけだと「1 バイトずつ延々と送ってくる」相手に上限
+    // いっぱい付き合うことになり、呼び出しスレッドがその間ずっと死ぬ。
+    let overall = Duration::from_millis(timeout_ms.max(1));
+    let agent = ureq::builder()
+        .timeout_connect(overall.min(Duration::from_millis(FETCH_CONNECT_TIMEOUT_MS)))
+        .timeout_read(overall.min(Duration::from_millis(FETCH_IO_TIMEOUT_MS)))
+        .timeout_write(overall.min(Duration::from_millis(FETCH_IO_TIMEOUT_MS)))
+        .timeout(overall)
+        .build();
+    let mut request = agent.request(&method, url);
     if let Some(headers) = args["headers"].as_object() {
         for (k, v) in headers {
             if let Some(v) = v.as_str() {
@@ -423,9 +635,15 @@ fn native_fetch_response(req: &serde_json::Value) -> serde_json::Value {
     }
     // 応答は UTF-8 なら `bodyText`、そうでなければ `bodyB64`(画像など)。
     // 読めるものは今までどおり文字列で返す — 既存プラグインは無改造で動く。
+    // 本文はゲストではなくホストの RAM に載るので、ゲストのメモリ上限とは
+    // 別に絞る。`take` で読み取り自体を打ち切り、+1 バイト読めたら超過。
     let mut body = Vec::new();
-    if let Err(e) = std::io::Read::read_to_end(&mut http_response.into_reader(), &mut body) {
+    let mut reader = std::io::Read::take(http_response.into_reader(), MAX_FETCH_BODY_BYTES + 1);
+    if let Err(e) = std::io::Read::read_to_end(&mut reader, &mut body) {
         return serde_json::json!({"callId": call_id, "ok": false, "error": {"code": "B03", "message": format!("read body failed: {e}")}});
+    }
+    if body.len() as u64 > MAX_FETCH_BODY_BYTES {
+        return serde_json::json!({"callId": call_id, "ok": false, "error": {"code": "B03", "message": format!("response body exceeds {MAX_FETCH_BODY_BYTES} bytes")}});
     }
     match String::from_utf8(body) {
         Ok(text) => serde_json::json!({"callId": call_id, "ok": true, "value": {"status": status, "headers": headers, "bodyText": text}}),
@@ -447,13 +665,29 @@ fn result_to_c_string<T: Into<String>>(result: Result<T, RasqWasmError>) -> *mut
         .into_raw()
 }
 
+/// 枯渇系(E02/E03)は `Exx 規制`(CONTRACT §9)に置く — ホストが線を引いて
+/// 止めた、という意味で、プラグイン間受け渡しの失敗 (C02) とは別物。
+/// 埋込側はこのコードだけ見て「暴走したプラグイン」を落として再審査へ
+/// 回せる。
 fn serde_error_json(e: &RasqWasmError) -> String {
-    let message = match e {
-        RasqWasmError::Wasmi(err) => err.to_string(),
-        RasqWasmError::MissingExport(name) => format!("missing export: {name}"),
-        RasqWasmError::Utf8 => "wasm returned non-utf8 bytes".to_string(),
+    let (code, message) = match e {
+        RasqWasmError::Wasmi(err) => ("C02", err.to_string()),
+        RasqWasmError::MissingExport(name) => ("C02", format!("missing export: {name}")),
+        RasqWasmError::Utf8 => ("C02", "wasm returned non-utf8 bytes".to_string()),
+        RasqWasmError::FuelExhausted => (
+            "E02",
+            format!(
+                "plugin exceeded its execution budget ({FUEL_PER_CALL} fuel per call); \
+                 if this is a legitimate media workload, downscale the source image \
+                 before media.edit or raise the budget with rasq_wasm_set_fuel_per_call"
+            ),
+        ),
+        RasqWasmError::MemoryLimit => (
+            "E03",
+            format!("plugin exceeded its memory limit ({MAX_MEMORY_BYTES} bytes)"),
+        ),
     };
-    format!("{{\"ok\":false,\"error\":{{\"code\":\"C02\",\"message\":{message:?}}}}}")
+    format!("{{\"ok\":false,\"error\":{{\"code\":\"{code}\",\"message\":{message:?}}}}}")
 }
 
 // ---- zstd(.rasqpkg の展開、D-034)------------------------------------------
@@ -546,6 +780,61 @@ pub extern "C" fn rasq_wasm_set_native_fetch(instance: *mut RasqWasmInstance, en
     }
     let instance = unsafe { &mut *instance };
     instance.store.data_mut().native_fetch = enabled;
+}
+
+/// Overrides the per-invocation fuel budget (default [`FUEL_PER_CALL`]).
+///
+/// Fuel is what stops a runaway plugin: every `call`/`snapshot`/`patch` is
+/// refuelled to this amount, and a guest that burns through it traps with
+/// `E02` instead of wedging the calling thread. Lower it for untrusted /
+/// sideloaded plugins, raise it for a reviewed plugin that legitimately
+/// crunches (`tl.sort` over a huge timeline). `0` is accepted but means
+/// "every call fails immediately" — use it only to hard-stop a plugin.
+#[no_mangle]
+pub extern "C" fn rasq_wasm_set_fuel_per_call(instance: *mut RasqWasmInstance, fuel: u64) {
+    if instance.is_null() {
+        return;
+    }
+    let instance = unsafe { &mut *instance };
+    instance.fuel_per_call = fuel;
+}
+
+/// Recommended fuel budget for a plugin that processes bitmaps — one that
+/// takes the `composer.media` slot, or declares `replace_media`/`tag_media`.
+/// This is also the default a fresh instance starts with, so an embedder that
+/// never calls the setter is already correct for the heavy case.
+///
+/// Note the axis: **not** the manifest `kind`. The heaviest sample plugin
+/// (`sample.media-process`, 2.1 G fuel for one `media.edit`) declares
+/// `kind: "action"`, while `mediaViewer` is the lightest thing measured
+/// (118 K) — `kind` says where a plugin plugs in, not what it costs.
+#[no_mangle]
+pub extern "C" fn rasq_wasm_fuel_budget_media() -> u64 {
+    FUEL_BUDGET_MEDIA
+}
+
+/// Recommended fuel budget for every other plugin (sns / trend / view /
+/// post-processing / plain actions): 24x the heaviest non-bitmap workload
+/// measured, and tight enough that a runaway is stopped in well under a
+/// second. Apply it with `rasq_wasm_set_fuel_per_call` once the manifest says
+/// the plugin does not touch media.
+#[no_mangle]
+pub extern "C" fn rasq_wasm_fuel_budget_standard() -> u64 {
+    FUEL_BUDGET_STANDARD
+}
+
+/// Overrides the wall-clock budget of one runtime-native `net.fetch`
+/// (default [`DEFAULT_FETCH_TIMEOUT_MS`] ms). Only meaningful with
+/// `rasq_wasm_set_native_fetch(.., true)`; when the embedder serves
+/// `net.fetch` itself, bounding that call is the embedder's job — fuel does
+/// not tick while a host function blocks.
+#[no_mangle]
+pub extern "C" fn rasq_wasm_set_fetch_timeout_ms(instance: *mut RasqWasmInstance, timeout_ms: u64) {
+    if instance.is_null() {
+        return;
+    }
+    let instance = unsafe { &mut *instance };
+    instance.store.data_mut().fetch_timeout_ms = timeout_ms;
 }
 
 /// Copies a NUL-terminated string into this crate's allocator. Host-function
@@ -828,5 +1117,169 @@ mod tests {
         let mut instance = load();
         let json = instance.call("noSuchFn", "{}", "call-2").expect("call");
         assert!(json.contains("\"ok\":false"));
+    }
+
+
+    // ---- リソース上限 -----------------------------------------------------
+    //
+    // 実プラグイン (misskey-wasm-sample) は当然どちらの上限にも当たらないので、
+    // 枯渇そのものは最小の WAT で作る。wasmi は `Module::new` に WAT を
+    // そのまま食わせられる(`wat` feature が既定で入っている)ので、
+    // フィクスチャを別途ビルドする必要はない。ABI は PROTOCOL §4.1 の
+    // 最小形 — `memory` / `alloc` / `dealloc` / `call` だけ。
+
+    /// `call` の中で永久に回るだけのゲスト。サンドボックスは破らないが、
+    /// 燃料が無ければ呼び出しスレッドは二度と返ってこない。
+    const RUNAWAY_WAT: &str = r#"
+        (module
+          (memory (export "memory") 1)
+          (func (export "alloc") (param i32) (result i32) (i32.const 0))
+          (func (export "dealloc") (param i32 i32))
+          (func (export "call") (param i32 i32 i32 i32 i32 i32) (result i64)
+            (loop $spin (br $spin))
+            (i64.const 0)))
+    "#;
+
+    /// `call` のたびに上限を大きく越える `memory.grow` を投げるゲスト。
+    const MEMORY_HOG_WAT: &str = r#"
+        (module
+          (memory (export "memory") 1)
+          (func (export "alloc") (param i32) (result i32) (i32.const 0))
+          (func (export "dealloc") (param i32 i32))
+          (func (export "call") (param i32 i32 i32 i32 i32 i32) (result i64)
+            (drop (memory.grow (i32.const 8192)))
+            (i64.const 0)))
+    "#;
+
+    /// 上限のすぐ内側(+16 MiB)まで伸ばすゲスト。正当なプラグインを
+    /// 巻き込んでいないことの対照。
+    const MEMORY_OK_WAT: &str = r#"
+        (module
+          (memory (export "memory") 1)
+          (func (export "alloc") (param i32) (result i32) (i32.const 0))
+          (func (export "dealloc") (param i32 i32))
+          (func (export "call") (param i32 i32 i32 i32 i32 i32) (result i64)
+            (drop (memory.grow (i32.const 256)))
+            (i64.const 0)))
+    "#;
+
+    #[test]
+    fn runaway_guest_runs_out_of_fuel_in_bounded_time() {
+        let mut instance = RasqWasmInstance::load_plain(RUNAWAY_WAT.as_bytes()).expect("instantiate");
+        // 既定の 2 億は release 前提の値で、debug ビルドのインタプリタだと
+        // 秒がかさむ。上限が効くことの確認に大きさは要らないので絞る。
+        instance.fuel_per_call = 1_000_000;
+
+        let started = std::time::Instant::now();
+        let err = instance
+            .call("spin", "{}", "call-fuel")
+            .expect_err("a runaway guest must not return normally");
+        let elapsed = started.elapsed();
+
+        assert!(matches!(err, RasqWasmError::FuelExhausted), "{err:?}");
+        assert!(elapsed < Duration::from_secs(30), "took {elapsed:?}");
+        // 埋込側(Dart)が見るのは JSON のほう。E02 で「暴走」と分かること。
+        let json = serde_error_json(&err);
+        assert!(json.contains(r#""code":"E02""#), "{json}");
+    }
+
+    #[test]
+    fn fuel_is_refilled_per_call_not_once_per_load() {
+        // 同じインスタンスを何度叩いても、毎回同じ予算で回る。燃料を
+        // ロード時に一度だけ積む実装だと 2 回目以降が理由もなく落ちる。
+        let mut instance = load();
+        for i in 0..5 {
+            let json = instance
+                .call("openThread", r#"{"postId":"abc"}"#, &format!("call-refuel-{i}"))
+                .expect("call");
+            assert!(json.contains(r#""ok":true"#), "{json}");
+        }
+        let json = instance.snapshot().expect("snapshot");
+        assert!(json.contains("rasq.boundary/1"), "{json}");
+    }
+
+    #[test]
+    fn memory_growth_past_the_cap_fails_cleanly() {
+        let mut instance =
+            RasqWasmInstance::load_plain(MEMORY_HOG_WAT.as_bytes()).expect("instantiate");
+        let err = instance
+            .call("grow", "{}", "call-mem")
+            .expect_err("growing past the cap must fail");
+        assert!(matches!(err, RasqWasmError::MemoryLimit), "{err:?}");
+        let json = serde_error_json(&err);
+        assert!(json.contains(r#""code":"E03""#), "{json}");
+        // 「clean」= ホストは生きていて、同じインスタンスにまた話しかけられる。
+        let err2 = instance.call("grow", "{}", "call-mem-2").expect_err("still limited");
+        assert!(matches!(err2, RasqWasmError::MemoryLimit), "{err2:?}");
+    }
+
+    #[test]
+    fn memory_growth_under_the_cap_still_works() {
+        let mut instance =
+            RasqWasmInstance::load_plain(MEMORY_OK_WAT.as_bytes()).expect("instantiate");
+        instance.call("grow", "{}", "call-mem-ok").expect("grow within the cap");
+        assert!(instance.memory.size(&instance.store) > 1);
+    }
+
+    #[test]
+    fn non_media_plugin_fits_the_standard_budget() {
+        // ビットマップを触らないプラグインは FUEL_BUDGET_STANDARD(埋込側が
+        // manifest を見て絞る想定の値)に収まること。既定の 6 G ではなく
+        // **絞ったほう**で測るのが肝心 — 緩い既定でしか通らないなら、
+        // 「軽い種別は絞ってよい」という推奨が嘘になる。
+        let bytes = std::fs::read(WASM_PATH).expect("build misskey-wasm-sample first");
+        let mut instance =
+            RasqWasmInstance::load(&bytes, Some(test_host_fn), 0).expect("instantiate");
+        instance.fuel_per_call = FUEL_BUDGET_STANDARD;
+        instance
+            .call("timeline", r#"{"host":"misskey.example","limit":10}"#, "call-budget")
+            .expect("timeline must fit the standard budget");
+        let used = FUEL_BUDGET_STANDARD - instance.store.get_fuel().expect("fuel metering is on");
+        assert!(
+            used * 10 < FUEL_BUDGET_STANDARD,
+            "timeline burned {used} of {FUEL_BUDGET_STANDARD} fuel — too tight"
+        );
+    }
+
+    /// 上限の校正そのものを固定する回帰テスト。実測で一番重い**正当な**
+    /// 呼び出し(media_process の sticker、約 6.4 億)が既定予算に収まること。
+    /// これが落ちたら rasq-client の `slot_plugins_wasm_test.dart` も落ちる。
+    ///
+    /// 既定では走らせない: フィクスチャが別リポジトリ(plugin-sample/dist)で、
+    /// debug ビルドのインタプリタだと 6.4 億燃やすのに分単位かかるため。
+    ///     cargo test --release -p rasq_wasm_runtime_core -- --ignored
+    #[test]
+    #[ignore = "needs plugin-sample/dist; run with --release"]
+    fn media_plugin_heaviest_call_fits_the_default_budget() {
+        const DIST: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugin-sample/dist");
+        // slot_plugins_wasm_test.dart が使うのと同じ 2×1 PNG。
+        const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAADklEQVR4nGP4z8AAQv8BD/kD/YURmXYAAAAASUVORK5CYII=";
+        let path = format!("{DIST}/media_process_plugin.wasm");
+        let Ok(bytes) = std::fs::read(&path) else {
+            eprintln!("skipped: {path} not built");
+            return;
+        };
+        let mut instance =
+            RasqWasmInstance::load(&bytes, Some(test_host_fn), 0).expect("instantiate");
+        let mut worst = 0u64;
+        for (i, (f, a)) in [
+            ("media.edit", format!(r#"{{"token":"t1","index":0,"name":"a.png","mimeType":"image/png","bytesB64":"{PNG}"}}"#)),
+            ("media.action", r#"{"token":"t1","genre":"process","action":"faces"}"#.to_string()),
+            ("media.action", r#"{"token":"t1","genre":"process","action":"sticker"}"#.to_string()),
+            ("sticker.add.0", r#"{"nodeId":"x","kind":"tap"}"#.to_string()),
+            ("media.commit", r#"{"token":"t1"}"#.to_string()),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            instance.call(f, &a, &format!("cal-{i}")).unwrap_or_else(|e| panic!("{f}: {e:?}"));
+            let used = FUEL_PER_CALL - instance.store.get_fuel().expect("fuel");
+            worst = worst.max(used);
+        }
+        assert!(
+            worst * 2 < FUEL_PER_CALL,
+            "heaviest legitimate media call burned {worst} of {FUEL_PER_CALL} — \
+             less than 2x headroom left, the budget needs re-calibrating"
+        );
     }
 }
