@@ -3,6 +3,7 @@
 //! 第一期(①〜⑤): `init` / `new` / `check` / `test` / `call` / `build [--raw]` / `registry` / `token` / `dev` / `key` / `inspect` / `publish`。
 
 mod credentials;
+mod source;
 mod embed;
 mod key;
 mod pack;
@@ -100,6 +101,9 @@ enum Cmd {
         /// 開発者鍵で署名しない
         #[arg(long)]
         no_sign: bool,
+        /// 審査用のソース dist/<id>-<version>.source.tar.zst も出す(配布はされず、審査だけが読む)
+        #[arg(long)]
+        with_source: bool,
     },
     /// 開発者鍵(ed25519)。サイドロード用の署名に使う。ストア署名は Central 側
     Key {
@@ -131,6 +135,9 @@ enum Cmd {
         /// トークンを読む環境変数(無ければ credentials.toml の [central."<host>"])
         #[arg(long, default_value = "RASQ_CENTRAL_TOKEN", value_name = "VAR")]
         token_env: String,
+        /// 審査用のソースも送る(kind = source。審査から求められたら必須)
+        #[arg(long)]
+        with_source: bool,
     },
     /// .rasqpkg の中身を目次(bundle.json)と突き合わせ、.sig.json があれば署名も確かめる
     Inspect {
@@ -220,10 +227,10 @@ fn run() -> Result<()> {
             cargo(&root, &["test"])
         }
         Cmd::Call { name, r#fn, args, reply, then, full } => call_cmd(&name, &r#fn, &args, &reply, &then, full),
-        Cmd::Build { raw, no_build, no_sign } => build(raw, no_build, no_sign),
+        Cmd::Build { raw, no_build, no_sign, with_source } => build(raw, no_build, no_sign, with_source),
         Cmd::Key { cmd } => key_cmd(cmd),
         Cmd::Inspect { pkg, extract } => inspect(&pkg, extract.as_deref()),
-        Cmd::Publish { central, channel, notes_file, dry_run, skip_listing, no_make_current, no_build, token_env } => publish_cmd(central, channel, notes_file, dry_run, skip_listing, !no_make_current, no_build, &token_env),
+        Cmd::Publish { central, channel, notes_file, dry_run, skip_listing, no_make_current, no_build, token_env, with_source } => publish_cmd(central, channel, notes_file, dry_run, skip_listing, !no_make_current, no_build, &token_env, with_source),
         Cmd::Registry { what } => registry(what),
         Cmd::Token { cmd } => token(cmd),
         Cmd::Dev { watch, debug } => dev(watch, debug),
@@ -608,13 +615,13 @@ fn report(label: &str, errs: &[String], warns: &[String]) {
     }
 }
 
-fn build(raw: bool, no_build: bool, no_sign: bool) -> Result<()> {
+fn build(raw: bool, no_build: bool, no_sign: bool, with_source: bool) -> Result<()> {
     let (root, ws) = Workspace::find()?;
-    build_in(&root, &ws, raw, no_build, no_sign).map(|_| ())
+    build_in(&root, &ws, raw, no_build, no_sign, with_source).map(|_| ())
 }
 
 /// dist/ を作る。戻りは (ファイル名, bundle.json)。
-fn build_in(root: &Path, ws: &Workspace, raw: bool, no_build: bool, no_sign: bool) -> Result<Vec<(String, Value)>> {
+fn build_in(root: &Path, ws: &Workspace, raw: bool, no_build: bool, no_sign: bool, with_source: bool) -> Result<Vec<(String, Value)>> {
     let root = root.to_path_buf();
     let has_code = !ws.targets(&root).is_empty();
     if !has_code && ws.packs.is_empty() {
@@ -673,6 +680,13 @@ fn build_in(root: &Path, ws: &Workspace, raw: bool, no_build: bool, no_sign: boo
             std::fs::write(&sp, serde_json::to_string_pretty(&sig)?)?;
             println!("  {}", sp.strip_prefix(&root).unwrap_or(&sp).display());
         }
+        if with_source {
+            // 審査用のソース (docs/cli.md §6)。配布物とは別のファイルで、publish は kind = source として送る。
+            let src = source::archive(&root, ws, &p.bundle)?;
+            let sp = dist.join(source::file_name(p.bundle["root"]["id"].as_str().unwrap_or("plugin"), p.bundle["root"]["version"].as_str().unwrap_or("0")));
+            std::fs::write(&sp, &src)?;
+            println!("  {}  {} bytes(審査用のソース。配布されない)", sp.strip_prefix(&root).unwrap_or(&sp).display(), src.len());
+        }
         built.push((p.file_name.clone(), p.bundle.clone()));
     }
     if raw {
@@ -684,7 +698,7 @@ fn build_in(root: &Path, ws: &Workspace, raw: bool, no_build: bool, no_sign: boo
 }
 
 #[allow(clippy::too_many_arguments)]
-fn publish_cmd(central: String, channel: String, notes_file: Option<PathBuf>, dry_run: bool, skip_listing: bool, make_current: bool, no_build: bool, token_env: &str) -> Result<()> {
+fn publish_cmd(central: String, channel: String, notes_file: Option<PathBuf>, dry_run: bool, skip_listing: bool, make_current: bool, no_build: bool, token_env: &str, with_source: bool) -> Result<()> {
     let (root, ws) = Workspace::find()?;
     if !central.starts_with("http://") && !central.starts_with("https://") {
         bail!("--central は http(s):// で始まる URL です: {central}");
@@ -704,7 +718,7 @@ fn publish_cmd(central: String, channel: String, notes_file: Option<PathBuf>, dr
         }
         v
     } else {
-        build_in(&root, &ws, false, false, false)?
+        build_in(&root, &ws, false, false, false, with_source)?
     };
     let token = if dry_run {
         None
@@ -717,7 +731,7 @@ fn publish_cmd(central: String, channel: String, notes_file: Option<PathBuf>, dr
     if !dry_run && token.is_none() {
         bail!("Central のトークンがありません: 環境変数 {token_env} か、rasq token set --central {}", publish::host_key(&central));
     }
-    let opts = publish::Options { central: central.clone(), channel, notes, dry_run, skip_listing, make_current, token };
+    let opts = publish::Options { central: central.clone(), channel, notes, dry_run, skip_listing, make_current, token, with_source };
     let done = publish::run(&root, &ws, &packages, &opts)?;
     if dry_run {
         println!("dry-run: {} 件の配布物の要求を {} に書きました(Authorization は $RASQ_CENTRAL_TOKEN のまま)", done.len(), root.join("dist/publish").display());

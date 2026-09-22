@@ -5,6 +5,7 @@
 //! 3. `POST /api/v1/admin/plugins/{id}/versions`(版 + マニフェスト)
 //! 4. `PUT  /api/v1/admin/plugins/{id}/versions/{v}/artifacts/bundle?kind=bundle`(.rasqpkg。応答の sha512 を照合)
 //! 5. lazy モデルごとに `PUT …/artifacts/{artifactId}?kind=model&lazy=true`
+//! 6. `--with-source` なら `PUT …/artifacts/source?kind=source`(審査用のソース。配布されない)
 //!
 //! `--dry-run` は要求を `dist/publish/<pkg>/NN-<label>.json`(+ `.bin`)に書くだけ(審査側に渡す束)。
 //! トークンは `RASQ_CENTRAL_TOKEN`(`--token-env` で変更)か credentials.toml の `[central."<host>"]`。
@@ -23,6 +24,8 @@ pub struct Options {
     pub skip_listing: bool,
     pub make_current: bool,
     pub token: Option<String>,
+    /// 審査用のソース (dist/<id>-<version>.source.tar.zst) も kind = source で送る。
+    pub with_source: bool,
 }
 
 /// Central の URL から credentials.toml のキー(`host[:port]`)。
@@ -280,6 +283,21 @@ pub fn run(root: &Path, ws: &Workspace, packages: &[(String, Value)], opts: &Opt
             }
             if st != 0 {
                 println!("  model {aid}: ok");
+            }
+        }
+        // 6. 審査用のソース (docs/cli.md §6)。配布はされない。
+        if opts.with_source {
+            let sp = root.join("dist").join(crate::source::file_name(&id, &version));
+            let sb = std::fs::read(&sp).with_context(|| format!("{} がありません(rasq build --with-source を先に)", sp.display()))?;
+            let (st, res) = c.send(
+                Request { label: "upload-source".into(), method: "PUT", path: format!("/api/v1/admin/plugins/{id}/versions/{version}/artifacts/source"), query: vec![("kind".into(), "source".into())], body: Body::Bytes(sb.clone(), "application/zstd") },
+                true,
+            )?;
+            if st != 0 && !(200..300).contains(&st) {
+                return Err(fail("ソース(PUT …/artifacts/source)", st, &res));
+            }
+            if st != 0 {
+                println!("  ソース: ok({} bytes、審査だけが読む)", sb.len());
             }
         }
         out.push(Published { id, version });
