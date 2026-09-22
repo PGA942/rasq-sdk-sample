@@ -32,6 +32,19 @@ typedef RasqHostFnHandler = String? Function(String requestJson);
 /// shuttles JSON strings across the FFI boundary — decoding/validating them
 /// is the host runtime's job.
 class RasqWasmPlugin {
+  /// Per-call fuel budget sized for bitmap work (the runtime default).
+  ///
+  /// The heaviest measured legitimate call — editing a 2048x1536 image —
+  /// burns ~2.1G, so this leaves room for larger inputs. Cost tracks pixel
+  /// count, not the plugin, which is why the axis here is "does it touch
+  /// bitmaps", not the manifest's `kind`.
+  static int get mediaFuelBudget => bindings.rasq_wasm_fuel_budget_media();
+
+  /// Per-call fuel budget for everything else. Orders of magnitude tighter:
+  /// the heaviest non-bitmap workload measured (a full timeline parse plus
+  /// RRL rebuild) burns ~2M, so a runaway dies in a fraction of a second.
+  static int get standardFuelBudget => bindings.rasq_wasm_fuel_budget_standard();
+
   final ffi.Pointer<bindings.RasqWasmInstance> _instance;
   final ffi.NativeCallable<bindings.RasqHostFnCallbackFunction>? _callable;
   bool _destroyed = false;
@@ -46,7 +59,13 @@ class RasqWasmPlugin {
   /// rustls — works on iOS/Android where the embedder has no synchronous
   /// HTTP). While enabled, `net.fetch` never reaches [hostFn]; the calling
   /// isolate blocks for the duration of each request.
-  factory RasqWasmPlugin.fromBytes(Uint8List wasmBytes, {RasqHostFnHandler? hostFn, bool nativeFetch = false}) {
+  ///
+  /// [fuelPerCall] caps how much a single `call`/`snapshot`/`patch` may
+  /// execute; exhausting it fails with `E02` instead of hanging the calling
+  /// thread. Leave it null to keep the runtime default ([mediaFuelBudget],
+  /// sized for bitmap work); pass [standardFuelBudget] for plugins that do
+  /// not touch bitmaps — that is where the tightening actually happens.
+  factory RasqWasmPlugin.fromBytes(Uint8List wasmBytes, {RasqHostFnHandler? hostFn, bool nativeFetch = false, int? fuelPerCall}) {
     final bytesPtr = malloc<ffi.Uint8>(wasmBytes.length);
     ffi.NativeCallable<bindings.RasqHostFnCallbackFunction>? callable;
     try {
@@ -82,6 +101,7 @@ class RasqWasmPlugin {
         throw RasqWasmInstantiateException();
       }
       if (nativeFetch) bindings.rasq_wasm_set_native_fetch(instance, true);
+      if (fuelPerCall != null) bindings.rasq_wasm_set_fuel_per_call(instance, fuelPerCall);
       return RasqWasmPlugin._(instance, callable);
     } finally {
       malloc.free(bytesPtr);
