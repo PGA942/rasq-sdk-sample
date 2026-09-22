@@ -57,6 +57,17 @@ FFI_PLUGIN_EXPORT void rasq_wasm_set_fuel_per_call(RasqWasmInstance *instance, u
 FFI_PLUGIN_EXPORT uint64_t rasq_wasm_fuel_budget_media(void);
 FFI_PLUGIN_EXPORT uint64_t rasq_wasm_fuel_budget_standard(void);
 
+// Replaces the set of hosts the runtime-native net.fetch may reach: a
+// comma-separated list ("misskey.io,*.example.com"), matched against the
+// URL's host (lower-cased; userinfo and port stripped). "*.example.com"
+// matches subdomains only; "*" matches anything. NULL or "" means NO host —
+// a fresh instance starts closed, so an embedder that never calls this
+// cannot hand a plugin the whole internet by omission. Redirects are not
+// followed (the 3xx is returned), so a permitted host cannot bounce the
+// request somewhere undeclared. Call again when the session's instance
+// host changes.
+FFI_PLUGIN_EXPORT void rasq_wasm_set_fetch_hosts(RasqWasmInstance *instance, const char *hosts);
+
 // Overrides the wall-clock budget of one runtime-native net.fetch, in
 // milliseconds (default 15000). Only meaningful with
 // rasq_wasm_set_native_fetch(.., true): when the embedder serves net.fetch

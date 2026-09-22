@@ -8,6 +8,9 @@
   "supportedSns": [
     "other"
   ],
+  "network": {
+    "instance": true
+  },
   "permissions": [
     "network",
     "storage.safe",

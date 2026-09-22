@@ -49,6 +49,14 @@ let body_text = response["value"]["bodyText"].as_str().unwrap_or("");
 - v1 は同期(呼び出し中プラグインはブロック)。ホスト側はワーカー isolate で
   動かすので **UI は止まらない**(非同期 v2 = callId ベースの poll/notify は将来)。
 - URL は https/http のみ。エラーは `B01`(到達不能)/ `B03`(不正 URL / HTTP エラー)。
+- **繋げるのはマニフェストの `network` で宣言した先だけ** (v0.12)。`network.hosts`(完全一致 /
+  `*.example.com` = サブドメインだけ / `*` = どこでも、開発用)と `network.instance`
+  (そのセッションのアカウントのインスタンス。ホストが `args.host` に渡すものと同じ)。
+  それ以外のホストは `E01`(`host not permitted`)。宣言が無ければどこにも繋げない
+  (fail-closed)— `network` 権限だけでは動かない。
+- **リダイレクトは追わない**。許可した先が 302 で別のホストへ飛ばしても付いて行かず、
+  3xx がそのまま返る。飛ぶかどうかはプラグインが次の `net.fetch` で決める(その URL も
+  また検査される)。
 
 ## 実行モデルの注意
 

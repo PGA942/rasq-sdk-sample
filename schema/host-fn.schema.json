@@ -130,8 +130,8 @@
           "bodyText": "string?",
           "bodyB64": "string? (binary responses)"
         },
-        "permission": "network (審査済み)",
-        "notes": "Host-proxied: dedupe, cache, cookie/credential isolation. Plugins never open sockets."
+        "permission": "network (審査済み) + manifest.network.hosts / manifest.network.instance — 宣言した先以外は E01 (host not permitted)。宣言が無ければどこにも繋げない",
+        "notes": "Host-proxied: dedupe, cache, cookie/credential isolation. Plugins never open sockets. Redirects are not followed (3xx is returned as-is) so a permitted host cannot bounce the request elsewhere."
       },
       "gpu.compute": {
         "args": {
