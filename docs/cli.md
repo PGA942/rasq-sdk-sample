@@ -244,7 +244,8 @@ SHA512SUMS                  # 目次と同じ値の一覧(手で確かめる用)
   (子の id が `<root>.` で始まらなければ止まる)。`owned = false`(他人の土台)や土台無しでは `[[plugins]]` **ごとに** root = その子の
   `.rasqpkg` を出し、土台があれば `root.requires = [{ id: base.id, version: "^<base.version>" }]` を書く。同梱はしない
 - `[[libs]]` は wasm の export が `exports` にあることを wasmi で確かめて `libs/<file>` に、`[[assets]]` はそのパスのまま、`[[models]]` は
-  manifest と(`lazy = false` なら)`runtimes.*.file` / `tokenizer.file` の本体を入れる。`lazy = true` は manifest だけ + `artifactId = model-<name>`
+  manifest と(`lazy = false` なら)`runtimes.*.file` / `tokenizer.file` の本体を入れる。`lazy = true` は manifest だけ + `artifactId = model-<name>`。
+  `rasq inspect` は、model manifest の `runtimes.*.file` / `tokenizer.file` を「目次に載っているもの」として数える(lazy でないのに無ければ問題、それ以外の目次に無いファイルは問題)
 - `rasq init --base <x.rasqpkg>` は `inspect` と同じ検査を通してから root(`kind = sns` のみ)の manifest / wasm / `bundle.json` を `base/` に置く
 
 ホスト側の現状: ストアのインストールは `.rasqpkg` をまだ展開せず、配布物が生の wasm(`\0asm`)ならスロット登録する(D-168)。
