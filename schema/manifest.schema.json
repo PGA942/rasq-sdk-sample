@@ -16,6 +16,7 @@
     "description": { "type": "string" },
     "supportedSns": { "type": "array", "items": { "type": "string", "enum": ["bluesky", "misskey", "mastodon", "mixi2", "other"] } },
     "permissions": { "type": "array", "uniqueItems": true, "items": { "$ref": "slot-registry.schema.json#/$defs/permission" } },
+    "network": { "$ref": "#/$defs/network" },
     "slots": {
       "type": "array",
       "uniqueItems": true,
@@ -36,6 +37,16 @@
   },
   "allOf": [
     {
+      "$comment": "network 権限は「どこへでも」ではない (v0.12): 繋ぐ先を network で宣言する。ランタイムはこれ以外のホストを E01 で弾く。宣言が無い = 繋げない (fail-closed) なので、権限だけ書いても動かない。",
+      "if": { "properties": { "permissions": { "contains": { "const": "network" } } }, "required": ["permissions"] },
+      "then": { "required": ["network"] }
+    },
+    {
+      "$comment": "逆に、network 権限が無いのに接続先だけ書いても意味が無い。",
+      "if": { "required": ["network"] },
+      "then": { "properties": { "permissions": { "contains": { "const": "network" } } }, "required": ["permissions"] }
+    },
+    {
       "$comment": "replace_tile を持つなら roles に contentBody(V5)。",
       "if": { "properties": { "permissions": { "contains": { "const": "replace_tile" } } }, "required": ["permissions"] },
       "then": { "required": ["roles"], "properties": { "roles": { "contains": { "const": "contentBody" } } } }
@@ -53,6 +64,25 @@
     }
   ],
   "$defs": {
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "net.fetch が繋いでよい先 (v0.12)。hosts の完全一致 / *.example.com(サブドメインだけ、apex は別に書く)/ *(どこでも。開発用で、審査では旗) と、instance(そのセッションのアカウントが属するインスタンスのホスト。SNS プラグイン用。ホストが毎回の call に渡す host と同じもの)。どちらかは要る。リダイレクトは追わない(3xx がそのまま返る)。",
+      "properties": {
+        "hosts": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 64,
+          "items": { "type": "string", "pattern": "^(\\*|(\\*\\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*)$" },
+          "description": "小文字のホスト名。ポート・スキーム・パスは書けない(https/http どちらも同じ宣言で通る)"
+        },
+        "instance": { "type": "boolean", "default": false, "description": "アカウントのインスタンス(ログイン先)へ繋ぐ。ユーザーが選んだ先なので静的には書けない" }
+      },
+      "anyOf": [
+        { "required": ["hosts"], "properties": { "hosts": { "minItems": 1 } } },
+        { "required": ["instance"], "properties": { "instance": { "const": true } } }
+      ]
+    },
     "packAsset": {
       "type": "object",
       "required": ["id", "path", "use"],

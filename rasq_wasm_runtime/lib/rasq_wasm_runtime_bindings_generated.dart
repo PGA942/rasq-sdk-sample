@@ -75,6 +75,23 @@ external int rasq_wasm_fuel_budget_media();
 @ffi.Native<ffi.Uint64 Function()>()
 external int rasq_wasm_fuel_budget_standard();
 
+/// Replaces the set of hosts the runtime-native net.fetch may reach: a
+/// comma-separated list ("misskey.io,*.example.com"), matched against the
+/// URL's host (lower-cased; userinfo and port stripped). "*.example.com"
+/// matches subdomains only; "*" matches anything. NULL or "" means NO host —
+/// a fresh instance starts closed, so an embedder that never calls this
+/// cannot hand a plugin the whole internet by omission. Redirects are not
+/// followed (the 3xx is returned), so a permitted host cannot bounce the
+/// request somewhere undeclared. Call again when the session's instance
+/// host changes.
+@ffi.Native<
+  ffi.Void Function(ffi.Pointer<RasqWasmInstance>, ffi.Pointer<ffi.Char>)
+>()
+external void rasq_wasm_set_fetch_hosts(
+  ffi.Pointer<RasqWasmInstance> instance,
+  ffi.Pointer<ffi.Char> hosts,
+);
+
 /// Overrides the wall-clock budget of one runtime-native net.fetch, in
 /// milliseconds (default 15000). Only meaningful with
 /// rasq_wasm_set_native_fetch(.., true): when the embedder serves net.fetch
@@ -126,20 +143,6 @@ external ffi.Pointer<ffi.Char> rasq_wasm_call(
 @ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Char>)>()
 external void rasq_wasm_free_string(ffi.Pointer<ffi.Char> s);
 
-final class RasqWasmInstance extends ffi.Opaque {}
-
-typedef RasqHostFnCallbackFunction = ffi.Pointer<ffi.Char> Function(
-  ffi.Pointer<ffi.Char> request,
-  ffi.Pointer<ffi.Void> user_data,
-);
-
-/// Host-function handler serving the plugin's `rasq.host_fn` import
-/// (PROTOCOL.md §4.1, synchronous v1). Receives a `rasq.hostfn/1` request
-/// JSON; must return a response JSON allocated with rasq_wasm_string_dup
-/// (the runtime frees it), or NULL for "unhandled" (becomes an E00 error).
-typedef RasqHostFnCallback =
-    ffi.Pointer<ffi.NativeFunction<RasqHostFnCallbackFunction>>;
-
 /// Decompresses a zstd frame (.rasqpkg = zstd-compressed tar, D-034). Returns a
 /// buffer owned by the caller (free with rasq_bytes_free(ptr, *out_len)), or
 /// NULL on failure: corrupt input, or an output larger than `max_out` bytes
@@ -162,3 +165,17 @@ external ffi.Pointer<ffi.Uint8> rasq_zstd_decompress(
 /// Frees a buffer returned by rasq_zstd_decompress.
 @ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>, ffi.IntPtr)>()
 external void rasq_bytes_free(ffi.Pointer<ffi.Uint8> ptr, int len);
+
+final class RasqWasmInstance extends ffi.Opaque {}
+
+typedef RasqHostFnCallbackFunction = ffi.Pointer<ffi.Char> Function(
+  ffi.Pointer<ffi.Char> request,
+  ffi.Pointer<ffi.Void> user_data,
+);
+
+/// Host-function handler serving the plugin's `rasq.host_fn` import
+/// (PROTOCOL.md §4.1, synchronous v1). Receives a `rasq.hostfn/1` request
+/// JSON; must return a response JSON allocated with rasq_wasm_string_dup
+/// (the runtime frees it), or NULL for "unhandled" (becomes an E00 error).
+typedef RasqHostFnCallback =
+    ffi.Pointer<ffi.NativeFunction<RasqHostFnCallbackFunction>>;

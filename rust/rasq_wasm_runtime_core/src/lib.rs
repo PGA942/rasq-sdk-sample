@@ -151,6 +151,11 @@ struct HostState {
     native_fetch: bool,
     /// 壁時計の上限。ネイティブ `net.fetch` 一回ぶんの全体タイムアウト。
     fetch_timeout_ms: u64,
+    /// ネイティブ `net.fetch` が繋いでよいホスト(マニフェストの `network.hosts`
+    /// + 埋込側が今のセッションに与えたインスタンスのホスト)。小文字。
+    /// **空 = どこにも繋げない**(fail-closed): 埋込側が設定を忘れた時点で
+    /// 黙って全開になる既定値にはしない。
+    fetch_hosts: Vec<String>,
     /// 線形メモリ / テーブルの成長を止める `ResourceLimiter`。`Store` は
     /// ユーザーデータ経由でしか limiter を引けないのでここに同居させる。
     limits: StoreLimits,
@@ -235,6 +240,7 @@ impl RasqWasmInstance {
                 user_data,
                 native_fetch: false,
                 fetch_timeout_ms: DEFAULT_FETCH_TIMEOUT_MS,
+                fetch_hosts: Vec::new(),
                 limits,
             },
         );
@@ -280,6 +286,11 @@ impl RasqWasmInstance {
     #[cfg(test)]
     fn set_native_fetch(&mut self, enabled: bool) {
         self.store.data_mut().native_fetch = enabled;
+    }
+
+    #[cfg(test)]
+    fn set_fetch_hosts(&mut self, hosts: &[&str]) {
+        self.store.data_mut().fetch_hosts = hosts.iter().map(|h| h.to_ascii_lowercase()).collect();
     }
 
     fn typed_func<Params, Results>(&mut self, name: &'static str) -> Result<TypedFunc<Params, Results>, RasqWasmError>
@@ -371,7 +382,8 @@ fn host_fn_impl(mut caller: Caller<'_, HostState>, ptr: u32, len: u32) -> Result
         if let Ok(req) = serde_json::from_slice::<serde_json::Value>(&request) {
             if req["fn"] == "net.fetch" {
                 let timeout_ms = caller.data().fetch_timeout_ms;
-                let response = native_fetch_response(&req, timeout_ms);
+                let hosts = caller.data().fetch_hosts.clone();
+                let response = native_fetch_response(&req, timeout_ms, &hosts);
                 return write_response(&mut caller, memory, response.to_string().as_bytes());
             }
         }
@@ -575,13 +587,56 @@ fn gpu_compute_response(req: &serde_json::Value) -> serde_json::Value {
     serde_json::json!({"callId": call_id, "ok": true, "value": {"output": output, "placement": "device"}})
 }
 
-fn native_fetch_response(req: &serde_json::Value, timeout_ms: u64) -> serde_json::Value {
+/// URL のホスト部(小文字、userinfo とポートは落とす)。スキーム付きの URL だけ渡すこと。
+fn url_host(url: &str) -> String {
+    let rest = url.splitn(2, "://").nth(1).unwrap_or("");
+    let authority = rest.split(|c| c == '/' || c == '?' || c == '#').next().unwrap_or("");
+    let host = authority.rsplit('@').next().unwrap_or("");
+    // IPv6 リテラル `[::1]:8080` はポートの ':' と区別がつかないので、括弧を先に見る。
+    let host = if let Some(stripped) = host.strip_prefix('[') {
+        stripped.split(']').next().unwrap_or("")
+    } else {
+        host.split(':').next().unwrap_or("")
+    };
+    host.to_ascii_lowercase()
+}
+
+/// `host` が許可パターンのどれかに当たるか。
+///
+/// パターンは 3 種類だけ(埋込側の Dart と同じ規則。`plugin_runtime` の
+/// `fetchHostPermitted` を変えるならこちらも変えること):
+/// - `example.com`   … 完全一致
+/// - `*.example.com` … サブドメイン(1 段以上)。apex は別に書く
+/// - `*`             … どこでも。開発用の面だけが使う値で、審査では旗になる
+fn host_permitted(host: &str, patterns: &[String]) -> bool {
+    if host.is_empty() {
+        return false;
+    }
+    patterns.iter().any(|p| {
+        let p = p.trim();
+        if p == "*" {
+            true
+        } else if let Some(suffix) = p.strip_prefix("*.") {
+            host.len() > suffix.len() + 1 && host.ends_with(suffix) && host.as_bytes()[host.len() - suffix.len() - 1] == b'.'
+        } else {
+            host == p
+        }
+    })
+}
+
+fn native_fetch_response(req: &serde_json::Value, timeout_ms: u64, hosts: &[String]) -> serde_json::Value {
     let call_id = req["callId"].clone();
     let args = &req["args"];
     let method = args["method"].as_str().unwrap_or("GET").to_uppercase();
     let url = args["url"].as_str().unwrap_or("");
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return serde_json::json!({"callId": call_id, "ok": false, "error": {"code": "B03", "message": format!("bad url: {url}")}});
+    }
+    // 宣言したホストだけ (D-004 の続き)。ここで止めないと、`network` 権限が
+    // 「どこへでも」の意味になり、審査で接続先を見る意味が無くなる。
+    let host = url_host(url);
+    if !host_permitted(&host, hosts) {
+        return serde_json::json!({"callId": call_id, "ok": false, "error": {"code": "E01", "message": format!("host not permitted: {host}")}});
     }
     // 壁時計の締め: 全体 (timeout) に加えて、接続・read・write それぞれにも
     // 上限を入れる。全体だけだと「1 バイトずつ延々と送ってくる」相手に上限
@@ -592,6 +647,10 @@ fn native_fetch_response(req: &serde_json::Value, timeout_ms: u64) -> serde_json
         .timeout_read(overall.min(Duration::from_millis(FETCH_IO_TIMEOUT_MS)))
         .timeout_write(overall.min(Duration::from_millis(FETCH_IO_TIMEOUT_MS)))
         .timeout(overall)
+        // リダイレクトは追わない: 許可したホストが 302 で別のホストへ飛ばせば、
+        // 上の検査を素通りする。3xx はそのまま返し、飛ぶかどうかはプラグインが
+        // 次の `net.fetch` で決める(その URL もまた検査される)。
+        .redirects(0)
         .build();
     let mut request = agent.request(&method, url);
     if let Some(headers) = args["headers"].as_object() {
@@ -780,6 +839,30 @@ pub extern "C" fn rasq_wasm_set_native_fetch(instance: *mut RasqWasmInstance, en
     }
     let instance = unsafe { &mut *instance };
     instance.store.data_mut().native_fetch = enabled;
+}
+
+/// Replaces the set of hosts the runtime-native `net.fetch` may reach:
+/// a comma-separated list (`misskey.io,*.example.com`), lower-cased on the
+/// way in. `*` means any host. NULL or empty means **no host at all** —
+/// the runtime starts closed, so an embedder that never calls this cannot
+/// accidentally hand a plugin the whole internet. Call again whenever the
+/// session's instance host changes.
+#[no_mangle]
+pub extern "C" fn rasq_wasm_set_fetch_hosts(instance: *mut RasqWasmInstance, hosts: *const c_char) {
+    if instance.is_null() {
+        return;
+    }
+    let instance = unsafe { &mut *instance };
+    let csv = if hosts.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(hosts) }.to_string_lossy().into_owned()
+    };
+    instance.store.data_mut().fetch_hosts = csv
+        .split(',')
+        .map(|h| h.trim().to_ascii_lowercase())
+        .filter(|h| !h.is_empty())
+        .collect();
 }
 
 /// Overrides the per-invocation fuel budget (default [`FUEL_PER_CALL`]).
@@ -1036,6 +1119,7 @@ mod tests {
         // No callback at all: net.fetch must be answered natively.
         let mut instance = RasqWasmInstance::load_plain(&bytes).expect("instantiate");
         instance.set_native_fetch(true);
+        instance.set_fetch_hosts(&["127.0.0.1"]);
         let result = instance
             .call(
                 "timeline",
@@ -1074,6 +1158,59 @@ mod tests {
         rasq_bytes_free(p, n);
         assert!(rasq_zstd_decompress(packed.as_ptr(), packed.len(), 10, &mut n).is_null());
         assert!(rasq_zstd_decompress(b"xx".as_ptr(), 2, 100, &mut n).is_null());
+    }
+
+    #[test]
+    fn native_fetch_is_closed_until_hosts_are_declared() {
+        // 埋込側がホストを渡し忘れた = 全開、ではなく全閉 (fail-closed)。
+        // 接続先が無いので TCP は開かない(listener を立てないことで確かめる)。
+        let bytes = std::fs::read(WASM_PATH).expect("build misskey-wasm-sample first");
+        let mut instance = RasqWasmInstance::load_plain(&bytes).expect("instantiate");
+        instance.set_native_fetch(true);
+        let result = instance
+            .call("timeline", r#"{"host":"native.example","baseUrl":"http://127.0.0.1:9","limit":5}"#, "call-closed")
+            .expect("call");
+        assert!(result.contains("E01"), "{result}");
+        assert!(result.contains("host not permitted"), "{result}");
+    }
+
+    #[test]
+    fn native_fetch_rejects_a_host_outside_the_declaration() {
+        let bytes = std::fs::read(WASM_PATH).expect("build misskey-wasm-sample first");
+        let mut instance = RasqWasmInstance::load_plain(&bytes).expect("instantiate");
+        instance.set_native_fetch(true);
+        instance.set_fetch_hosts(&["misskey.io", "*.example.net"]);
+        let result = instance
+            .call("timeline", r#"{"host":"native.example","baseUrl":"http://127.0.0.1:9","limit":5}"#, "call-other")
+            .expect("call");
+        assert!(result.contains("E01"), "{result}");
+    }
+
+    #[test]
+    fn host_patterns() {
+        let pats = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(host_permitted("misskey.io", &pats(&["misskey.io"])));
+        assert!(host_permitted("MISSKEY.IO".to_ascii_lowercase().as_str(), &pats(&["misskey.io"])));
+        assert!(!host_permitted("misskey.io.evil.example", &pats(&["misskey.io"])));
+        assert!(!host_permitted("evilmisskey.io", &pats(&["misskey.io"])));
+        // ワイルドカードはサブドメインだけ。apex は別に書く。
+        assert!(host_permitted("a.example.com", &pats(&["*.example.com"])));
+        assert!(host_permitted("a.b.example.com", &pats(&["*.example.com"])));
+        assert!(!host_permitted("example.com", &pats(&["*.example.com"])));
+        assert!(!host_permitted("notexample.com", &pats(&["*.example.com"])));
+        assert!(host_permitted("anything.test", &pats(&["*"])));
+        assert!(!host_permitted("anything.test", &pats(&[])));
+        assert!(!host_permitted("", &pats(&["*"])));
+    }
+
+    #[test]
+    fn url_host_strips_userinfo_port_and_path() {
+        assert_eq!(url_host("https://Misskey.IO/api/notes"), "misskey.io");
+        assert_eq!(url_host("http://127.0.0.1:8080/x?y#z"), "127.0.0.1");
+        assert_eq!(url_host("https://user:pw@example.com:443/"), "example.com");
+        assert_eq!(url_host("http://[::1]:8080/"), "::1");
+        assert_eq!(url_host("https://evil.example/?u=@good.example"), "evil.example");
+        assert_eq!(url_host("https://"), "");
     }
 
     #[test]

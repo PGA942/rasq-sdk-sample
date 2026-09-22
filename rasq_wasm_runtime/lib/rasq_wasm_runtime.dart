@@ -65,7 +65,12 @@ class RasqWasmPlugin {
   /// thread. Leave it null to keep the runtime default ([mediaFuelBudget],
   /// sized for bitmap work); pass [standardFuelBudget] for plugins that do
   /// not touch bitmaps — that is where the tightening actually happens.
-  factory RasqWasmPlugin.fromBytes(Uint8List wasmBytes, {RasqHostFnHandler? hostFn, bool nativeFetch = false, int? fuelPerCall}) {
+  ///
+  /// [fetchHosts] is the set of hosts the runtime-native `net.fetch` may
+  /// reach (`misskey.io`, `*.example.com`, or `*`). It starts **empty =
+  /// closed**; pass the manifest's `network.hosts` plus whatever instance
+  /// host the session grants, and call [setFetchHosts] when that changes.
+  factory RasqWasmPlugin.fromBytes(Uint8List wasmBytes, {RasqHostFnHandler? hostFn, bool nativeFetch = false, int? fuelPerCall, Set<String> fetchHosts = const {}}) {
     final bytesPtr = malloc<ffi.Uint8>(wasmBytes.length);
     ffi.NativeCallable<bindings.RasqHostFnCallbackFunction>? callable;
     try {
@@ -102,9 +107,24 @@ class RasqWasmPlugin {
       }
       if (nativeFetch) bindings.rasq_wasm_set_native_fetch(instance, true);
       if (fuelPerCall != null) bindings.rasq_wasm_set_fuel_per_call(instance, fuelPerCall);
-      return RasqWasmPlugin._(instance, callable);
+      final plugin = RasqWasmPlugin._(instance, callable);
+      if (fetchHosts.isNotEmpty) plugin.setFetchHosts(fetchHosts);
+      return plugin;
     } finally {
       malloc.free(bytesPtr);
+    }
+  }
+
+  /// Replaces the hosts the runtime-native `net.fetch` may reach. Empty =
+  /// closed. Only the runtime-native path looks at this; the embedder's own
+  /// `net.fetch` dispatcher must apply the same allowlist itself.
+  void setFetchHosts(Set<String> hosts) {
+    _checkNotDestroyed();
+    final csv = hosts.map((h) => h.trim().toLowerCase()).where((h) => h.isNotEmpty).join(',').toNativeUtf8();
+    try {
+      bindings.rasq_wasm_set_fetch_hosts(_instance, csv.cast());
+    } finally {
+      malloc.free(csv);
     }
   }
 

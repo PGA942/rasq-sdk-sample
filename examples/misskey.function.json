@@ -6,6 +6,7 @@
   "author": "RASQ Official",
   "description": "Misskeyに接続するためのプラグイン。",
   "supportedSns": ["misskey"],
+  "network": { "instance": true },
   "permissions": ["network", "storage.safe", "register_action"],
   "actions": [
     { "id": "reply", "genreTag": "Reply", "label": "返信", "icon": "subdirectory_arrow_left", "confirmMode": "confirm", "fow": "interstitial" },
