@@ -4,21 +4,70 @@
   "title": "ML model manifest (draft v0.1)",
   "description": "Declares one ML model a plugin uses through `ml.infer`. The manifest lists every runtime the model ships for — on-device (onnx runtime / llama.cpp) and server (Triton Inference Server / vLLM) — and the HOST resolves placement per device/policy (D-018). Plugins reference models by `id` only and never see endpoints or files directly.",
   "type": "object",
-  "required": ["id", "version", "task", "io", "runtimes"],
+  "required": [
+    "id",
+    "version",
+    "task",
+    "io",
+    "runtimes"
+  ],
   "additionalProperties": false,
   "properties": {
-    "$comment": { "type": "string", "description": "Free-form note for humans; ignored by hosts." },
-    "id": { "type": "string", "description": "Stable id, namespaced by plugin: '<pluginId>/<model-name>'." },
-    "version": { "type": "string", "description": "SemVer of the model artifact set." },
-    "task": { "type": "string", "enum": ["classification", "embedding", "generation", "custom"] },
+    "$comment": {
+      "type": "string",
+      "description": "Free-form note for humans; ignored by hosts."
+    },
+    "id": {
+      "type": "string",
+      "description": "Stable id, namespaced by plugin: '<pluginId>/<model-name>'."
+    },
+    "version": {
+      "type": "string",
+      "description": "SemVer of the model artifact set."
+    },
+    "task": {
+      "type": "string",
+      "enum": [
+        "classification",
+        "embedding",
+        "generation",
+        "custom"
+      ]
+    },
     "io": {
       "type": "object",
       "description": "Logical (runtime-independent) IO contract used by ml.infer input/output.",
-      "required": ["input", "output"],
+      "required": [
+        "input",
+        "output"
+      ],
       "properties": {
-        "input": { "type": "string", "enum": ["text", "texts", "tokens", "tensors", "chat"] },
-        "output": { "type": "string", "enum": ["labels", "text", "vector", "tensors"] },
-        "labels": { "type": "array", "items": { "type": "string" }, "description": "For output=labels when not shipped as a labels file." }
+        "input": {
+          "type": "string",
+          "enum": [
+            "text",
+            "texts",
+            "tokens",
+            "tensors",
+            "chat"
+          ]
+        },
+        "output": {
+          "type": "string",
+          "enum": [
+            "labels",
+            "text",
+            "vector",
+            "tensors"
+          ]
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "For output=labels when not shipped as a labels file."
+        }
       }
     },
     "runtimes": {
@@ -29,30 +78,86 @@
         "onnx": {
           "type": "object",
           "description": "On-device via onnx runtime.",
-          "required": ["file", "inputs", "outputs"],
+          "required": [
+            "file",
+            "inputs",
+            "outputs"
+          ],
           "properties": {
-            "file": { "type": "string", "description": "Path inside the plugin bundle." },
-            "quantization": { "type": "string", "enum": ["fp32", "fp16", "int8", "int4"] },
+            "file": {
+              "type": "string",
+              "description": "Path inside the plugin bundle."
+            },
+            "quantization": {
+              "type": "string",
+              "enum": [
+                "fp32",
+                "fp16",
+                "int8",
+                "int4"
+              ]
+            },
             "executionProviders": {
               "type": "array",
-              "items": { "type": "string", "enum": ["cuda", "tensorrt", "coreml", "nnapi", "qnn", "cpu"] },
+              "items": {
+                "type": "string",
+                "enum": [
+                  "cuda",
+                  "tensorrt",
+                  "coreml",
+                  "nnapi",
+                  "qnn",
+                  "cpu"
+                ]
+              },
               "description": "onnx runtime の実行プロバイダ優先順(GPU/NPU 利用のヒント)。ホストは端末で使えるものへフォールバックし、末尾は常に cpu 扱い。"
             },
-            "inputs": { "type": "array", "items": { "$ref": "#/$defs/tensor" } },
-            "outputs": { "type": "array", "items": { "$ref": "#/$defs/tensor" } },
-            "tokenizer": { "$ref": "#/$defs/tokenizer" },
-            "labelsFile": { "type": "string" },
+            "inputs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/tensor"
+              }
+            },
+            "outputs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/tensor"
+              }
+            },
+            "tokenizer": {
+              "$ref": "#/$defs/tokenizer"
+            },
+            "labelsFile": {
+              "type": "string"
+            },
             "generation": {
               "type": "object",
               "description": "seq2seq 生成の設定。KV キャッシュ無しの単発 forward で export されたモデルは、ホストがこの設定でデコーダーループ(decoder_input_ids を伸ばしながら再実行)を回す。",
               "additionalProperties": false,
-              "required": ["decoderStartTokenId", "eosTokenId"],
+              "required": [
+                "decoderStartTokenId",
+                "eosTokenId"
+              ],
               "properties": {
-                "decoderStartTokenId": { "type": "integer" },
-                "eosTokenId": { "type": "integer" },
-                "padTokenId": { "type": "integer" },
-                "maxNewTokens": { "type": "integer" },
-                "strategy": { "type": "string", "enum": ["greedy"], "description": "現状 greedy のみ(サンプリングは server 側に任せる)。" }
+                "decoderStartTokenId": {
+                  "type": "integer"
+                },
+                "eosTokenId": {
+                  "type": "integer"
+                },
+                "padTokenId": {
+                  "type": "integer"
+                },
+                "maxNewTokens": {
+                  "type": "integer"
+                },
+                "strategy": {
+                  "type": "string",
+                  "enum": [
+                    "greedy"
+                  ],
+                  "description": "現状 greedy のみ(サンプリングは server 側に任せる)。"
+                }
               }
             }
           }
@@ -60,29 +165,106 @@
         "llama": {
           "type": "object",
           "description": "On-device via llama.cpp.",
-          "required": ["file"],
+          "required": [
+            "file"
+          ],
           "properties": {
-            "file": { "type": "string", "description": "GGUF path inside the plugin bundle." },
-            "promptTemplate": { "type": "string", "description": "Template with {system} / {input} placeholders; omit to send raw chat messages." },
-            "contextTokens": { "type": "integer" },
+            "file": {
+              "type": "string",
+              "description": "GGUF path inside the plugin bundle."
+            },
+            "promptTemplate": {
+              "type": "string",
+              "description": "Template with {system} / {input} placeholders; omit to send raw chat messages."
+            },
+            "contextTokens": {
+              "type": "integer"
+            },
             "sampling": {
               "type": "object",
-              "properties": { "temperature": { "type": "number" }, "topP": { "type": "number" }, "topK": { "type": "integer" }, "maxTokens": { "type": "integer" }, "stop": { "type": "array", "items": { "type": "string" } } }
+              "properties": {
+                "temperature": {
+                  "type": "number"
+                },
+                "topP": {
+                  "type": "number"
+                },
+                "topK": {
+                  "type": "integer"
+                },
+                "maxTokens": {
+                  "type": "integer"
+                },
+                "stop": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
             }
           }
         },
         "server": {
           "type": "object",
           "description": "Server-side execution. The host owns endpoints and credentials; `model` is the name registered on the serving stack.",
-          "required": ["engine", "model"],
+          "required": [
+            "engine",
+            "model"
+          ],
           "properties": {
-            "engine": { "type": "string", "enum": ["triton", "vllm"] },
-            "model": { "type": "string" },
-            "openaiCompatible": { "type": "boolean", "description": "vLLM: use the OpenAI-compatible chat/completions surface." },
+            "engine": {
+              "type": "string",
+              "enum": [
+                "triton",
+                "vllm"
+              ]
+            },
+            "model": {
+              "type": "string"
+            },
+            "openaiCompatible": {
+              "type": "boolean",
+              "description": "vLLM: use the OpenAI-compatible chat/completions surface."
+            },
             "tritonIO": {
               "type": "object",
               "description": "Triton tensor binding when the logical IO must be mapped explicitly.",
-              "properties": { "inputs": { "type": "array", "items": { "$ref": "#/$defs/tensor" } }, "outputs": { "type": "array", "items": { "$ref": "#/$defs/tensor" } } }
+              "properties": {
+                "inputs": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/tensor"
+                  }
+                },
+                "outputs": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/tensor"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "embedded": {
+          "type": "object",
+          "description": "プラグインの wasm の中で読むモデル(include_bytes! などで同梱し、ml.infer を使わずプラグイン自身が推論する)。ホストはランタイムを用意しない。file はバンドル内のパス(review 用に本体を同梱するとき)。",
+          "required": [
+            "format"
+          ],
+          "properties": {
+            "file": {
+              "type": "string",
+              "description": "Path inside the plugin bundle (optional: omit when the bytes live only inside the wasm)."
+            },
+            "format": {
+              "type": "string",
+              "description": "本体の形式(例 seetaface-fust、custom)。ホストは見ない。"
+            },
+            "library": {
+              "type": "string",
+              "description": "読む側のライブラリ(例 rustface 0.1)。人が読むためのもの。"
             }
           }
         }
@@ -92,46 +274,163 @@
       "type": "object",
       "description": "Hints for the host's placement decision. The host may ignore them (policy, battery, metered network, RAM).",
       "properties": {
-        "prefer": { "type": "array", "items": { "type": "string", "enum": ["device", "server"] } },
-        "minDeviceRamMb": { "type": "integer" },
-        "allowMeteredDownload": { "type": "boolean" }
+        "prefer": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "device",
+              "server"
+            ]
+          }
+        },
+        "minDeviceRamMb": {
+          "type": "integer"
+        },
+        "allowMeteredDownload": {
+          "type": "boolean"
+        }
       }
     },
     "artifacts": {
       "type": "object",
       "description": "Integrity/size for store review & download (D-004: GPU/ML は審査済みのみ).",
-      "additionalProperties": { "type": "object", "properties": { "sizeMb": { "type": "number" }, "sha512": { "type": "string" } } }
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "sizeMb": {
+            "type": "number"
+          },
+          "sha512": {
+            "type": "string"
+          }
+        }
+      }
     },
-    "license": { "type": "string" }
+    "license": {
+      "type": "string"
+    }
   },
   "$defs": {
     "tensor": {
       "type": "object",
-      "required": ["name", "dtype", "shape"],
+      "required": [
+        "name",
+        "dtype",
+        "shape"
+      ],
       "additionalProperties": false,
       "properties": {
-        "name": { "type": "string" },
-        "dtype": { "type": "string", "enum": ["float32", "float16", "int64", "int32", "int8", "uint8", "bool", "string"] },
-        "shape": { "type": "array", "items": { "type": ["integer", "string"] }, "description": "Integers are fixed dims; strings are symbolic ('batch', 'seq', 'labels')." },
-        "semantic": { "type": "string", "enum": ["token_ids", "attention_mask", "token_type_ids", "decoder_token_ids", "logits", "probabilities", "embedding", "image_chw", "raw"], "description": "Tells the host how to fill / read the tensor from the logical IO. decoder_token_ids = seq2seq のデコーダー入力(生成ループでホストが伸ばす)。" }
+        "name": {
+          "type": "string"
+        },
+        "dtype": {
+          "type": "string",
+          "enum": [
+            "float32",
+            "float16",
+            "int64",
+            "int32",
+            "int8",
+            "uint8",
+            "bool",
+            "string"
+          ]
+        },
+        "shape": {
+          "type": "array",
+          "items": {
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "description": "Integers are fixed dims; strings are symbolic ('batch', 'seq', 'labels')."
+        },
+        "semantic": {
+          "type": "string",
+          "enum": [
+            "token_ids",
+            "attention_mask",
+            "token_type_ids",
+            "decoder_token_ids",
+            "logits",
+            "probabilities",
+            "embedding",
+            "image_chw",
+            "raw"
+          ],
+          "description": "Tells the host how to fill / read the tensor from the logical IO. decoder_token_ids = seq2seq のデコーダー入力(生成ループでホストが伸ばす)。"
+        }
       }
     },
     "tokenizer": {
       "type": "object",
-      "required": ["type"],
+      "required": [
+        "type"
+      ],
       "additionalProperties": false,
       "properties": {
-        "type": { "type": "string", "enum": ["sentencepiece", "bpe", "wordpiece", "hf-tokenizer-json", "none"] },
-        "file": { "type": "string", "description": "tokenizer.model / vocab.txt / tokenizer.json inside the bundle." },
-        "maxTokens": { "type": "integer" },
-        "lowercase": { "type": "boolean" },
-        "addBos": { "type": "boolean" },
-        "addEos": { "type": "boolean" },
-        "padding": { "type": "string", "enum": ["none", "max", "longest"] },
+        "type": {
+          "type": "string",
+          "enum": [
+            "sentencepiece",
+            "bpe",
+            "wordpiece",
+            "hf-tokenizer-json",
+            "none"
+          ]
+        },
+        "file": {
+          "type": "string",
+          "description": "tokenizer.model / vocab.txt / tokenizer.json inside the bundle."
+        },
+        "maxTokens": {
+          "type": "integer"
+        },
+        "lowercase": {
+          "type": "boolean"
+        },
+        "addBos": {
+          "type": "boolean"
+        },
+        "addEos": {
+          "type": "boolean"
+        },
+        "padding": {
+          "type": "string",
+          "enum": [
+            "none",
+            "max",
+            "longest"
+          ]
+        },
         "special": {
           "type": "object",
           "additionalProperties": false,
-          "properties": { "bos": { "type": "string" }, "eos": { "type": "string" }, "pad": { "type": "string" }, "unk": { "type": "string" }, "cls": { "type": "string" }, "sep": { "type": "string" }, "mask": { "type": "string" } }
+          "properties": {
+            "bos": {
+              "type": "string"
+            },
+            "eos": {
+              "type": "string"
+            },
+            "pad": {
+              "type": "string"
+            },
+            "unk": {
+              "type": "string"
+            },
+            "cls": {
+              "type": "string"
+            },
+            "sep": {
+              "type": "string"
+            },
+            "mask": {
+              "type": "string"
+            }
+          }
         }
       }
     }

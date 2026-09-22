@@ -345,6 +345,24 @@ pub fn inspect(bytes: &[u8]) -> Result<Inspected> {
             problems.push(format!("{p}: 目次にあるのに中に無い"));
         }
     }
+    // モデル本体(runtimes.*.file / tokenizer.file)は目次に個別には載らない。model manifest から引いて「載っているもの」に数える
+    // (lazy = true なら本体は入っていなくてよい。中身の一致は SHA512SUMS で見る)。
+    for m in bundle["models"].as_array().into_iter().flatten() {
+        let Some(path) = m["manifest"].as_str() else { continue };
+        let Some(e) = by_path.get(path) else { continue };
+        let Ok(doc) = serde_json::from_slice::<Value>(&e.bytes) else {
+            problems.push(format!("{path}: model manifest が JSON ではありません"));
+            continue;
+        };
+        for (_, rt) in doc["runtimes"].as_object().into_iter().flatten() {
+            for f in [rt["file"].as_str(), rt["tokenizer"]["file"].as_str()].into_iter().flatten() {
+                listed.insert(f.to_string(), ());
+                if m["lazy"].as_bool() != Some(true) && !by_path.contains_key(f) {
+                    problems.push(format!("{f}: model manifest にあるのに中に無い(lazy ではない)"));
+                }
+            }
+        }
+    }
     // SHA512SUMS
     match by_path.get(SUMS) {
         None => problems.push(format!("{SUMS} が無い")),
@@ -362,8 +380,7 @@ pub fn inspect(bytes: &[u8]) -> Result<Inspected> {
     }
     for e in &entries {
         if e.path != BUNDLE && e.path != SUMS && !listed.contains_key(&e.path) {
-            // モデル本体(runtimes.*.file)は目次に個別には載らないので警告にとどめる
-            problems.push(format!("{}: 目次に載っていないファイル(モデル本体なら可)", e.path));
+            problems.push(format!("{}: 目次に載っていないファイル", e.path));
         }
     }
     Ok(Inspected { bundle, entries, problems })

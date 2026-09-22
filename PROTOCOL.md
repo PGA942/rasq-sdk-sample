@@ -134,6 +134,7 @@ RAi の位置検索、タイムラインソート、リレーショナルTL(本�
 
 - モデルは [`schema/model-manifest.schema.json`](schema/model-manifest.schema.json) のマニフェストで宣言し、`ml.infer` は **マニフェスト id** で参照する。プラグインはエンドポイントもファイルも見えない。
 - マニフェストの `runtimes` に載せられるもの: **デバイス側 = `onnx`(onnx runtime)/ `llama`(llama.cpp)**、**サーバー側 = `server`(Triton Inference Server / vLLM)**。同じ論理 IO(`io.input`/`io.output`)を全ランタイムで満たすこと。
+  ほかに **`embedded`** = プラグインの wasm の中で読むモデル(`include_bytes!` などで同梱し、`ml.infer` を使わずプラグイン自身が推論する。ホストはランタイムを用意しない。`format` / `library` は人が読むためのもので、`file` は審査用に本体を同梱するときのバンドル内パス)。plugin-sample の media-process(rustface の SeetaFace カスケード)がこれ。
 - **配置はホストが解決**(端末 RAM・電源・従量回線・ポリシー・審査状態)。`placementHint` はヒント。結果の `value.placement` / `value.runtime` で実際にどこで動いたかが返る。
 - onnx 実行時のテンソル詰め替え・トークナイズはマニフェストの `inputs[].semantic` / `tokenizer` に従ってホストが行う。
 - **seq2seq 生成(onnx)**: KV キャッシュ無しの単発 forward で export されたモデルは、`runtimes.onnx.generation`(`decoderStartTokenId` / `eosTokenId` / `padTokenId` / `maxNewTokens` / `strategy: greedy`)に従って**ホストがデコーダーループ**(semantic `decoder_token_ids` のテンソルを伸ばしながら再実行)を回す。サンプリング付き生成はサーバー側(vLLM)に任せる。
