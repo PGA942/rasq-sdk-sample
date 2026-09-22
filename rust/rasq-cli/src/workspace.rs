@@ -128,9 +128,21 @@ pub struct Target {
 }
 
 impl Target {
-    /// `target/wasm32-unknown-unknown/<profile>/<crate>.wasm`。
+    /// `<target>/wasm32-unknown-unknown/<profile>/<crate>.wasm`。`<target>` は cargo と同じ決め方
+    /// (`CARGO_TARGET_DIR` があればそれ。相対ならワークスペースからの相対。無ければ `target/`)。
     pub fn wasm_path(&self, root: &Path, profile: &str) -> PathBuf {
-        root.join("target/wasm32-unknown-unknown").join(profile).join(format!("{}.wasm", self.package.replace('-', "_")))
+        cargo_target_dir(root).join("wasm32-unknown-unknown").join(profile).join(format!("{}.wasm", self.package.replace('-', "_")))
+    }
+}
+
+/// cargo が使う target ディレクトリ(`CARGO_TARGET_DIR` を尊重する。CI や共有ビルドでリポジトリの外に置くため)。
+pub fn cargo_target_dir(root: &Path) -> PathBuf {
+    match std::env::var_os("CARGO_TARGET_DIR").filter(|v| !v.is_empty()) {
+        Some(v) => {
+            let p = PathBuf::from(v);
+            if p.is_absolute() { p } else { root.join(p) }
+        }
+        None => root.join("target"),
     }
 }
 
@@ -254,16 +266,63 @@ pub fn valid_name(name: &str) -> Result<()> {
     }
 }
 
+fn id_labels_ok(parts: &[&str]) -> bool {
+    !parts.is_empty()
+        && !parts[0].is_empty()
+        && parts[0].chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && parts[1..].iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-'))
+}
+
 /// pluginId の文法(schema/action-ref.schema.json `pluginId`: `^[a-z0-9]+(\.[a-z0-9_-]+)+$`)。
 pub fn valid_plugin_id(id: &str) -> Result<()> {
     let parts: Vec<&str> = id.split('.').collect();
-    let ok = parts.len() >= 2
-        && !parts[0].is_empty()
-        && parts[0].chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        && parts[1..].iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-'));
-    if ok {
+    if parts.len() >= 2 && id_labels_ok(&parts) {
         Ok(())
     } else {
         Err(anyhow!("pluginId の形ではありません(例 net.example.later): {id:?}"))
+    }
+}
+
+/// 名前空間の文法: pluginId の先頭部分。1 ラベル(`sample`)でも、2 ラベル以上(`net.example`)でもよい
+/// (`<namespace>.<name>` が pluginId になる)。
+pub fn valid_namespace(ns: &str) -> Result<()> {
+    let parts: Vec<&str> = ns.split('.').collect();
+    if id_labels_ok(&parts) {
+        Ok(())
+    } else {
+        Err(anyhow!("名前空間の形ではありません(例 net.example、sample): {ns:?}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn namespace_accepts_one_or_more_labels() {
+        assert!(valid_namespace("sample").is_ok());
+        assert!(valid_namespace("net.example").is_ok());
+        assert!(valid_namespace("Net").is_err());
+        assert!(valid_namespace("").is_err());
+        assert!(valid_namespace("a..b").is_err());
+        assert!(valid_plugin_id("sample").is_err());
+        assert!(valid_plugin_id("sample.timeline").is_ok());
+    }
+
+    #[test]
+    fn target_dir_follows_cargo() {
+        let root = Path::new("/ws");
+        // 環境変数はテストの並列実行で共有されるので、値を戻す。
+        let saved = std::env::var_os("CARGO_TARGET_DIR");
+        std::env::remove_var("CARGO_TARGET_DIR");
+        assert_eq!(cargo_target_dir(root), PathBuf::from("/ws/target"));
+        std::env::set_var("CARGO_TARGET_DIR", "../shared");
+        assert_eq!(cargo_target_dir(root), PathBuf::from("/ws/../shared"));
+        std::env::set_var("CARGO_TARGET_DIR", "/abs/t");
+        assert_eq!(cargo_target_dir(root), PathBuf::from("/abs/t"));
+        match saved {
+            Some(v) => std::env::set_var("CARGO_TARGET_DIR", v),
+            None => std::env::remove_var("CARGO_TARGET_DIR"),
+        }
     }
 }

@@ -164,13 +164,20 @@ lazy = true
 
 `rasq test` = `cargo test`(ホスト関数は `rasq-plugin-kit` の `set_host_hook` でモック)。`rasq check --no-test` で分けられる。
 
-`rasq call <name> <fn> [--args JSON|@file] [--reply FN=JSON]… [--then FN]… [--full]`(実装済み)— **ビルド済みの wasm そのもの**を
+- ビルドの置き場は cargo と同じ決め方: `CARGO_TARGET_DIR` があればそこ(相対ならワークスペースからの相対)、無ければ `target/`。
+  CI や複数リポジトリの共有ビルドでリポジトリの外に置いても、`rasq check` / `build` / `call` / `dev` は同じ場所を見る。
+- `rasq init` が置く `.gitignore` は `/target` `/base` `/.rasq` `*.sig.json`。`dist/` は無視しない(配布物をリポジトリに残す流儀 =
+  plugin-sample。要らなければ足す)。署名 `.sig.json` は開発者の鍵ごとのものなので、リポジトリに入れない。
+- `rasq init --namespace <ns>` の名前空間は 1 ラベル(`sample`)でも 2 ラベル以上(`net.example`)でもよい(`<ns>.<name>` が pluginId)。
+
+`rasq call <name> <fn> [--args JSON|@file] [--reply FN=JSON]… [--then FN[=JSON|@file]]… [--full]`(実装済み)— **ビルド済みの wasm そのもの**を
 wasmi で動かして `call` を叩く。`cargo test` は native で走るので、wasm32 でだけ起きる問題(下の落とし穴)はここでしか見つからない。
 
 - `--args` の値の中の `"@b64:<path>"` はそのファイルの base64 に置き換わる(画像を渡す用)
 - ホスト関数は `--reply 'fow.open={"opened":true}'` のように答えを差し込める。無い fn は `E01`(ホスト無し)。呼ばれた
   ホスト関数は `host <fn> <args>` として出る。戻りが `{patch: true}` なら続けて `patch()` の中身も出す
-- `--then rmqr.0 --then link.open` のように、同じインスタンスで続けて呼べる(状態を持つプラグインの一連の操作)
+- `--then rmqr.0 --then link.open` のように、同じインスタンスで続けて呼べる(状態を持つプラグインの一連の操作)。
+  `--then 'astell.event={"token":"t","type":"share"}'` / `--then media.commit=@args.json` で、続きの call にも args を渡せる(`@b64:` も効く)
 
 ```sh
 rasq call rmqr viewer.open --args '{"token":"v1","mimeType":"image/png","width":344,"height":104,"bytesB64":"@b64:plugins/rmqr/tests/fixtures/rmqr_url.png"}' \

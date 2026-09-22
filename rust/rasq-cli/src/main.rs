@@ -83,8 +83,8 @@ enum Cmd {
         /// ホスト関数の答え: fn=JSON(例 --reply 'fow.open={"opened":true}')。何度でも
         #[arg(long, value_name = "FN=JSON")]
         reply: Vec<String>,
-        /// 続けて呼ぶ fn(同じインスタンスで。args は {})。何度でも
-        #[arg(long, value_name = "FN")]
+        /// 続けて呼ぶ fn(同じインスタンスで)。`FN` なら args は {}、`FN=JSON` / `FN=@path` で args を渡せる。何度でも
+        #[arg(long, value_name = "FN[=JSON|@path]")]
         then: Vec<String>,
         /// 長い文字列(base64 など)を縮めずに出す
         #[arg(long)]
@@ -238,7 +238,7 @@ fn init(dir: PathBuf, sns: Option<String>, base: Option<PathBuf>, owned: bool, n
     if sns.is_some() && base.is_some() {
         bail!("--sns と --base は同時に使えません(SNS プラグインを作るときは土台を読まない)");
     }
-    workspace::valid_plugin_id(namespace).context("--namespace")?;
+    workspace::valid_namespace(namespace).context("--namespace")?;
     std::fs::create_dir_all(&dir)?;
     if dir.join(workspace::FILE).exists() {
         bail!("{} は既にワークスペースです", dir.display());
@@ -246,7 +246,8 @@ fn init(dir: PathBuf, sns: Option<String>, base: Option<PathBuf>, owned: bool, n
     let mut ws = Workspace::new(embed::SDK_VERSION, namespace);
     embed::write_kit(&dir.join("kit"))?;
     std::fs::create_dir_all(dir.join("plugins"))?;
-    std::fs::write(dir.join(".gitignore"), "/target\n/dist\n/base\n/.rasq\n")?;
+    // dist/ は無視しない(配布物をリポジトリに残す流儀 = plugin-sample)。署名だけは鍵ごとのものなので入れない。
+    std::fs::write(dir.join(".gitignore"), "/target\n/base\n/.rasq\n*.sig.json\n")?;
 
     if let Some(id) = sns {
         workspace::valid_plugin_id(&id)?;
@@ -518,6 +519,17 @@ fn verify(root: &Path, ws: &Workspace, profile: &str) -> Result<Verified> {
     Ok(Verified { targets: targets.len(), errors, warnings })
 }
 
+/// `--args` / `--then FN=…` の値: JSON そのものか `@path`(ファイル)。中の `"@b64:<path>"` は展開する。
+fn parse_call_args(args: &str, root: &Path) -> Result<Value> {
+    let text = match args.strip_prefix('@') {
+        Some(p) => std::fs::read_to_string(p).with_context(|| format!("{p} を読めません"))?,
+        None => args.to_string(),
+    };
+    let mut v: Value = serde_json::from_str(&text).context("JSON ではありません")?;
+    expand_b64(&mut v, root)?;
+    Ok(v)
+}
+
 /// `"@b64:<path>"` をファイルの base64 に置き換える(画像を args に入れる用)。
 fn expand_b64(v: &mut Value, root: &Path) -> Result<()> {
     match v {
@@ -558,12 +570,7 @@ fn call_cmd(name: &str, fn_name: &str, args: &str, replies: &[String], then: &[S
     let t = ws.targets(&root).into_iter().find(|t| t.package == name).ok_or_else(|| anyhow!("{name} はワークスペースにありません"))?;
     let wasm_path = t.wasm_path(&root, "release");
     let bytes = std::fs::read(&wasm_path).with_context(|| format!("{} がありません(rasq check / rasq dev を先に)", wasm_path.display()))?;
-    let text = match args.strip_prefix('@') {
-        Some(p) => std::fs::read_to_string(p).with_context(|| format!("{p} を読めません"))?,
-        None => args.to_string(),
-    };
-    let mut args: Value = serde_json::from_str(&text).context("--args が JSON ではありません")?;
-    expand_b64(&mut args, &root)?;
+    let args = parse_call_args(args, &root).context("--args")?;
     let mut host = wasm::HostState::default();
     for r in replies {
         let (k, v) = r.split_once('=').ok_or_else(|| anyhow!("--reply は FN=JSON の形です: {r}"))?;
@@ -573,7 +580,13 @@ fn call_cmd(name: &str, fn_name: &str, args: &str, replies: &[String], then: &[S
     let mut p = wasm::Plugin::load_with(&bytes, host)?;
     p.message("snapshot")?;
     let mut calls = vec![(fn_name.to_string(), args)];
-    calls.extend(then.iter().map(|f| (f.clone(), serde_json::json!({}))));
+    for t in then {
+        let (f, a) = match t.split_once('=') {
+            Some((f, a)) => (f.to_string(), parse_call_args(a, &root).with_context(|| format!("--then {f}"))?),
+            None => (t.clone(), serde_json::json!({})),
+        };
+        calls.push((f, a));
+    }
     let mut failed = false;
     for (i, (f, a)) in calls.iter().enumerate() {
         let started = std::time::Instant::now();
