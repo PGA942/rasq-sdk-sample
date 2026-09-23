@@ -5,6 +5,7 @@
 mod credentials;
 mod source;
 mod embed;
+mod help;
 mod key;
 mod pack;
 mod pkg;
@@ -22,7 +23,8 @@ use std::process::Command;
 use workspace::{Base, PluginEntry, Sns, Workspace};
 
 #[derive(Parser)]
-#[command(name = "rasq", version, about = "RASQ プラグイン作者向け CLI(rasq-sdk-sample docs/cli.md)")]
+#[command(name = "rasq", version, about = "RASQ プラグイン作者向け CLI(rasq-sdk-sample docs/cli.md)", disable_help_subcommand = true)]
+// `rasq help <言葉…>` は文書の検索(help.rs)。clap の help サブコマンドは外す(--help / -h は従来どおり)。
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -146,6 +148,23 @@ enum Cmd {
         #[arg(long, value_name = "DIR")]
         extract: Option<PathBuf>,
     },
+    /// 同梱の文書(docs/、PROTOCOL.md、登録簿、マニフェストの属性)から探す。--central でほかのプラグインの掲載も
+    Help {
+        /// 関数名 / スロット / 属性 / 探したい言葉(空なら文書の一覧)
+        query: Vec<String>,
+        /// 出す節の数
+        #[arg(short = 'n', long, default_value_t = 5)]
+        count: usize,
+        /// 節を省略せずに全部出す
+        #[arg(long)]
+        full: bool,
+        /// Central の URL(掲載 = ほかのプラグインの文書も探す。トークン不要)
+        #[arg(long, value_name = "URL")]
+        central: Option<String>,
+        /// --central と一緒に: そのプラグインの掲載の説明を読む
+        #[arg(long, value_name = "ID")]
+        plugin: Option<String>,
+    },
     /// 同梱の登録簿 / 雛形を表示
     Registry {
         #[arg(value_enum, default_value_t = What::Slots)]
@@ -231,6 +250,7 @@ fn run() -> Result<()> {
         Cmd::Key { cmd } => key_cmd(cmd),
         Cmd::Inspect { pkg, extract } => inspect(&pkg, extract.as_deref()),
         Cmd::Publish { central, channel, notes_file, dry_run, skip_listing, no_make_current, no_build, token_env, with_source } => publish_cmd(central, channel, notes_file, dry_run, skip_listing, !no_make_current, no_build, &token_env, with_source),
+        Cmd::Help { query, count, full, central, plugin } => help::run(&query, count, full, central.as_deref(), plugin.as_deref()),
         Cmd::Registry { what } => registry(what),
         Cmd::Token { cmd } => token(cmd),
         Cmd::Dev { watch, debug } => dev(watch, debug),

@@ -19,7 +19,8 @@
       "icon": "center_focus_weak",
       "tags": [
         "全画面表示"
-      ]
+      ],
+      "auto": true
     }
   ]
 }

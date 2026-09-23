@@ -9,6 +9,9 @@ use std::path::Path;
 pub static SCHEMA: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../schema");
 pub static TEMPLATES: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../templates");
 pub static KIT: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../rasq-plugin-kit");
+/// 文書(`rasq help` が節ごとに索引する)。
+pub static DOCS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../docs");
+pub const PROTOCOL: &str = include_str!("../../../PROTOCOL.md");
 
 /// 同梱 SDK の版(kit と雛形の版でもある)。
 pub const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");

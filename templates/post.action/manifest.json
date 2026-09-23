@@ -19,7 +19,9 @@
       "tags": [
         "Copy",
         "Share"
-      ]
+      ],
+      "placement": "auto",
+      "auto": false
     }
   ]
 }
