@@ -176,6 +176,10 @@ struct HostState {
     fetch_shapes_new: Vec<serde_json::Value>,
     /// 形の数が [`MAX_FETCH_SHAPES`] を超えた(以後は数えない)。それ自体を 1 度だけ報告する。
     fetch_shapes_overflow: bool,
+    /// `gpu.compute` (D-081) を使わせるか = マニフェストの `gpu_ml` が審査で通っているか。
+    /// この口はランタイム内で短絡して埋込側の権限検査を通らないので、ここで閉じる。
+    /// **既定は false**(fail-closed): 埋込側が設定を忘れても全プラグインに GPU を渡さない。
+    gpu_compute: bool,
     /// 線形メモリ / テーブルの成長を止める `ResourceLimiter`。`Store` は
     /// ユーザーデータ経由でしか limiter を引けないのでここに同居させる。
     limits: StoreLimits,
@@ -264,6 +268,7 @@ impl RasqWasmInstance {
                 fetch_shapes_seen: Default::default(),
                 fetch_shapes_new: Vec::new(),
                 fetch_shapes_overflow: false,
+                gpu_compute: false,
                 limits,
             },
         );
@@ -314,6 +319,11 @@ impl RasqWasmInstance {
     #[cfg(test)]
     fn set_fetch_hosts(&mut self, hosts: &[&str]) {
         self.store.data_mut().fetch_hosts = hosts.iter().map(|h| h.to_ascii_lowercase()).collect();
+    }
+
+    #[cfg(test)]
+    fn set_gpu_compute(&mut self, enabled: bool) {
+        self.store.data_mut().gpu_compute = enabled;
     }
 
     #[cfg(test)]
@@ -451,10 +461,11 @@ fn host_fn_impl(mut caller: Caller<'_, HostState>, ptr: u32, len: u32) -> Result
 
     // Native gpu.compute short-circuit (D-081): WGSL compute 専用の狭い
     // GPU 口。常にランタイム内で処理する(Dart 側に同期 GPU ブリッジは
-    // 無い)。gpu_ml 権限の審査ゲートはマニフェスト/ストア側 (M4)。
+    // 無い)。埋込側の callback を通らないので、gpu_ml 権限の検査もここ
+    // (`rasq_wasm_set_gpu_compute` で開けたインスタンスだけ。既定は E01)。
     if let Ok(req) = serde_json::from_slice::<serde_json::Value>(&request) {
         if req["fn"] == "gpu.compute" {
-            let response = gpu_compute_response(&req);
+            let response = gpu_compute_response(&req, caller.data().gpu_compute);
             return write_response(&mut caller, memory, response.to_string().as_bytes());
         }
     }
@@ -503,67 +514,266 @@ fn write_response(caller: &mut Caller<'_, HostState>, memory: Memory, bytes: &[u
 // storage)→ 出力 1 バッファ(binding 1, read_write storage)の 1 パス。
 // カスタム TL の重いソートやメディア編集フィルターの下地。アダプター無し・
 // 検証エラーは E01 で返し、プラグインはクラウドカルクレーターへ逃がす。
+//
+// 権限: `gpu_ml`。この口はランタイム内で短絡するので埋込側の host_fn の
+// 権限検査を通らない — だから**ここで**閉じる。埋込側が
+// `rasq_wasm_set_gpu_compute(.., true)` で開けたインスタンス(マニフェストに
+// `gpu_ml` があり、審査で通ったもの)だけが使える。既定は閉(fail-closed)。
+//
+// 上限: 開けたインスタンスでも要求の中身はプラグインが自由に決める。wgpu は
+// 検証エラーを既定では panic で知らせ(uncaptured-error ハンドラ)、待ちにも
+// 上限が無い。どちらもホストごと落ちる/止まる経路なので、
+// 1. wgpu に触る前に args を下の定数(とデバイスの limits)で検査する(D01)、
+// 2. 生成から encode までをエラースコープで囲み、submit の前に検証エラーを
+//    拾う(submit 自体は wgpu 22 では失敗すると panic する)、
+// 3. uncaptured-error ハンドラを差し替える(既定の panic を止める)、
+// 4. 読み戻しの待ちを [`GPU_TIMEOUT_MS`] で切る、
+// 5. それでも wgpu の中で panic したら catch_unwind で E01 に変える。
+// タイムアウト・デバイス喪失・panic のあとはこのプロセスでは GPU を使わない
+// (投げたジョブは取り消せないので、無限ループのシェーダーを積み増させない)。
+
+/// 入力(binding 0)の上限。デコード後 64 MiB。契約上の作業サイズ
+/// (2048×1536 の RGBA = 12 MiB)の 5 倍強で、wgpu 既定の
+/// `max_storage_buffer_binding_size`(128 MiB)の半分。
+const MAX_GPU_INPUT_BYTES: usize = 64 * 1024 * 1024;
+
+/// base64 の `input` の文字数の上限(デコードより先に切る)。
+const MAX_GPU_INPUT_B64_LEN: usize = MAX_GPU_INPUT_BYTES.div_ceil(3) * 4;
+
+/// 出力(binding 1)の上限。64 MiB。**4 の倍数**であること
+/// (`copy_buffer_to_buffer` の要件。外すと wgpu の検証エラー)。
+const MAX_GPU_OUTPUT_BYTES: u64 = 64 * 1024 * 1024;
+
+/// WGSL ソースの上限。256 KiB(フィルターやソートのシェーダーは数 KiB)。
+const MAX_GPU_WGSL_BYTES: usize = 256 * 1024;
+
+/// `entry` の名前の上限。
+const MAX_GPU_ENTRY_BYTES: usize = 256;
+
+/// `workgroups` の 1 次元あたりの上限。WebGPU / wgpu の既定の
+/// `max_compute_workgroups_per_dimension`。デバイスの値がこれより小さければ
+/// そちらで切る([`check_gpu_limits`])。
+const MAX_GPU_WORKGROUPS_PER_DIM: u32 = 65_535;
+
+/// `workgroups` の x·y·z の上限。2^20 = 1,048,576(12 MP の画像を 8×8 の
+/// ワークグループで塗っても 19 万)。シェーダーの中のループは縛れないので、
+/// 時間の上限は [`GPU_TIMEOUT_MS`] のほう。
+const MAX_GPU_TOTAL_WORKGROUPS: u64 = 1 << 20;
+
+/// 1 回の `gpu.compute` の壁時計上限(ミリ秒)。GPU を待つ間も燃料は減らない
+/// (net.fetch と同じ)ので別に切る。直列化のための待ちもここに含む。
+const GPU_TIMEOUT_MS: u64 = 10_000;
+
+/// 検査済みの `gpu.compute` の要求。
+#[derive(Debug)]
+struct GpuJob {
+    wgsl: String,
+    entry: String,
+    input: Vec<u8>,
+    output_size: u64,
+    workgroups: [u32; 3],
+}
+
+/// `gpu.compute` の args を検査する(D01 のメッセージを返す)。wgpu には
+/// 触らないので GPU の無い CI でも試せる。デバイスごとの上限は
+/// [`check_gpu_limits`]。
+fn parse_gpu_args(args: &serde_json::Value) -> Result<GpuJob, String> {
+    use base64::Engine as _;
+    use serde_json::Value;
+    let wgsl = match &args["wgsl"] {
+        Value::String(s) if !s.is_empty() => s.as_str(),
+        _ => return Err("gpu.compute: wgsl required".to_string()),
+    };
+    if wgsl.len() > MAX_GPU_WGSL_BYTES {
+        return Err(format!("gpu.compute: wgsl too large: {} bytes (max {MAX_GPU_WGSL_BYTES})", wgsl.len()));
+    }
+    let entry = match &args["entry"] {
+        Value::Null => "main",
+        Value::String(s) if !s.is_empty() && s.len() <= MAX_GPU_ENTRY_BYTES => s.as_str(),
+        _ => return Err(format!("gpu.compute: entry must be a non-empty string of at most {MAX_GPU_ENTRY_BYTES} bytes")),
+    };
+    let input_b64 = match &args["input"] {
+        Value::Null => "",
+        Value::String(s) => s.as_str(),
+        _ => return Err("gpu.compute: input must be a base64 string".to_string()),
+    };
+    if input_b64.len() > MAX_GPU_INPUT_B64_LEN {
+        return Err(format!("gpu.compute: input too large (max {MAX_GPU_INPUT_BYTES} bytes)"));
+    }
+    let input = base64::engine::general_purpose::STANDARD
+        .decode(input_b64)
+        .map_err(|e| format!("gpu.compute: bad input base64: {e}"))?;
+    if input.len() > MAX_GPU_INPUT_BYTES {
+        return Err(format!("gpu.compute: input too large: {} bytes (max {MAX_GPU_INPUT_BYTES})", input.len()));
+    }
+    let output_size = match args["outputSize"].as_u64() {
+        Some(n) if n > 0 && n <= MAX_GPU_OUTPUT_BYTES && n % 4 == 0 => n,
+        _ => {
+            return Err(format!(
+                "gpu.compute: outputSize must be a multiple of 4 in 4..={MAX_GPU_OUTPUT_BYTES}: {}",
+                args["outputSize"]
+            ))
+        }
+    };
+    let mut workgroups = [1u32; 3];
+    match &args["workgroups"] {
+        Value::Null => {}
+        Value::Array(a) if !a.is_empty() && a.len() <= 3 => {
+            for (i, (slot, v)) in workgroups.iter_mut().zip(a).enumerate() {
+                match v.as_u64() {
+                    Some(n) if (1..=MAX_GPU_WORKGROUPS_PER_DIM as u64).contains(&n) => *slot = n as u32,
+                    _ => {
+                        return Err(format!(
+                            "gpu.compute: workgroups[{i}] must be an integer in 1..={MAX_GPU_WORKGROUPS_PER_DIM}"
+                        ))
+                    }
+                }
+            }
+        }
+        _ => return Err("gpu.compute: workgroups must be [x, y?, z?]".to_string()),
+    }
+    let total: u64 = workgroups.iter().map(|&n| n as u64).product();
+    if total > MAX_GPU_TOTAL_WORKGROUPS {
+        return Err(format!("gpu.compute: too many workgroups: {total} (max {MAX_GPU_TOTAL_WORKGROUPS})"));
+    }
+    Ok(GpuJob { wgsl: wgsl.to_string(), entry: entry.to_string(), input, output_size, workgroups })
+}
+
+/// デバイスの limits で切る(下位のデバイスは既定値より小さいことがある)。
+/// 外すと wgpu の検証エラー(wgpu 22 の既定では panic)になる値だけを見る。
+fn check_gpu_limits(job: &GpuJob, limits: &wgpu::Limits) -> Result<(), String> {
+    let per_dim = limits.max_compute_workgroups_per_dimension;
+    if job.workgroups.iter().any(|&n| n > per_dim) {
+        return Err(format!("gpu.compute: workgroups exceed this device's limit ({per_dim} per dimension)"));
+    }
+    let max_binding = (limits.max_storage_buffer_binding_size as u64).min(limits.max_buffer_size);
+    // 入力は create_buffer_init が 4 バイト境界に切り上げる(空なら 4 バイトの 0)。
+    let input_size = (job.input.len() as u64).max(4).div_ceil(4) * 4;
+    if input_size > max_binding || job.output_size > max_binding {
+        return Err(format!("gpu.compute: buffer exceeds this device's storage binding limit ({max_binding} bytes)"));
+    }
+    Ok(())
+}
 
 struct GpuCtx {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    limits: wgpu::Limits,
+    /// 1 度に 1 ジョブ。wgpu 22 のエラースコープはデバイスに 1 本の積み重ねで
+    /// スレッドごとではないので、並べて走らせると他人のスコープを pop する。
+    lock: std::sync::Mutex<()>,
 }
 
 static GPU: std::sync::OnceLock<Option<GpuCtx>> = std::sync::OnceLock::new();
 
+/// タイムアウト・デバイス喪失・wgpu の panic のあと、このプロセスでは GPU を使わない。
+static GPU_DISABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// エラースコープの外で起きた wgpu のエラー(差し替えた uncaptured-error ハンドラが立てる)。
+static GPU_UNCAPTURED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn gpu_ctx() -> Option<&'static GpuCtx> {
-    GPU.get_or_init(|| {
-        let instance = wgpu::Instance::default();
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))?;
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None)).ok()?;
-        Some(GpuCtx { device, queue })
-    })
-    .as_ref()
+    // アダプター / デバイスの取得でドライバーが panic しても「GPU 無し」にする。
+    GPU.get_or_init(|| std::panic::catch_unwind(gpu_init).ok().flatten()).as_ref()
 }
 
-fn gpu_compute_response(req: &serde_json::Value) -> serde_json::Value {
+fn gpu_init() -> Option<GpuCtx> {
+    use std::sync::atomic::Ordering;
+    let instance = wgpu::Instance::default();
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))?;
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None)).ok()?;
+    // 既定のハンドラは panic する。拾って E01 にするための旗だけ立てる。
+    device.on_uncaptured_error(Box::new(|_e| GPU_UNCAPTURED.store(true, Ordering::SeqCst)));
+    device.set_device_lost_callback(|_reason, _message| GPU_DISABLED.store(true, Ordering::SeqCst));
+    let limits = device.limits();
+    Some(GpuCtx { device, queue, limits, lock: std::sync::Mutex::new(()) })
+}
+
+/// `permitted` = このインスタンスに `gpu_ml` が与えられているか(`HostState::gpu_compute`)。
+fn gpu_compute_response(req: &serde_json::Value, permitted: bool) -> serde_json::Value {
     use base64::Engine as _;
-    use wgpu::util::DeviceExt as _;
     let call_id = req["callId"].clone();
     let err = |code: &str, message: String| {
         serde_json::json!({"callId": call_id, "ok": false, "error": {"code": code, "message": message}})
     };
-    let args = &req["args"];
+    // 権限の無いプラグインには GPU の初期化もさせない。
+    if !permitted {
+        return err("E01", "gpu.compute: permission denied (gpu_ml is not granted to this plugin)".to_string());
+    }
+    let job = match parse_gpu_args(&req["args"]) {
+        Ok(job) => job,
+        Err(message) => return err("D01", message),
+    };
     let Some(ctx) = gpu_ctx() else {
         return err("E01", "no gpu adapter — fall back to the cloud calculator (ml.infer)".to_string());
     };
-    let wgsl = args["wgsl"].as_str().unwrap_or("");
-    if wgsl.is_empty() {
-        return err("D01", "gpu.compute: wgsl required".to_string());
+    if let Err(message) = check_gpu_limits(&job, &ctx.limits) {
+        return err("D01", message);
     }
-    let entry = args["entry"].as_str().unwrap_or("main");
-    let input = match base64::engine::general_purpose::STANDARD.decode(args["input"].as_str().unwrap_or("")) {
-        Ok(b) => b,
-        Err(e) => return err("D01", format!("gpu.compute: bad input base64: {e}")),
-    };
-    let output_size = args["outputSize"].as_u64().unwrap_or(0);
-    if output_size == 0 || output_size > 64 * 1024 * 1024 {
-        return err("D01", format!("gpu.compute: outputSize out of range: {output_size}"));
+    match run_gpu_job(ctx, &job, Duration::from_millis(GPU_TIMEOUT_MS)) {
+        Ok(output) => {
+            let output = base64::engine::general_purpose::STANDARD.encode(output);
+            serde_json::json!({"callId": call_id, "ok": true, "value": {"output": output, "placement": "device"}})
+        }
+        Err(message) => err("E01", message),
     }
-    let wg: Vec<u32> = args["workgroups"]
-        .as_array()
-        .map(|a| a.iter().map(|v| v.as_u64().unwrap_or(1).max(1) as u32).collect())
-        .unwrap_or_else(|| vec![1, 1, 1]);
-    let (wx, wy, wz) = (
-        *wg.first().unwrap_or(&1),
-        *wg.get(1).unwrap_or(&1),
-        *wg.get(2).unwrap_or(&1),
-    );
+}
 
+/// 直列化・無効化の確認・panic の捕捉をして [`gpu_dispatch`] を回す。
+fn run_gpu_job(ctx: &GpuCtx, job: &GpuJob, timeout: Duration) -> Result<Vec<u8>, String> {
+    use std::sync::atomic::Ordering;
+    const DISABLED: &str = "gpu.compute: gpu disabled for this process after a timeout / device loss — fall back to the cloud calculator (ml.infer)";
+    let deadline = std::time::Instant::now() + timeout;
+    // 前のジョブを待つ時間も上限に含める(std の Mutex には待ちの上限が無いので try_lock で回す)。
+    let _guard = loop {
+        match ctx.lock.try_lock() {
+            Ok(guard) => break guard,
+            Err(std::sync::TryLockError::Poisoned(p)) => break p.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(format!("gpu.compute: timed out waiting for the gpu ({} ms)", timeout.as_millis()));
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+    };
+    if GPU_DISABLED.load(Ordering::SeqCst) {
+        return Err(DISABLED.to_string());
+    }
+    GPU_UNCAPTURED.store(false, Ordering::SeqCst);
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gpu_dispatch(ctx, job, deadline))) {
+        Ok(Err(GpuFailure::TimedOut)) => {
+            GPU_DISABLED.store(true, Ordering::SeqCst);
+            Err(format!("gpu.compute: timed out after {} ms; gpu disabled for this process", timeout.as_millis()))
+        }
+        Ok(Err(GpuFailure::Error(message))) => Err(message),
+        Ok(Ok(_)) if GPU_UNCAPTURED.swap(false, Ordering::SeqCst) => Err("gpu.compute: gpu reported an error".to_string()),
+        Ok(Ok(output)) => Ok(output),
+        Err(_) => {
+            GPU_DISABLED.store(true, Ordering::SeqCst);
+            Err(DISABLED.to_string())
+        }
+    }
+}
+
+enum GpuFailure {
+    TimedOut,
+    Error(String),
+}
+
+fn gpu_dispatch(ctx: &GpuCtx, job: &GpuJob, deadline: std::time::Instant) -> Result<Vec<u8>, GpuFailure> {
+    use wgpu::util::DeviceExt as _;
     let device = &ctx.device;
-    // 検証エラー(WGSL の文法・バインド不一致)はエラースコープで拾う。
+    // 検証エラー(WGSL の文法・バインド不一致・entry 違い)と確保の失敗はエラースコープで拾う。
+    // スコープは encode の終わりまで開けておき、submit の**前に**閉じる。
+    device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
     device.push_error_scope(wgpu::ErrorFilter::Validation);
 
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("rasq gpu.compute"),
-        source: wgpu::ShaderSource::Wgsl(wgsl.into()),
+        source: wgpu::ShaderSource::Wgsl(job.wgsl.as_str().into()),
     });
-    let in_bytes: &[u8] = if input.is_empty() { &[0, 0, 0, 0] } else { &input };
+    let in_bytes: &[u8] = if job.input.is_empty() { &[0, 0, 0, 0] } else { &job.input };
     let in_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None,
         contents: in_bytes,
@@ -571,13 +781,13 @@ fn gpu_compute_response(req: &serde_json::Value) -> serde_json::Value {
     });
     let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
-        size: output_size,
+        size: job.output_size,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
     });
     let read_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
-        size: output_size,
+        size: job.output_size,
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -615,36 +825,51 @@ fn gpu_compute_response(req: &serde_json::Value) -> serde_json::Value {
         label: None,
         layout: Some(&pipeline_layout),
         module: &module,
-        entry_point: entry,
+        entry_point: &job.entry,
         compilation_options: Default::default(),
         cache: None,
     });
-    if let Some(e) = pollster::block_on(device.pop_error_scope()) {
-        return err("E01", format!("gpu.compute: validation failed: {e}"));
-    }
-
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind, &[]);
+        let [wx, wy, wz] = job.workgroups;
         pass.dispatch_workgroups(wx, wy, wz);
     }
-    encoder.copy_buffer_to_buffer(&out_buf, 0, &read_buf, 0, output_size);
-    ctx.queue.submit([encoder.finish()]);
+    encoder.copy_buffer_to_buffer(&out_buf, 0, &read_buf, 0, job.output_size);
+    let commands = encoder.finish();
+    let validation = pollster::block_on(device.pop_error_scope());
+    let out_of_memory = pollster::block_on(device.pop_error_scope());
+    if let Some(e) = validation.or(out_of_memory) {
+        return Err(GpuFailure::Error(format!("gpu.compute: validation failed: {e}")));
+    }
+    ctx.queue.submit([commands]);
 
     let slice = read_buf.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
     slice.map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);
     });
-    device.poll(wgpu::Maintain::Wait);
-    match rx.recv() {
-        Ok(Ok(())) => {}
-        other => return err("E01", format!("gpu.compute: readback failed: {other:?}")),
+    // `Maintain::Wait` は上限なしに待つので、Poll を回して締め切りで切る。
+    loop {
+        device.poll(wgpu::Maintain::Poll);
+        match rx.try_recv() {
+            Ok(Ok(())) => break,
+            Ok(Err(e)) => return Err(GpuFailure::Error(format!("gpu.compute: readback failed: {e}"))),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                return Err(GpuFailure::Error("gpu.compute: readback failed: callback dropped".to_string()))
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(GpuFailure::TimedOut);
+        }
+        std::thread::sleep(Duration::from_millis(1));
     }
-    let output = base64::engine::general_purpose::STANDARD.encode(slice.get_mapped_range().as_ref());
-    serde_json::json!({"callId": call_id, "ok": true, "value": {"output": output, "placement": "device"}})
+    let output = slice.get_mapped_range().to_vec();
+    read_buf.unmap();
+    Ok(output)
 }
 
 /// FNV-1a (64 bit) を 16 桁の hex に。重複の判定に使うだけで、衝突耐性は要らない
@@ -1034,6 +1259,22 @@ pub extern "C" fn rasq_wasm_set_fetch_hosts(instance: *mut RasqWasmInstance, hos
         .map(|h| h.trim().to_ascii_lowercase())
         .filter(|h| !h.is_empty())
         .collect();
+}
+
+/// Grants or revokes `gpu.compute` (D-081) for this instance. Pass `true`
+/// only when the plugin's manifest declares the `gpu_ml` permission and the
+/// store review approved it. `gpu.compute` is served inside the runtime, so
+/// the embedder's own host-function permission checks never see it — this
+/// flag is the gate. A fresh instance starts **closed**: without this call
+/// every `gpu.compute` answers `E01` (permission denied), so an embedder
+/// that forgets it cannot hand every plugin the GPU by omission.
+#[no_mangle]
+pub extern "C" fn rasq_wasm_set_gpu_compute(instance: *mut RasqWasmInstance, enabled: bool) {
+    if instance.is_null() {
+        return;
+    }
+    let instance = unsafe { &mut *instance };
+    instance.store.data_mut().gpu_compute = enabled;
 }
 
 /// Takes the `net.fetch` request shapes this instance has seen for the first
@@ -1516,6 +1757,170 @@ mod tests {
         assert!(json.contains("\"ok\":false"));
     }
 
+
+    // ---- gpu.compute ------------------------------------------------------
+    //
+    // 権限の門と args の検査は wgpu に触る前に終わるので、GPU の無い CI でも
+    // 回る。実際に GPU で走らせるものは最後の #[ignore] のテストだけ。
+
+    const GPU_WGSL: &str = "@group(0) @binding(0) var<storage, read> src: array<u32>;\n\
+        @group(0) @binding(1) var<storage, read_write> dst: array<u32>;\n\
+        @compute @workgroup_size(1) fn main(@builtin(global_invocation_id) id: vec3<u32>) { dst[id.x] = src[id.x] * 2u; }";
+
+    fn gpu_req(args: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({"schema": "rasq.hostfn/1", "callId": "g1", "fn": "gpu.compute", "args": args})
+    }
+
+    /// `call` のたびに host_fn へ固定の要求(data セグメント)を投げ、応答をそのまま返すゲスト。
+    fn host_fn_guest_wat(request: &serde_json::Value) -> String {
+        let json = request.to_string();
+        let escaped: String = json.bytes().map(|b| format!("\\{b:02x}")).collect();
+        format!(
+            r#"
+            (module
+              (import "rasq" "host_fn" (func $host (param i32 i32) (result i64)))
+              (memory (export "memory") 2)
+              (data (i32.const 0) "{escaped}")
+              (global $bump (mut i32) (i32.const 65536))
+              (func (export "alloc") (param $n i32) (result i32) (local $p i32)
+                (local.set $p (global.get $bump))
+                (global.set $bump (i32.add (global.get $bump) (local.get $n)))
+                (local.get $p))
+              (func (export "dealloc") (param i32 i32))
+              (func (export "call") (param i32 i32 i32 i32 i32 i32) (result i64)
+                (call $host (i32.const 0) (i32.const {len}))))
+            "#,
+            len = json.len()
+        )
+    }
+
+    #[test]
+    fn gpu_compute_is_closed_until_gpu_ml_is_granted() {
+        // 埋込側が何も設定しない = GPU は使えない (fail-closed)。GPU の初期化にも進まない。
+        let ok_args = serde_json::json!({"wgsl": GPU_WGSL, "input": "AQAAAAIAAAA=", "outputSize": 8, "workgroups": [2]});
+        let wat = host_fn_guest_wat(&gpu_req(ok_args));
+        let mut instance = RasqWasmInstance::load_plain(wat.as_bytes()).expect("instantiate");
+        let result = instance.call("gpu", "{}", "call-gpu").expect("call");
+        let v: serde_json::Value = serde_json::from_str(&result).expect("json");
+        assert_eq!(v["ok"], false, "{result}");
+        assert_eq!(v["error"]["code"], "E01", "{result}");
+        assert!(result.contains("gpu_ml"), "{result}");
+
+        // 開けても、検査に落ちる要求は wgpu に届く前に D01 で返る(GPU の有無に依らない)。
+        let bad_args = serde_json::json!({"wgsl": GPU_WGSL, "outputSize": 6});
+        let wat = host_fn_guest_wat(&gpu_req(bad_args));
+        let mut instance = RasqWasmInstance::load_plain(wat.as_bytes()).expect("instantiate");
+        instance.set_gpu_compute(true);
+        let result = instance.call("gpu", "{}", "call-gpu-2").expect("call");
+        let v: serde_json::Value = serde_json::from_str(&result).expect("json");
+        assert_eq!(v["error"]["code"], "D01", "{result}");
+        assert!(result.contains("multiple of 4"), "{result}");
+
+        // C ABI の口でも閉じられる。
+        let raw: *mut RasqWasmInstance = Box::into_raw(Box::new(instance));
+        rasq_wasm_set_gpu_compute(raw, false);
+        let mut instance = unsafe { Box::from_raw(raw) };
+        let result = instance.call("gpu", "{}", "call-gpu-3").expect("call");
+        assert!(result.contains("E01") && result.contains("gpu_ml"), "{result}");
+    }
+
+    #[test]
+    fn gpu_compute_response_checks_permission_first() {
+        let v = gpu_compute_response(&gpu_req(serde_json::json!({})), false);
+        assert_eq!(v["error"]["code"], "E01");
+        assert_eq!(v["callId"], "g1");
+        // 権限があっても args が壊れていれば D01(アダプターを探しに行かない)。
+        let v = gpu_compute_response(&gpu_req(serde_json::json!({"wgsl": ""})), true);
+        assert_eq!(v["error"]["code"], "D01");
+    }
+
+    #[test]
+    fn gpu_args_are_bounded_before_touching_wgpu() {
+        use serde_json::json;
+        let ok = |args: serde_json::Value| parse_gpu_args(&args).expect("valid");
+        let bad = |args: serde_json::Value| parse_gpu_args(&args).expect_err("must be rejected");
+
+        let job = ok(json!({"wgsl": GPU_WGSL, "input": "AQAAAAIAAAA=", "outputSize": 8, "workgroups": [2, 3]}));
+        assert_eq!(job.entry, "main");
+        assert_eq!(job.input, [1, 0, 0, 0, 2, 0, 0, 0]);
+        assert_eq!(job.workgroups, [2, 3, 1]);
+        let job = ok(json!({"wgsl": GPU_WGSL, "entry": "run", "outputSize": MAX_GPU_OUTPUT_BYTES}));
+        assert_eq!((job.entry.as_str(), job.workgroups, job.input.len()), ("run", [1, 1, 1], 0));
+        ok(json!({"wgsl": GPU_WGSL, "outputSize": 4, "workgroups": [MAX_GPU_WORKGROUPS_PER_DIM, 16]}));
+
+        // wgsl
+        bad(json!({"outputSize": 4}));
+        bad(json!({"wgsl": "", "outputSize": 4}));
+        bad(json!({"wgsl": 1, "outputSize": 4}));
+        assert!(bad(json!({"wgsl": "x".repeat(MAX_GPU_WGSL_BYTES + 1), "outputSize": 4})).contains("too large"));
+        // entry
+        bad(json!({"wgsl": GPU_WGSL, "entry": "", "outputSize": 4}));
+        bad(json!({"wgsl": GPU_WGSL, "entry": 7, "outputSize": 4}));
+        bad(json!({"wgsl": GPU_WGSL, "entry": "e".repeat(MAX_GPU_ENTRY_BYTES + 1), "outputSize": 4}));
+        // outputSize: 0 / 4 の倍数でない (wgpu の検証エラー = 既定では panic) / 上限超え / 数でない
+        for size in [json!(0), json!(3), json!(6), json!(MAX_GPU_OUTPUT_BYTES + 4), json!(-4), json!(4.5), json!("8"), json!(null)] {
+            assert!(bad(json!({"wgsl": GPU_WGSL, "outputSize": size})).contains("outputSize"), "{size}");
+        }
+        // workgroups: 0 / 1 次元の上限超え (65536 は wgpu の検証エラー) / 負 / 小数 / 形違い / 積の上限超え
+        for wg in [json!([0]), json!([MAX_GPU_WORKGROUPS_PER_DIM + 1]), json!([-1]), json!([1.5]), json!(["2"]), json!([]), json!([1, 1, 1, 1]), json!(8)] {
+            assert!(bad(json!({"wgsl": GPU_WGSL, "outputSize": 4, "workgroups": wg})).contains("workgroups"), "{wg}");
+        }
+        assert!(bad(json!({"wgsl": GPU_WGSL, "outputSize": 4, "workgroups": [MAX_GPU_WORKGROUPS_PER_DIM, MAX_GPU_WORKGROUPS_PER_DIM]}))
+            .contains("too many workgroups"));
+        // input: base64 でない / 数 / デコード前の長さで切る (確保しない)
+        bad(json!({"wgsl": GPU_WGSL, "outputSize": 4, "input": "***"}));
+        bad(json!({"wgsl": GPU_WGSL, "outputSize": 4, "input": 12}));
+        let huge = "A".repeat(MAX_GPU_INPUT_B64_LEN + 4);
+        assert!(bad(json!({"wgsl": GPU_WGSL, "outputSize": 4, "input": huge})).contains("too large"));
+        // 上限ちょうどは通る
+        let edge = "A".repeat(MAX_GPU_INPUT_BYTES / 3 * 4);
+        assert_eq!(ok(json!({"wgsl": GPU_WGSL, "outputSize": 4, "input": edge})).input.len(), MAX_GPU_INPUT_BYTES / 3 * 3);
+    }
+
+    #[test]
+    fn gpu_args_are_also_bounded_by_the_device_limits() {
+        let job = parse_gpu_args(&serde_json::json!({"wgsl": GPU_WGSL, "outputSize": 1024, "workgroups": [300]})).expect("valid");
+        check_gpu_limits(&job, &wgpu::Limits::default()).expect("fits the default limits");
+        // 下位のデバイス (1 次元 256 まで、binding 512 バイトまで)。
+        let small = wgpu::Limits { max_compute_workgroups_per_dimension: 256, ..wgpu::Limits::default() };
+        assert!(check_gpu_limits(&job, &small).unwrap_err().contains("workgroups"));
+        let tiny = wgpu::Limits { max_storage_buffer_binding_size: 512, ..wgpu::Limits::default() };
+        let job = parse_gpu_args(&serde_json::json!({"wgsl": GPU_WGSL, "outputSize": 1024})).expect("valid");
+        assert!(check_gpu_limits(&job, &tiny).unwrap_err().contains("binding"));
+        let tiny_buffer = wgpu::Limits { max_buffer_size: 512, ..wgpu::Limits::default() };
+        assert!(check_gpu_limits(&job, &tiny_buffer).is_err());
+    }
+
+    /// 実 GPU で: 正しいシェーダーが動き、wgpu の検証エラーは panic ではなく E01 で返ること。
+    /// アダプターが要るので既定では走らせない:
+    ///     cargo test -p rasq_wasm_runtime_core -- --ignored gpu_compute_on_a_real_adapter
+    #[test]
+    #[ignore = "needs a gpu adapter"]
+    fn gpu_compute_on_a_real_adapter() {
+        if gpu_ctx().is_none() {
+            eprintln!("skipped: no gpu adapter");
+            return;
+        }
+        let run = |args: serde_json::Value| gpu_compute_response(&gpu_req(args), true);
+        let v = run(serde_json::json!({"wgsl": GPU_WGSL, "input": "AQAAAAIAAAA=", "outputSize": 8, "workgroups": [2]}));
+        assert_eq!(v["ok"], true, "{v}");
+        assert_eq!(v["value"]["output"], "AgAAAAQAAAA=", "{v}");
+        // WGSL の文法エラー / entry 違い = wgpu の検証エラー。ホストは落ちない。
+        let v = run(serde_json::json!({"wgsl": "fn main( {", "outputSize": 4}));
+        assert_eq!(v["error"]["code"], "E01", "{v}");
+        let v = run(serde_json::json!({"wgsl": GPU_WGSL, "entry": "nope", "outputSize": 8}));
+        assert_eq!(v["error"]["code"], "E01", "{v}");
+        // 検査をすり抜けた値でも(ここでは GpuJob を直接組む)、submit の前のエラースコープで止まる。
+        let ctx = gpu_ctx().expect("adapter");
+        let over = ctx.limits.max_compute_workgroups_per_dimension + 1;
+        let job = GpuJob { wgsl: GPU_WGSL.to_string(), entry: "main".into(), input: vec![0; 8], output_size: 8, workgroups: [over, 1, 1] };
+        assert!(run_gpu_job(ctx, &job, Duration::from_secs(10)).is_err());
+        let job = GpuJob { output_size: 6, workgroups: [1, 1, 1], ..job };
+        assert!(run_gpu_job(ctx, &job, Duration::from_secs(10)).is_err());
+        // その後も同じプロセスで使える(検証エラーでは無効化しない)。
+        let v = run(serde_json::json!({"wgsl": GPU_WGSL, "input": "AQAAAAIAAAA=", "outputSize": 8, "workgroups": [2]}));
+        assert_eq!(v["ok"], true, "{v}");
+    }
 
     // ---- リソース上限 -----------------------------------------------------
     //

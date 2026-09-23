@@ -71,7 +71,12 @@ class RasqWasmPlugin {
   /// reach (`misskey.io`, `*.example.com`, or `*`). It starts **empty =
   /// closed**; pass the manifest's `network.hosts` plus whatever instance
   /// host the session grants, and call [setFetchHosts] when that changes.
-  factory RasqWasmPlugin.fromBytes(Uint8List wasmBytes, {RasqHostFnHandler? hostFn, bool nativeFetch = false, int? fuelPerCall, Set<String> fetchHosts = const {}}) {
+  ///
+  /// [gpuCompute] grants `gpu.compute` (served inside the runtime, never
+  /// reaching [hostFn]). Pass `true` only when the manifest declares the
+  /// `gpu_ml` permission and the review approved it; by default every
+  /// `gpu.compute` answers `E01` (permission denied). See [setGpuCompute].
+  factory RasqWasmPlugin.fromBytes(Uint8List wasmBytes, {RasqHostFnHandler? hostFn, bool nativeFetch = false, int? fuelPerCall, Set<String> fetchHosts = const {}, bool gpuCompute = false}) {
     final bytesPtr = malloc<ffi.Uint8>(wasmBytes.length);
     ffi.NativeCallable<bindings.RasqHostFnCallbackFunction>? callable;
     try {
@@ -108,6 +113,7 @@ class RasqWasmPlugin {
       }
       if (nativeFetch) bindings.rasq_wasm_set_native_fetch(instance, true);
       if (fuelPerCall != null) bindings.rasq_wasm_set_fuel_per_call(instance, fuelPerCall);
+      if (gpuCompute) bindings.rasq_wasm_set_gpu_compute(instance, true);
       final plugin = RasqWasmPlugin._(instance, callable);
       if (fetchHosts.isNotEmpty) plugin.setFetchHosts(fetchHosts);
       return plugin;
@@ -127,6 +133,15 @@ class RasqWasmPlugin {
     } finally {
       malloc.free(csv);
     }
+  }
+
+  /// Grants (`true`) or revokes `gpu.compute` for this instance — the
+  /// `gpu_ml` permission gate. `gpu.compute` is served inside the runtime, so
+  /// the [RasqHostFnHandler]'s own permission checks never see it; this is
+  /// the only place it is enforced on native hosts. Starts closed.
+  void setGpuCompute(bool enabled) {
+    _checkNotDestroyed();
+    bindings.rasq_wasm_set_gpu_compute(_instance, enabled);
   }
 
   /// The `net.fetch` request shapes this instance has seen for the first time

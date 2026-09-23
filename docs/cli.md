@@ -250,6 +250,10 @@ rasq help --central <url> --plugin sample.media-fullscreen   そのプラグイ�
 `rasq build [--raw] [--no-sign] [--no-build] [--with-source]` は release の wasm32 ビルド → `rasq check` と同じ往復検査(エラーがあれば止まる)→
 `dist/<root.id>-<root.version>.rasqpkg`(+ `.sig.json`)。`--raw` を付けると生の `.wasm` も `dist/` に出す(今のホストのパス読み込み用)。
 `rasq inspect <x.rasqpkg> [--extract DIR]` が目次と中身(sha512 / sizeBytes / `SHA512SUMS` / 余分なファイル)と `.sig.json` を確かめる。
+目次と中身の食い違い、または `.sig.json` があって署名が合わないときは**終了コード 1**(表示は同じ)。`.sig.json` が無いのは 0
+(開発者鍵の署名は任意)。署名が合っても、公開鍵は `.sig.json` 自身に書かれた**自己申告**なので、`inspect` は
+「自己申告の開発者鍵: 指紋 …」と出すだけで「誰の鍵か」は保証しない — 指紋を開発者が登録している鍵(Central の掲載 /
+開発者本人の告知)と見比べること。
 
 `dist/<root.id>-<root.version>.rasqpkg`:
 
@@ -278,6 +282,9 @@ SHA512SUMS                  # 目次と同じ値の一覧(手で確かめる用)
   manifest と(`lazy = false` なら)`runtimes.*.file` / `tokenizer.file` の本体を入れる。`lazy = true` は manifest だけ + `artifactId = model-<name>`。
   `rasq inspect` は、model manifest の `runtimes.*.file` / `tokenizer.file` を「目次に載っているもの」として数える(lazy でないのに無ければ問題、それ以外の目次に無いファイルは問題)
 - `rasq init --base <x.rasqpkg>` は `inspect` と同じ検査を通してから root(`kind = sns` のみ)の manifest / wasm / `bundle.json` を `base/` に置く
+- 他人の `.rasqpkg` を読む(`inspect` / `init --base`)ときの展開の上限(zstd 爆弾の対策、`pkg::ExtractLimits::DEFAULT`):
+  展開後の合計 **1 GiB**、1 ファイル **512 MiB**(同梱のモデル本体を見込んだ値)、エントリ **4096 個**。tar の申告の
+  大きさで読む前に切り、zstd を解いた流れそのものも合計 + 64 MiB で切る。超えたら展開せずにエラー
 
 ### 権限の理由(`[listing.safety]`)
 

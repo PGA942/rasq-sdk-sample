@@ -135,17 +135,17 @@
       },
       "gpu.compute": {
         "args": {
-          "wgsl": "string — compute シェーダー(WGSL)",
-          "entry": "string? = main",
-          "input": "base64 — binding(0) read-only storage の中身",
-          "outputSize": "number — binding(1) read_write storage のバイト数",
-          "workgroups": "[x, y, z]?"
+          "wgsl": "string — compute シェーダー(WGSL)。空でない、256 KiB まで",
+          "entry": "string? = main(256 バイトまで)",
+          "input": "base64 — binding(0) read-only storage の中身。デコード後 64 MiB まで",
+          "outputSize": "number — binding(1) read_write storage のバイト数。4 の倍数で 4〜64 MiB",
+          "workgroups": "[x, y?, z?]? — 各 1〜65535(かつ端末の max_compute_workgroups_per_dimension 以下)、x·y·z は 2^20 まで"
         },
         "value": {
           "output": "base64",
           "placement": "device"
         },
-        "permission": "gpu_ml — WGSL compute 専用の狭い口(フル WebGPU は出さない)。ランタイム内 wgpu で短絡処理。アダプター無し/検証エラーは E01 → プラグインはクラウドカルクレーター (ml.infer) へフォールバック (D-081)"
+        "permission": "gpu_ml — WGSL compute 専用の狭い口(フル WebGPU は出さない)。ランタイム内 wgpu で短絡処理するので権限の門もランタイム内: 埋込側が rasq_wasm_set_gpu_compute で開けたインスタンスだけ(既定は E01 permission denied)。アダプター無し/検証エラー/10 秒の壁時計超えは E01 → プラグインはクラウドカルクレーター (ml.infer) へフォールバック (D-081)。引数が上限を外れたら D01(wgpu に触る前に検査)"
       },
       "ml.infer": {
         "args": {

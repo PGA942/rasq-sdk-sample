@@ -19,6 +19,7 @@ let r = host_call("storage.set", json!({"ns": "safe", "key": "greets", "value": 
 | `alert` | 確認ダイアログ(戻り `{confirmed}`) | — | ✅(dev はログ+自動確認) |
 | `fow.open` / `fow.close` | FOW(拡張面)を開く/閉じる → [fow.md](fow.md) | `fow.widget` 等 | ✅ |
 | `ml.infer` | ML 実行(マニフェスト id 参照、配置はホスト解決) | `gpu_ml` | 🔶 未配線(E01) |
+| `gpu.compute` | WGSL compute 1 パス(入力 1 バッファ → 出力 1 バッファ)→ [下](#gpucompute-の権限と上限) | `gpu_ml` | ✅(ネイティブ = ランタイム内 wgpu) |
 | `wasm.call` | 子プラグイン呼び出し | 構成許可 | 🔶 未配線 |
 | `store.read` | ホスト Store の読み出し | — | 🔶 未配線 |
 | `geometry.lookup` | 画面上の矩形検索 | `fow.system` | 🔶(登録簿はホスト側実装済み — `fow.open` の `anchor` から使える) |
@@ -61,6 +62,43 @@ let body_text = response["value"]["bodyText"].as_str().unwrap_or("");
   path のテンプレート(`/api/users/{hex}/notes`)/ query のキー / ヘッダ名 / JSON 本文のキー構造で、
   **値(トークン・本文・ユーザー名)は端末の外に出ない**。承認済みの版に初めて現れた形があると、
   審査がその版を読み直す。1 つの版に 64 種類を超える形は「形を変え続けている」として旗になる。
+
+## gpu.compute の権限と上限
+
+```rust
+let r = host_call("gpu.compute", json!({
+    "wgsl": WGSL,                  // @group(0) @binding(0) = 入力(read)、@binding(1) = 出力(read_write)
+    "entry": "main",
+    "input": b64(&pixels),         // binding 0 の中身
+    "outputSize": 4 * n,           // binding 1 のバイト数(4 の倍数)
+    "workgroups": [n.div_ceil(64), 1, 1],
+}));
+// 成功: r["value"]["output"](base64)。失敗: E01 ならクラウドカルクレーター(ml.infer)へ逃がす
+```
+
+- **`gpu_ml` 権限が要る**(審査済み)。この fn はランタイムの中で wgpu に直結していて埋込側の host_fn を
+  通らないので、門もランタイムにある: 埋込側が `rasq_wasm_set_gpu_compute(.., true)`(Dart では
+  `RasqWasmPlugin.fromBytes(.., gpuCompute: true)` / `setGpuCompute`)で開けたインスタンスだけが使え、
+  **既定は閉**(`E01` `permission denied`)。埋込側はマニフェストの `gpu_ml` が審査で通っているときだけ開ける。
+- 要求は wgpu に渡す**前に**検査する。外れたら `D01`(GPU の初期化もしない):
+
+  | 引数 | 上限 |
+  |---|---|
+  | `wgsl` | 空でない、256 KiB まで |
+  | `entry` | 空でない、256 バイトまで(省略 = `main`) |
+  | `input` | base64、デコード後 64 MiB まで(デコードの前に文字数で切る) |
+  | `outputSize` | 4 の倍数、4 〜 64 MiB |
+  | `workgroups` | `[x, y?, z?]`、各 1 〜 65535 かつ端末の `max_compute_workgroups_per_dimension` 以下、x·y·z は 2^20 まで |
+
+  入力・出力は端末の `max_storage_buffer_binding_size` / `max_buffer_size` も超えられない。
+- **1 回 10 秒**(壁時計。前の呼び出しの終わりを待つ時間も含む)。GPU を待つ間は燃料が減らないので別に切る。
+  超えたら `E01` で、**そのプロセスでは以後 `gpu.compute` を止める**(投げたシェーダーは取り消せないので、
+  無限ループを積み増させない)。デバイス喪失・wgpu 内部の失敗のあとも同じ。
+- WGSL の文法エラー・バインドの不一致・`entry` 違いなど wgpu の検証エラーは `E01`(`validation failed`)。
+  ホストは落ちない(wgpu の既定の「検証エラーで panic」は差し替えてある)。検証エラーでは止めない。
+- 呼び出しは端末全体で 1 本ずつ(直列)。
+- Web ビルド(WebGPU に写す想定)の埋込側も同じ門(`gpu_ml`)と同じ上限を守ること。数字はランタイムの
+  `MAX_GPU_*` / `GPU_TIMEOUT_MS`(`rust/rasq_wasm_runtime_core/src/lib.rs`)が正典。
 
 ## 実行モデルの注意
 
