@@ -507,6 +507,23 @@ fn verify(root: &Path, ws: &Workspace, profile: &str) -> Result<Verified> {
         if t.slot.is_none() && manifest_file["kind"] != "sns" {
             errs.push("sns/ の manifest は kind = sns でなければなりません".into());
         }
+        // 権限の理由 ([listing.safety])。審査 (rasq-judge の 1 段目) と同じ基準: 宣言した権限すべてに
+        // 理由が要る。無いと自動では承認されない(人の列に回る)ので、出す前にここで分かるようにする。
+        let declared: Vec<String> = manifest_file["permissions"].as_array().into_iter().flatten().filter_map(|p| p.as_str().map(String::from)).collect();
+        if !declared.is_empty() {
+            match ws.listing.as_ref().and_then(|l| l.safety.as_ref()) {
+                None => warns.push(format!("[listing.safety] がありません: 権限 {} の理由を書いてください(無いと審査で自動承認されません)", declared.join(", "))),
+                Some(s) => {
+                    let (missing, stray) = s.gaps(&declared);
+                    if !missing.is_empty() {
+                        warns.push(format!("[listing.safety] に理由が無い権限: {}(無いと審査で自動承認されません)", missing.join(", ")));
+                    }
+                    if !stray.is_empty() {
+                        warns.push(format!("[listing.safety] に、宣言していない権限の理由があります: {}", stray.join(", ")));
+                    }
+                }
+            }
+        }
         let size = bytes.len();
         report(&label, &errs, &warns);
         if errs.is_empty() {
