@@ -61,6 +61,27 @@ rasq token set --central 100.91.218.56:8080 && rasq publish --central http://100
 4. **確認**: Flutter(rasq-client の「WASMプラグイン試験 (dev)」)での動作確認と簡易テスト(`cargo test` + `schema/validate.py`)。
 5. **ビルド**: デプロイ向けのビルド(`.rasqpkg`、ストア掲載用の署名は Central 側)。
 
+## 静的チェック
+
+CI の `deny` / `semgrep` ジョブと、`rust` ジョブの clippy(GitLab の SAST と秘密情報の検出は別に回る):
+
+```sh
+cargo deny --manifest-path rust/Cargo.toml check                   # 依存の脆弱性 (RustSec)・ライセンス・出どころ (deny.toml)
+semgrep --test --metrics=off --config .semgrep/rasq-sdk.yml .semgrep/rasq-sdk.rs   # 規則の例で規則そのものを確かめる
+semgrep scan --metrics=off --error --config .semgrep --exclude .semgrep rust
+(cd rust && cargo clippy --all-targets -p rasq_wasm_runtime_core -p rasq-cli -- -D warnings)   # ホスト側の 2 クレートだけ
+```
+
+`.semgrep/rasq-sdk.yml` はこのコードベースの約束: ホスト側(`rust/rasq_wasm_runtime_core`、`rust/rasq-cli`)の
+`unsafe` は C ABI の口だけ、ランタイム本体で `unwrap` / `expect` / `panic` しない(プラグイン由来の値で
+ホストが落ちる。同じ約束を `#![warn(clippy::unwrap_used, …)]` でも見る)、ゲストが決めた長さで先に確保しない
+(`read_guest`)、外向き HTTP は `native_fetch_response` の 1 本で `.redirects(0)`、外部コマンドの起動は固定引数の
+`cargo` / `rustc` だけ、tar のエントリのパスは `check_path` を通す、トークンを出力に出さない。
+プラグイン側(`rasq-plugin-kit` / サンプル / `templates/`)は wasm のゲストで対象外。確かめたうえでの例外は、
+その行の前に `// nosemgrep: <規則の id> — 理由` と書く。
+`semgrep --test` にディレクトリ `.semgrep` を渡すと隠しディレクトリとして飛ばされ「No unit tests found」で
+通ってしまうので、ファイルを直接指定する。
+
 ## 次にやること(M3)
 
 1. ~~`misskey-wasm-sample` で `PROTOCOL.md` の `snapshot/patch/call` を WASM 側から出す最小サンプル(まずは JSON v1)~~ → [`rust/misskey-wasm-sample`](rust/misskey-wasm-sample)

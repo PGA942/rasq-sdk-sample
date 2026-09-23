@@ -2,6 +2,8 @@
 name = "bluesky-wasm"
 version = "0.1.0"
 edition = "2021"
+# crates.io には出さない (cargo-deny の licenses は private を見ない)。
+publish = false
 
 [lib]
 crate-type = ["cdylib"]

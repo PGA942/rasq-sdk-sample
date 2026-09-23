@@ -1,0 +1,51 @@
+# cargo-deny の設定 (rasq-central と同じ形)。CI の `deny` ジョブが `cargo deny check` で回す。
+# ワークスペースは rust/ にあるので、リポジトリの root からは `cargo deny --manifest-path rust/Cargo.toml check`
+# (`cd rust && cargo deny check` でも同じ。設定ファイルは root のこの deny.toml を探しに上がってくる)。
+#
+# - advisories: RustSec の脆弱性がある版を使っていたら落とす(依存を上げて直す)。
+# - licenses: 今の依存が使っているライセンスだけを許す。新しいライセンスが入ったら
+#   ここで止まるので、中身を見てから足す。
+# - bans / sources: crates.io 以外 (git / 別のレジストリ) から来る依存を拒否する。
+[graph]
+all-features = true
+
+[advisories]
+# 脆弱性は常に落とす。メンテナンスされていない (unmaintained) は、直接の依存だけ落とす
+# (wgpu → metal → paste のような推移的なものは、上流が替えるのを待つしかない)。
+unmaintained = "workspace"
+yanked = "deny"
+ignore = []
+
+[licenses]
+confidence-threshold = 0.9
+# `cargo deny list -l license` の出力から。r-efi は MIT OR Apache-2.0 OR LGPL-2.1-or-later なので MIT で通る。
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-1-Clause",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT",
+  "MIT-0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+
+[licenses.private]
+# ワークスペースのクレートは crates.io に出さない (publish = false)。サンプル / ランタイムには
+# license の欄が無いので、ここで「配らないもの」として外す。
+ignore = true
+
+[bans]
+# 同じクレートの版違いは見るだけ(依存の都合で避けられないことが多い)。
+multiple-versions = "allow"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

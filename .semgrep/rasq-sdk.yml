@@ -1,0 +1,145 @@
+# rasq-sdk-sample 固有の静的チェック (Semgrep)。CI の `semgrep` ジョブが --error で回す。
+#
+# 汎用の規則 (GitLab SAST / Secret Detection) は別に回っている。ここに置くのは、信頼できない
+# プラグイン wasm を動かすホスト側 (rust/rasq_wasm_runtime_core) と、他人の配布物を読む CLI
+# (rust/rasq-cli) が守っている約束で、崩れたら気づきたいもの。どれも現状のコードでは 0 件
+# (例外は `// nosemgrep: <id> — 理由` を並べて書く)。
+# 規則の効き方は 同じ名前の .rs の注釈つきの例で確かめる
+# (`semgrep --test --config .semgrep/rasq-sdk.yml .semgrep/rasq-sdk.rs`。ディレクトリ `.semgrep` を渡すと
+# 隠しディレクトリとして飛ばされ「No unit tests found」で通ってしまう)。
+# プラグイン側 (rasq-plugin-kit / サンプル / templates) は wasm のゲストで、ABI の都合で unsafe を
+# 使うのが正常なので、この規則の対象にしない。
+rules:
+  - id: rasq-unsafe-outside-c-abi
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      ホスト側の unsafe は C ABI の口 (`extern "C" fn`: 埋込側から来る生ポインタの読み書き) にだけ
+      置きます。それ以外の場所に要るなら、前提 (誰がそのポインタを所有し、いつまで生きるか) と一緒に
+      `// nosemgrep: rasq-unsafe-outside-c-abi — 理由` を書いてください。
+    paths:
+      include: ["/rust/rasq_wasm_runtime_core/**", "/rust/rasq-cli/**"]
+    patterns:
+      - pattern: unsafe { ... }
+      - pattern-not-inside: |
+          extern "C" fn $F(...) { ... }
+      - pattern-not-inside: |
+          mod tests { ... }
+
+  - id: rasq-runtime-panic
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      ランタイム本体で panic しうる呼び出しです。ここで扱う値 (線形メモリ、host_fn の要求 JSON、
+      wasm の戻り値) はプラグインが自由に決められ、ホストの panic はアプリごと落ちます。
+      Result / Option で返してください (cargo clippy の unwrap_used / expect_used も同じ約束)。
+    paths:
+      include: ["/rust/rasq_wasm_runtime_core/**"]
+    patterns:
+      - pattern-either:
+          - pattern: $X.unwrap()
+          - pattern: $X.expect(...)
+          - pattern: $X.unwrap_err()
+          - pattern: panic!(...)
+          - pattern: unreachable!(...)
+          - pattern: todo!(...)
+          - pattern: unimplemented!(...)
+      - pattern-not-inside: |
+          mod tests { ... }
+
+  - id: rasq-guest-len-alloc
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      ゲスト (wasm) が決めた長さでホスト側のバッファを確保しています。長さは u32 なので最大 4 GiB を
+      確保しにいき、線形メモリの範囲検査 (memory.read の失敗) より先にホストが abort します。
+      先に範囲を確かめる `read_guest` を使ってください。
+    paths:
+      include: ["/rust/rasq_wasm_runtime_core/**", "/rust/rasq-cli/src/wasm.rs"]
+    # `vec![0u8; len as usize]` はマクロなので Semgrep は中身を式として読まない。ここだけ正規表現。
+    pattern-either:
+      - pattern-regex: 'vec!\[[^;\]]*;\s*[A-Za-z_][A-Za-z0-9_.]*\s+as\s+usize\s*\]'
+      - pattern: Vec::with_capacity($LEN as usize)
+
+  - id: rasq-native-fetch-single-path
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      ランタイムの外向き HTTP は `native_fetch_response` の 1 本だけです (宣言ホストの検査
+      `host_permitted` と、リダイレクトを追わない設定がそこにある)。別の場所で ureq を組み立てると
+      その検査を素通りします。
+    paths:
+      include: ["/rust/rasq_wasm_runtime_core/**"]
+    patterns:
+      - pattern-either:
+          - pattern: ureq::builder()
+          - pattern: ureq::agent()
+          - pattern: ureq::AgentBuilder::new()
+          - pattern: ureq::$F(...)
+      - pattern-not: ureq::Error::$E(...)
+      - pattern-not-inside: |
+          fn native_fetch_response(...) { ... }
+
+  - id: rasq-native-fetch-follows-redirects
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      ureq のエージェントにリダイレクトを追わない設定 (`.redirects(0)`) がありません。許可した
+      ホストが 302 で別のホストへ飛ばすと、`host_permitted` の検査を素通りします。3xx はそのまま
+      プラグインに返し、飛ぶかどうかは次の net.fetch (それも検査される) に任せます。
+    paths:
+      include: ["/rust/rasq_wasm_runtime_core/**"]
+    patterns:
+      - pattern: ureq::builder(). ... .build()
+      - pattern-not: ureq::builder(). ... .redirects(0). ... .build()
+
+  - id: rasq-command-spawn
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      外部コマンドの起動です。CLI が起動してよいのは固定の引数の `cargo` / `rustc` だけで、
+      rasq.toml / manifest / 他人の配布物から来た文字列を引数や作業ディレクトリに入れてはいけません。
+      確かめたら `// nosemgrep: rasq-command-spawn — 理由` を書いてください。
+    paths:
+      include: ["/rust/**"]
+    pattern-either:
+      - pattern: std::process::Command::new(...)
+      - pattern: Command::new(...)
+
+  - id: rasq-tar-entry-path-unchecked
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      tar のエントリのパスを、文法の検査 (`check_path`: `..` / 先頭 `/` / `.` 始まりを拒否) 無しに
+      使っています。他人の .rasqpkg のパスは `inspect --extract` / `init --base` で書き出し先になるので、
+      読んだ直後に check_path を通してください。
+    paths:
+      include: ["/rust/rasq-cli/**"]
+    # `for e in ar.entries()…? { let mut e = e…?; e.path() }` の形。ループ変数は中で shadow されるので
+    # `.path()` の受け手はループ変数と結び付けない ($X)。ループの本体に `check_path(...)?;` があれば通す。
+    patterns:
+      - pattern-inside: |
+          for $E in $ITER { ... }
+      - metavariable-regex:
+          metavariable: $ITER
+          regex: .*\.entries\(\).*
+      - pattern: $X.path()
+      - pattern-not-inside: |
+          for $E in $ITER { ... check_path(...)?; ... }
+      - pattern-not-inside: |
+          mod tests { ... }
+
+  - id: rasq-secret-in-output
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      出力 (標準出力 / エラー出力 / 組み立てた文字列) にトークン / 秘密鍵らしき値を出しています。
+      端末のログや CI の出力に残るので、値は出さずに `credentials::mask` か「あった / 無かった」に
+      してください。
+    paths:
+      include: ["/rust/rasq-cli/**", "/rust/rasq_wasm_runtime_core/**"]
+    # Semgrep はマクロの引数を式として読まないので、ここだけ正規表現 (rasq-central の rasq-secret-in-log と同じ形)。
+    # 識別子の一部として token などを含む引数 (`, token` / `= cfg.api_key` / `{token}` / `{k.secret}`) を拾い、
+    # 文字列の中の単語や `mask(&tok)` のような加工済みの値、`token_env` のような別の名前は拾わない。
+    # 複数行のマクロ呼び出しも見るが、`;` と次の `fn ` で止める (関数の末尾の式から次の関数の引数まで跨がない)。
+    pattern-regex: '\b(?:print|println|eprint|eprintln|format|write|writeln)!\((?:(?!\bfn\s)[^;])*?(?:[,(=]\s*[%?]?\s*[A-Za-z_.]*(?:token|password|passwd|secret|private_key|api_key)\b(?!\s*=)|\{[A-Za-z_.]*(?:token|password|passwd|secret|private_key|api_key)[}:])'

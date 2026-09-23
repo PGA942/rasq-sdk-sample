@@ -394,8 +394,11 @@ fn verify_packs(root: &Path, ws: &Workspace) -> Result<(usize, usize, Vec<pack::
 // check / build
 // ---------------------------------------------------------------------------
 
+/// `cargo` を起動する唯一の場所。引数は呼び出し元の固定のリテラル (`test` / `build --target …`) だけで、
+/// rasq.toml / manifest / 他人の配布物から来た文字列は入れない。作業ディレクトリはワークスペースの root。
 fn cargo(root: &Path, args: &[&str]) -> Result<()> {
     println!("$ cargo {}", args.join(" "));
+    // nosemgrep: rasq-command-spawn — 上のとおり、コマンド名と引数は固定
     let status = Command::new("cargo").args(args).current_dir(root).status().context("cargo を起動できません(Rust を入れてください)")?;
     if !status.success() {
         bail!("cargo {} が失敗しました({status})", args.join(" "));
