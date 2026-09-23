@@ -55,6 +55,53 @@ pub struct Listing {
     pub price: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub developer: Option<String>,
+    /// 権限ごとの理由・外部通信先・データの扱い(store.yaml SafetyBlock)。`rasq build` が
+    /// 配布物の目次 (`bundle.json` の `root.safety`) に入れ、Central が掲載に反映する。
+    /// 審査 (rasq-judge) は「宣言した権限すべてに理由があるか」を見るので、無いと自動では通らない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub safety: Option<Safety>,
+}
+
+/// `[listing.safety]`。
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct Safety {
+    /// `[[listing.safety.permissions]]` — `permission` と `reason`(用途ごとの権限理由)。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permissions: Vec<PermissionReason>,
+    /// 外部通信先(散文でもよい。マニフェストの `network.hosts` とは別の、人向けの申告)。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external_hosts: Vec<String>,
+    /// 保存・送信されるデータの説明。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_handling: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionReason {
+    pub permission: String,
+    pub reason: String,
+}
+
+impl Safety {
+    /// Central / 目次に載せる形(store.yaml の SafetyBlock、camelCase)。
+    pub fn to_json(&self) -> serde_json::Value {
+        let mut v = serde_json::json!({
+            "permissions": self.permissions.iter().map(|p| serde_json::json!({"permission": p.permission, "reason": p.reason})).collect::<Vec<_>>(),
+            "externalHosts": self.external_hosts,
+        });
+        if let Some(d) = &self.data_handling {
+            v["dataHandling"] = serde_json::json!(d);
+        }
+        v
+    }
+
+    /// 宣言した権限のうち、理由が無い(か空の)もの / 宣言していないのに理由があるもの。
+    pub fn gaps(&self, declared: &[String]) -> (Vec<String>, Vec<String>) {
+        let explained: Vec<&str> = self.permissions.iter().filter(|p| !p.reason.trim().is_empty()).map(|p| p.permission.as_str()).collect();
+        let missing = declared.iter().filter(|d| !explained.contains(&d.as_str())).cloned().collect();
+        let stray = self.permissions.iter().filter(|p| !declared.contains(&p.permission)).map(|p| p.permission.clone()).collect();
+        (missing, stray)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -324,5 +371,44 @@ mod tests {
             Some(v) => std::env::set_var("CARGO_TARGET_DIR", v),
             None => std::env::remove_var("CARGO_TARGET_DIR"),
         }
+    }
+}
+
+
+#[cfg(test)]
+mod safety_tests {
+    use super::*;
+
+    #[test]
+    fn listing_safety_reads_from_toml_and_writes_camel_case() {
+        let ws: Workspace = toml::from_str(
+            r#"
+schema = "rasq.workspace/1"
+sdk = "0.1.0"
+[listing]
+name = "x"
+[listing.safety]
+external_hosts = []
+data_handling = "端末の中だけ"
+[[listing.safety.permissions]]
+permission = "storage.safe"
+reason = "保存する"
+[[listing.safety.permissions]]
+permission = "fow.widget"
+reason = "  "
+"#,
+        )
+        .unwrap();
+        let s = ws.listing.unwrap().safety.unwrap();
+        let j = s.to_json();
+        assert_eq!(j["permissions"][0], serde_json::json!({"permission": "storage.safe", "reason": "保存する"}));
+        assert_eq!(j["externalHosts"], serde_json::json!([]));
+        assert_eq!(j["dataHandling"], "端末の中だけ");
+        // 空白だけの理由は理由ではない。宣言していない権限の理由は迷子。
+        let (missing, stray) = s.gaps(&["storage.safe".into(), "fow.widget".into(), "network".into()]);
+        assert_eq!(missing, vec!["fow.widget".to_string(), "network".to_string()]);
+        assert!(stray.is_empty());
+        let (_, stray) = s.gaps(&["storage.safe".into()]);
+        assert_eq!(stray, vec!["fow.widget".to_string()]);
     }
 }

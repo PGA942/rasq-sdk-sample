@@ -30,6 +30,16 @@
         "kind": { "$ref": "slot-registry.schema.json#/$defs/kind" },
         "manifest": { "$ref": "#/$defs/path", "description": "manifest.schema.json に合う JSON(SNS プラグインは function.json、スロットプラグインは plugin.manifest の答えと同じもの)" },
         "wasm": { "$ref": "#/$defs/file" },
+        "safety": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "掲載の安全性ブロック(store.yaml SafetyBlock の申告部分)。rasq.toml の [listing.safety] から rasq build が入れる。Central はどの経路で受け取っても掲載に反映し、審査 (rasq-judge) は宣言した権限すべてに理由があるかを見る。目次の中に置くのは、別ファイルにすると目次に無いファイルを拒否する既存の検査を壊すため",
+          "properties": {
+            "permissions": { "type": "array", "items": { "type": "object", "required": ["permission", "reason"], "additionalProperties": false, "properties": { "permission": { "type": "string" }, "reason": { "type": "string" } } } },
+            "externalHosts": { "type": "array", "items": { "type": "string" } },
+            "dataHandling": { "type": "string" }
+          }
+        },
         "requires": {
           "type": "array",
           "description": "土台として読み込んだ SNS プラグインが他人のもの(自分の配布物に含めない)なら、ここで依存として宣言する。ホストは同じ id のプラグインが入っていなければインストールを止める(permissionDenied ではなく unsupported)",

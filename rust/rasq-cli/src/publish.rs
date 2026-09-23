@@ -157,6 +157,9 @@ fn listing(ws: &Workspace, manifest: &Value) -> Value {
     if let Some(u) = l.and_then(|l| l.icon_url.clone()) {
         v["iconUrl"] = json!(u);
     }
+    if let Some(s) = l.and_then(|l| l.safety.as_ref()) {
+        v["safety"] = s.to_json();
+    }
     if let Some(d) = l.and_then(|l| l.developer.clone()) {
         v["developer"] = json!({"name": d});
     }

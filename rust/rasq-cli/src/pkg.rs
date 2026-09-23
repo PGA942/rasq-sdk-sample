@@ -128,7 +128,8 @@ pub fn plan(root: &Path, ws: &Workspace, profile: &str) -> Result<Vec<Package>> 
             entries.push(Entry { path: mp, bytes: b.manifest_bytes.clone() });
             entries.push(Entry { path: wp, bytes: b.wasm.clone() });
         }
-        let root_json = json!({"id": rb.id, "version": rb.version, "kind": "sns", "manifest": "manifest.json", "wasm": file_json(&rb.wasm_name, &rb.wasm)});
+        let mut root_json = json!({"id": rb.id, "version": rb.version, "kind": "sns", "manifest": "manifest.json", "wasm": file_json(&rb.wasm_name, &rb.wasm)});
+        attach_safety(ws, &mut root_json);
         out.push(assemble(root_json, children, &extras, entries)?);
     } else {
         if plugins.is_empty() && ws.packs.is_empty() {
@@ -137,6 +138,7 @@ pub fn plan(root: &Path, ws: &Workspace, profile: &str) -> Result<Vec<Package>> 
         let requires = ws.base.as_ref().map(|b| json!([{"id": b.id, "version": format!("^{}", b.version)}]));
         for (b, _t) in &plugins {
             let mut root_json = json!({"id": b.id, "version": b.version, "kind": b.kind, "manifest": "manifest.json", "wasm": file_json(&b.wasm_name, &b.wasm)});
+            attach_safety(ws, &mut root_json);
             if let Some(r) = &requires {
                 root_json["requires"] = r.clone();
             }
@@ -202,6 +204,15 @@ fn extras(root: &Path, ws: &Workspace) -> Result<Extras> {
         add(&m.manifest, bytes, &mut x.entries)?;
     }
     Ok(x)
+}
+
+/// `[listing.safety]` を目次の `root.safety` に入れる。別ファイルにしないのは、目次に無い
+/// ファイルを拒否する既存の検査(アプリのインストール、`rasq inspect`)を壊さないため。
+/// 目次は開発者の署名の範囲に入る。
+fn attach_safety(ws: &Workspace, root_json: &mut Value) {
+    if let Some(s) = ws.listing.as_ref().and_then(|l| l.safety.as_ref()) {
+        root_json["safety"] = s.to_json();
+    }
 }
 
 fn assemble(root_json: Value, children: Vec<Value>, extras: &Extras, mut entries: Vec<Entry>) -> Result<Package> {

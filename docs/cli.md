@@ -255,6 +255,24 @@ SHA512SUMS                  # 目次と同じ値の一覧(手で確かめる用)
   `rasq inspect` は、model manifest の `runtimes.*.file` / `tokenizer.file` を「目次に載っているもの」として数える(lazy でないのに無ければ問題、それ以外の目次に無いファイルは問題)
 - `rasq init --base <x.rasqpkg>` は `inspect` と同じ検査を通してから root(`kind = sns` のみ)の manifest / wasm / `bundle.json` を `base/` に置く
 
+### 権限の理由(`[listing.safety]`)
+
+```toml
+[listing.safety]
+external_hosts = []                       # 外部通信先(人向けの申告。マニフェストの network.hosts とは別)
+data_handling = "データは端末の中だけで扱い、外部には送信しません。"
+
+[[listing.safety.permissions]]
+permission = "storage.safe"
+reason = "最近使ったハッシュタグを端末に保存して、候補の先頭に出すため"
+```
+
+`rasq build` はこれを目次(`bundle.json`)の `root.safety` に入れる。別ファイルにしないのは、目次に無いファイルを
+拒否する既存の検査(アプリのインストール、`rasq inspect`)を壊さないためで、目次は開発者の署名の範囲に入る。
+Central はどの経路(Web コンソール、`/dev/plugins/publish`、`rasq publish` の管理 API)で受け取っても掲載の
+`safety` に反映する。審査(rasq-judge の 1 段目)は**宣言した権限すべてに理由があるか**を見るので、無いと自動では
+承認されない。`rasq check` が同じ基準で警告する(理由の無い権限 / 宣言していない権限の理由)。
+
 ### 審査用のソース(`--with-source`)
 
 `rasq build --with-source` は配布物と別に `dist/<root.id>-<root.version>.source.tar.zst` を出す。中身はワークスペースのうち
