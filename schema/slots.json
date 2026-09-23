@@ -1,6 +1,6 @@
 {
   "schema": "rasq.slots/1",
-  "$comment": "スロット登録簿 (D-005)。プラグインが差し込める面を 1 か所で定義する。マニフェストの `slots` はここにある id だけを指せる(schema/validate.py が照合)。`status: planned` は仮案(RRL&プラグイン周り §17)から採った未実装の面で、id だけ先に予約する。 tiers: 権限ティア(PROTOCOL §6 V1)。サイドロード(未審査)は content だけ、media は tag だけ、action / avatar / full / page は審査済みのみ。 permissions.required はホスト(rasq-client slot_plugins.dart)が v1 で実際に見る権限(fow.* / storage.* / mute.words)だけ。操作語彙(replace_media / register_action など、CONTRACT §8)は審査で付くので optional。",
+  "$comment": "スロット登録簿 (D-005)。プラグインが差し込める面を 1 か所で定義する。マニフェストの `slots` はここにある id だけを指せる(schema/validate.py が照合)。`status: planned` は仮案(RRL&プラグイン周り §17)から採った未実装の面で、id だけ先に予約する。 tiers: 権限ティア(PROTOCOL §6 V1)。サイドロード(未審査)は content だけ、media は tag だけ、action / avatar / full / page は審査済みのみ。 permissions.required はホスト(rasq-client slot_plugins.dart)が v1 で実際に見る権限(fow.* / storage.* / mute.words)だけ。操作語彙(replace_media / register_action など、CONTRACT §8)は審査で付くので optional。 v0.14: ボタン共通の auto(初期状態 = temp)/ placement(auto | manual)を manifest.actions に追加。全体のオン / オフ(switch)はホスト設定。docs/slots.md §2.11。",
   "tiers": {
     "content": {
       "sideload": true,
@@ -194,7 +194,8 @@
         "surface": "composer.inline",
         "constraints": [
           "FOW はコンポーザーの子(同じカラム)で入力を隠さない",
-          "本文の変化は 200ms デバウンス"
+          "本文の変化は 200ms デバウンス",
+          "v0.14: コンポーザーの入力欄の上にプラグインごとの ON / OFF チップが出る。初期状態は actions[{slot: \"composer.text\"}].auto(既定 true)。キーは slot:<pluginId>:composer.text"
         ]
       },
       "calls": [
@@ -223,7 +224,8 @@
         "crashed",
         "permissionDenied"
       ],
-      "sample": "orgate-question/plugin-sample/composer-text-plugin"
+      "sample": "orgate-question/plugin-sample/composer-text-plugin",
+      "actionKey": "slot:<pluginId>:composer.text"
     },
     {
       "id": "composer.media",
@@ -241,7 +243,8 @@
           "下段バーのボタンは manifest の actions[{slot: \"composer.media\"}] で宣言(無ければ name と既定アイコンのボタン 1 つ、画像だけ)。並べ替え / バンドルはホスト",
           "出る添付の種類は宣言の accepts(省略 = image/*)。受けない mimeType は C01",
           "パラメーターは第 3 階層 = 下付き FOW",
-          "output: \"filter\" の宣言はカスタムフィルター: filter.preview(描画リスト)→ 完了のとき overlay はホストが焼き込み、pixels は filter.apply"
+          "output: \"filter\" の宣言はカスタムフィルター: filter.preview(描画リスト)→ 完了のとき overlay はホストが焼き込み、pixels は filter.apply",
+          "output: \"filter\" のボタンの初期状態は actions[].auto(既定 false)。replace / sticker は auto 不可 (v0.14)"
         ]
       },
       "calls": [
@@ -298,7 +301,8 @@
           "画像の画素系の Stack を重ねる(ホストが拡縮)",
           "全画面遷移時だけ変換(V9)",
           "戻る / 閉じるはホスト",
-          "全画面アクションバーに ON / OFF ボタンが出る。見た目は manifest の actions[{slot: \"viewer.overlay\"}] で宣言(無ければ name と既定アイコン)"
+          "全画面アクションバーに ON / OFF ボタンが出る。見た目は manifest の actions[{slot: \"viewer.overlay\"}] で宣言(無ければ name と既定アイコン)",
+          "ボタンの初期状態は actions[].auto(既定 true)。面の中で切り替えた値は永続せず、次の全画面では既定に戻る (v0.14)。利用者は設定で既定を上書きできる"
         ]
       },
       "calls": [
@@ -440,10 +444,11 @@
       "placement": {
         "surface": "post.actionBar",
         "constraints": [
-          "manifest.actions を宣言(tags = 希望スロット)",
+          "manifest.actions を宣言(tags = 希望スロット)。placement: manual(または tags 無し)のボタンは自動配置せず、利用者が (+) で足すまで出ない (v0.14)",
           "既存ボタンとタグの類似度 ≥ 0.85 でバンドルの最下層へ",
           "1 投稿 1 本、容量超過はサイドメニューへ(V6)",
-          "説明(label)必須"
+          "説明(label)必須",
+          "auto: true のボタンはタイルごとに 1 回自動で実行(temp、旧 auto_hook の置き換え、auto_hook 権限が要る)。既定は false"
         ]
       },
       "calls": [

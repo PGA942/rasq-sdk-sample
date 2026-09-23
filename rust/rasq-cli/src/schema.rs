@@ -101,6 +101,28 @@ pub fn check_manifest(v: &Validator, registry: &[Slot], m: &Value, declared_slot
         if !a["accepts"].is_null() && a["slot"] != "composer.media" {
             f.errors.push(format!("action {} の accepts は slot = \"composer.media\" の宣言にだけ書けます", a["id"]));
         }
+        // ボタンの共通属性(docs/slots.md §2.11 v0.14): auto(初期状態 = temp)と placement。
+        let slot = a["slot"].as_str().unwrap_or("post.action");
+        if a["auto"] == true {
+            if a["destructive"] == true || a["autoHookForbidden"] == true {
+                f.errors.push(format!("action {} は destructive / autoHookForbidden なので auto: true(自動で動く)にできません", a["id"]));
+            }
+            if slot == "post.action" && !perms.contains(&"auto_hook") {
+                f.errors.push(format!("action {} の auto: true(タイルごとに自動で実行)には permissions に auto_hook が要ります", a["id"]));
+            }
+            if slot == "composer.media" && a["output"] != "filter" {
+                f.errors.push(format!("action {} の auto は output = \"filter\" の宣言にだけ書けます(replace / sticker は編集セッションを開く)", a["id"]));
+            }
+        }
+        if a["placement"] == "manual" && a["tags"].is_null() && a["genreTag"].is_null() {
+            f.warnings.push(format!("action {} は placement: manual で tags が無いので、検索でタグでは見つかりません(label だけ)", a["id"]));
+        }
+    }
+    // auto_hook を持つのに auto: true の post.action が無い = 過剰宣言(審査の許容の枠内で数えられる)。
+    if perms.contains(&"auto_hook")
+        && !m["actions"].as_array().into_iter().flatten().any(|a| a["auto"] == true && a["slot"].as_str().unwrap_or("post.action") == "post.action")
+    {
+        f.warnings.push("permissions に auto_hook がありますが、auto: true の post.action のボタンがありません(過剰宣言として数えられます)".into());
     }
     // 加工画面の下段バーのボタン宣言(docs/slots.md §2.2 v0.10)。無くても動くが、既定の見た目で画像にだけ出る。
     if slots.contains(&"composer.media") && !m["actions"].as_array().into_iter().flatten().any(|a| a["slot"] == "composer.media") {
@@ -116,4 +138,80 @@ pub fn check_manifest(v: &Validator, registry: &[Slot], m: &Value, declared_slot
         }
     }
     f
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn check(m: Value) -> Findings {
+        let v = manifest_validator().unwrap();
+        let reg = crate::embed::registry().unwrap();
+        check_manifest(&v, &reg, &m, None, None)
+    }
+
+    fn post_action(action: Value, perms: &[&str]) -> Value {
+        json!({
+            "schema": "rasq.plugin-manifest/1", "id": "sample.t", "name": "t", "version": "0.1.0", "kind": "action",
+            "slots": ["post.action"], "permissions": perms, "actions": [action]
+        })
+    }
+
+    #[test]
+    fn auto_on_post_action_needs_auto_hook_and_is_refused_for_destructive_buttons() {
+        // 権限が無い → error(スキーマと rasq check の両方が言う)。
+        let f = check(post_action(json!({"id": "a", "label": "a", "tags": ["Copy"], "auto": true}), &["fow.widget"]));
+        assert!(f.errors.iter().any(|e| e.contains("auto_hook")), "{:?}", f.errors);
+        // 権限があれば通る。
+        let f = check(post_action(json!({"id": "a", "label": "a", "tags": ["Copy"], "auto": true}), &["fow.widget", "auto_hook"]));
+        assert!(f.errors.is_empty(), "{:?}", f.errors);
+        // 壊す操作は自動で動かせない。
+        let f = check(post_action(json!({"id": "a", "label": "a", "tags": ["Copy"], "auto": true, "destructive": true}), &["fow.widget", "auto_hook"]));
+        assert!(f.errors.iter().any(|e| e.contains("destructive")), "{:?}", f.errors);
+    }
+
+    #[test]
+    fn auto_hook_without_an_auto_button_is_an_overdeclaration_warning() {
+        let f = check(post_action(json!({"id": "a", "label": "a", "tags": ["Copy"]}), &["fow.widget", "auto_hook"]));
+        assert!(f.errors.is_empty(), "{:?}", f.errors);
+        assert!(f.warnings.iter().any(|w| w.contains("auto_hook")), "{:?}", f.warnings);
+    }
+
+    #[test]
+    fn manual_placement_allows_omitting_tags_but_warns() {
+        let f = check(post_action(json!({"id": "a", "label": "a", "placement": "manual"}), &["fow.widget"]));
+        assert!(f.errors.is_empty(), "{:?}", f.errors);
+        assert!(f.warnings.iter().any(|w| w.contains("manual")), "{:?}", f.warnings);
+        // tags も placement も無いのは従来どおりスキーマ違反。
+        let f = check(post_action(json!({"id": "a", "label": "a"}), &["fow.widget"]));
+        assert!(!f.errors.is_empty());
+    }
+
+    #[test]
+    fn composer_media_auto_is_only_for_filters() {
+        let base = |action: Value| {
+            json!({
+                "schema": "rasq.plugin-manifest/1", "id": "sample.t", "name": "t", "version": "0.1.0", "kind": "action",
+                "slots": ["composer.media"], "permissions": ["fow.widget"], "actions": [action]
+            })
+        };
+        let f = check(base(json!({"id": "g", "slot": "composer.media", "label": "g", "tags": ["Filter"], "output": "filter", "auto": true})));
+        assert!(f.errors.is_empty(), "{:?}", f.errors);
+        let f = check(base(json!({"id": "g", "slot": "composer.media", "label": "g", "tags": ["Filter"], "auto": true})));
+        assert!(f.errors.iter().any(|e| e.contains("filter")), "{:?}", f.errors);
+    }
+
+    #[test]
+    fn bundled_templates_pass_the_check() {
+        let v = manifest_validator().unwrap();
+        let reg = crate::embed::registry().unwrap();
+        for name in ["post.action", "viewer.overlay", "composer.media"] {
+            let raw = crate::embed::TEMPLATES.get_file(format!("{name}/manifest.json")).unwrap().contents_utf8().unwrap();
+            let m: Value = serde_json::from_str(&raw.replace("{{id}}", "sample.t").replace("{{display}}", "t")).unwrap();
+            let f = check_manifest(&v, &reg, &m, Some(name), None);
+            assert!(f.errors.is_empty(), "{name}: {:?}", f.errors);
+        }
+    }
 }

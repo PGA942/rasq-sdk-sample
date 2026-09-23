@@ -1,9 +1,9 @@
-# RASQ スロットプラグイン契約 v0.13(正典)
+# RASQ スロットプラグイン契約 v0.14(正典)
 
 > **ここが正典。** 以前は `orgate-question/plugin-sample/*/CONTRACT.md` に同じ文書が複製されていたが、v0.8 から
 > 各リポジトリの `CONTRACT.md` はこのファイルへのポインタだけになった。節番号(§2.1〜§2.9 / §3 / §4 / §5)は複製時代のまま。
 > スロットの一覧と機械可読な契約(ティア / call / ホスト関数 / 権限 / ライフサイクル)は [`../schema/slots.json`](../schema/slots.json)
-> (D-005)、マニフェストは [`../schema/manifest.schema.json`](../schema/manifest.schema.json) v0.3、ActionRef / ActionKey は
+> (D-005)、マニフェストは [`../schema/manifest.schema.json`](../schema/manifest.schema.json) v0.5、ActionRef / ActionKey は
 > [`../schema/action-ref.schema.json`](../schema/action-ref.schema.json)(D-006)。文章とスキーマがずれたら **スキーマを直してから文章を直す**。
 
 [`../PROTOCOL.md`](../PROTOCOL.md)(wasm ABI / RRL / FOW / ホスト関数)の上に、**アプリの各所へ
@@ -143,6 +143,8 @@
   - ホストはフィルターごとに **掛かっているか / 完了時に apply が要るか / いまのパラメーター** を持つ(フラグ管理)。プレビューのレイヤーは動かせず、
     書き出しのとき pixels のぶんは外してから焼き込む。動画 / 音声のバーには出ない(v0.12 は画像だけ)。
 - `accepts` / `output` は `slot: "composer.media"` の宣言にだけ書ける。`actions[].slot` は `manifest.slots` にあるスロットだけ。
+- **初期状態(v0.14, §2.11 temp)**: `output: "filter"` のボタンは `auto`(省略 = `false`)で、加工画面を開いた瞬間にオンで
+  始めるか決められる。`replace` / `sticker` は編集セッションを開くので `auto` は書けない(`rasq check` が止める)。
 
 **ジャンル**は既定 5 種 + カスタム。既定の id は固定(ホストがラベル / アイコンを持つ):
 
@@ -202,6 +204,9 @@
   プラグインは条件(例: `#` で始まるトークン)を見て `fow.open`(候補一覧)し、そうでなければ `fow.close`。戻り `{}`。
 - `composer.text.replace {token, start, end, text}` — 本文の `[start, end)` を `text` に置き換える(UTF-16 code unit オフセット、Dart の `String` と同じ)。
 - ホストは FOW をコンポーザーの子(`parentId` 無しでも同じカラム)として開くので入力は隠れない。
+- **ON / OFF(v0.14, §2.11)**: ホストは入力欄の上に、`composer.text` のプラグインごとの ON / OFF チップを出す(キーは
+  `slot:<pluginId>:composer.text`)。見た目は `actions` に `slot: "composer.text"` の項目があればそれ(`label` / `icon`)、無ければ
+  `name`。初期状態は `auto`(省略 = `true`)。オフのあいだ `text.changed` は呼ばれない。
 
 ### 2.4 `viewer.overlay` — 全画面ビューワーの重ね
 
@@ -225,7 +230,10 @@
   ```
 
   `label` はツールチップと「アクションリストの編集」の検索に、`icon`(Material のアイコン名)はボタンに、`tags` は編集画面の
-  検索に使う。押したときの `call` は無い(ホストが有効 / 無効を切り替えて `slots.viewer` に保存し、有効なら画像を渡す)。
+  検索に使う。押したときの `call` は無い(ホストが有効 / 無効を切り替え、有効なら画像を渡す)。
+  **初期状態(v0.14)**: 全画面が開いた瞬間のオン / オフは `actions[].auto`(省略 = `true`)。面の中で切り替えた値は
+  その全画面限りで、次に開いたときは既定に戻る(§2.11 temp)。v0.13 までの「切り替えを `slots.viewer` に保存して次も引き継ぐ」は
+  やめた。利用者が「次からも自動でオン / オフ」を選べば、ホストの設定(`slots.global.auto`)が宣言の既定に勝つ。
   宣言が無ければホストが `name` と既定のアイコンで作る(v0.8 までのプラグインもそのまま並ぶ)。保存用のキーは
   ActionKey と同じ形の `slot:<pluginId>:viewer.overlay`(`id` には依らない)。`actions[].slot` を省略した項目は従来どおり
   `post.action` のボタン。
@@ -286,6 +294,14 @@ TL プラグインはタブではなく、簡略カスタマイズ UI / ノー�
   **バンドルの最下層**に足す(既存ボタンがユーザーのアクションリストに入っていればそのリストの末尾、入っていなければ
   既存ボタン + プラグインボタンの新しいバンドルを作る)。どれにも届かなければ単体ボタンとして末尾に並ぶ。
   類似度 = タグ同士の最大値(大文字小文字を無視した完全一致 = 1.0、それ以外は文字 2-gram の Dice 係数)。
+- **配置の宣言(v0.14, §2.11 placement)**: 上の自動配置は `placement: "auto"`(既定)。`placement: "manual"`(または `tags` を
+  省いた項目)は**自動では置かれず**、利用者が「プラグインボタンを検索」FOW で足すまで出ない。宣言しないことで自動配置を
+  防ぐ、という使い方(利用者が選んだときだけ出るボタン)。
+- **初期状態(v0.14, §2.11 temp)**: `auto: true` のボタンは、投稿タイルが作られたときに**そのタイルで 1 回**、
+  `post.action {…, "auto": true}` として自動で呼ばれる(FOW は開かないこと。`message` はトーストに出ない)。書けるのは
+  `permissions` に **`auto_hook`** を持つ(= 審査で自動実行を認められた)プラグインの、`destructive` でも `autoHookForbidden`
+  でもないボタンだけ。省略 = `false` = 利用者が押すまで動かない。v0.13 までの「auto_hook = フックの仕組み」はこれに置き換わり、
+  権限の名前だけ残る。
 - アカウントごとの **スロット設定**(「アクションリストの編集」の「プラグインボタン」節)で、ボタンごとの有効 / 無効と閾値を変えられる。
   「プラグインボタンを検索」FOW で登録済みプラグインの `actions` から探して足せる。既存ボタンの … → 「置き換え」で
   既存ボタンの位置にプラグインボタンを入れ替えられる。
@@ -326,6 +342,28 @@ TL プラグインはタブではなく、簡略カスタマイズ UI / ノー�
   ワークスペースに置ける。
 - ホスト(rasq-client): インストールすると画像を端末に保存し、加工画面の「ステッカー」に**パックごとの節**で並ぶ。
   ホストは配布物に wasm が 1 つでも入っていたらアセットパックとして扱わない(入れ物に紛れ込ませない)。
+
+### 2.11 ボタンの共通属性(v0.14): switch / temp(`auto`)/ placement
+
+投稿タイル(`post.action`)・全画面(`viewer.overlay`)・加工画面(`composer.media` の filter)・コンポーザー本文(`composer.text`)の
+プラグインボタンは、**ボタン(ActionKey = `slot:<pluginId>:<actionId>`)単位**で次の 3 つを持つ。どれも直交する。
+
+| 概念 | 意味 | 宣言(プラグインの既定) | 利用者の設定(上書き) |
+|---|---|---|---|
+| **switch** | 端末全体の主電源。オフなら全アカウント・全面で出ず、自動でも動かない | 無し(常に既定オン) | 設定画面の「プラグインボタン」でボタンごとに |
+| **temp**(`auto`) | 面が**作られた瞬間**の初期状態。オンで始めるか、オフ(手動)で始めるか。面の中で切り替えた値はその面限りで、永続しない | `actions[].auto`(省略 = 面ごとのホスト既定: viewer.overlay `true`、filter `false`、composer.text `true`、post.action `false`) | 設定画面と、面の中の長押し「次からも自動でオン / オフ」 |
+| **placement** | 宣言だけで自動配置されるか、利用者が (+) で足すまで出ないか | `actions[].placement: "auto" \| "manual"`(`tags` 無しの post.action は `manual`) | 無し(配置そのものは従来のアクションリストの編集) |
+
+- switch がオフなら temp は評価しない(オフが最優先)。switch がオンで temp がオフ = 面の中で手で押せば動く。
+- `post.action` の temp オン = そのタイルで 1 回自動で実行(§2.9)。これは v0.13 までの `auto_hook`(フック)の置き換えで、
+  権限 `auto_hook` は「`auto: true` を書ける」の意味に変わる。宣言に `auto: true` の post.action が 1 つも無いのに
+  `auto_hook` を持つのは過剰宣言(審査の許容の枠内で数える)。
+- サイドロード(未審査)のプラグインでは `auto` を読まず、ホスト既定だけを使う(`auto_hook` は `action` ティア = 審査済みのみ)。
+- 宣言に `auto` / `placement` の無い既存のプラグインは、見た目・挙動が変わらない(全画面のオン / オフだけが「永続」から
+  「面ローカル + 既定」になる。ホストは移行時に、保存されていた値を既定に写す)。
+- `rasq check`: `auto: true` × (`destructive` | `autoHookForbidden`)は error、post.action の `auto: true` に `auto_hook` が無ければ
+  error、composer.media の `auto` は `output: "filter"` だけ、`placement: "manual"` で `tags` が無ければ「検索でタグ一致しない」warning。
+  スキーマ(`manifest.schema.json` v0.5)も同じ規則を持つ。
 
 ## 3. RRL のホスト拡張(rasq-client D-167 以降。古いホストは無視/⚠ボックス)
 

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rasq.io/schema/plugin-manifest-0.3.json",
-  "title": "RASQ PluginManifest (function.json subset, v0.4.0 / rasq.plugin-manifest/1)",
+  "title": "RASQ PluginManifest (function.json subset, v0.5.0 / rasq.plugin-manifest/1)",
   "description": "プラグインのマニフェスト。SNS プラグインは function.json(examples/misskey.function.json)、スロットプラグインは call(\"plugin.manifest\") の答え(plugin-sample/CONTRACT.md §1)。v0.3 (D-005/D-006): schema / slots / roles / actions[].tags を正式化。slots の id は schema/slots.json の登録簿にあること。",
   "type": "object",
   "required": ["id", "name", "version", "kind"],
@@ -55,6 +55,11 @@
       "$comment": "post.action を宣言するなら actions が要る(§2.9)。",
       "if": { "properties": { "slots": { "contains": { "const": "post.action" } } }, "required": ["slots"] },
       "then": { "required": ["actions"], "properties": { "actions": { "minItems": 1 } } }
+    },
+    {
+      "$comment": "post.action のボタンを auto: true(タイルごとに自動で実行 = temp)にするには auto_hook 権限が要る (v0.14)。旧 auto_hook(フックの仕組み)はこれに置き換わり、権限の名前だけ残る。slot 省略 = post.action。",
+      "if": { "properties": { "actions": { "contains": { "allOf": [ { "properties": { "auto": { "const": true } }, "required": ["auto"] }, { "anyOf": [ { "not": { "required": ["slot"] } }, { "properties": { "slot": { "const": "post.action" } } } ] } ] } } }, "required": ["actions"] },
+      "then": { "required": ["permissions"], "properties": { "permissions": { "contains": { "const": "auto_hook" } } } }
     },
     {
       "$comment": "アセットパック(v0.11): assets が要り、コードに関わる宣言(slots / permissions / actions / roles)は書けない。ほかの kind は assets を書けない。",
@@ -116,9 +121,23 @@
         "countSource": { "type": "string", "enum": ["self", "first", "none"], "default": "self" },
         "autoHookForbidden": { "type": "boolean", "default": false },
         "destructive": { "type": "boolean", "default": false },
-        "iconPerPost": { "type": "boolean", "default": false, "description": "投稿ごとにアイコンを差し替え可(SNS プラグインとその配下のみ。D-017 / V7)" }
+        "iconPerPost": { "type": "boolean", "default": false, "description": "投稿ごとにアイコンを差し替え可(SNS プラグインとその配下のみ。D-017 / V7)" },
+        "auto": { "type": "boolean", "description": "temp (v0.14): 面(投稿タイル / 全画面 / 加工画面 / コンポーザー)が作られた瞬間のこのボタンの初期状態。true = 自動でオン(post.action ならタイルごとに 1 回自動で実行 = 旧 auto_hook の置き換え。permissions に auto_hook が要る)、false = オフ(手動で押す)。省略 = ホストの既定(viewer.overlay: true、composer.media の filter: false、composer.text: true、post.action: false)。利用者は設定で上書きでき、面の中で切り替えた値はその面限りで永続しない。post.action で auto: true を書けるのは destructive / autoHookForbidden でないボタンだけ。composer.media は output: \"filter\" だけ" },
+        "placement": { "type": "string", "enum": ["auto", "manual"], "default": "auto", "description": "強制 / 明示配置 (v0.14): auto = 宣言だけでホストが自動配置する(post.action は tags の類似度で既存ボタンのバンドルへ、届かなければ単体で末尾)。manual = 利用者がアクションバーの (+) で足すまで出ない(検索の候補には出る)。tags を省いた post.action のボタンは manual 扱い。全体のオン / オフ (switch) はホストの設定で、宣言には無い" }
       },
-      "anyOf": [{ "required": ["genreTag"] }, { "required": ["tags"] }]
+      "anyOf": [{ "required": ["genreTag"] }, { "required": ["tags"] }, { "properties": { "placement": { "const": "manual" } }, "required": ["placement"] }],
+      "allOf": [
+        {
+          "$comment": "auto: true は「利用者が押していないのに動く」なので、壊す操作 / 自動実行を断っているボタンには書けない (v0.14)。",
+          "if": { "properties": { "auto": { "const": true } }, "required": ["auto"] },
+          "then": { "properties": { "destructive": { "const": false }, "autoHookForbidden": { "const": false } } }
+        },
+        {
+          "$comment": "composer.media で初期状態を持てるのはカスタムフィルター(ON / OFF のボタン)だけ。replace / sticker は編集セッションを開くので自動では始めない。",
+          "if": { "properties": { "auto": { "const": true }, "slot": { "const": "composer.media" } }, "required": ["auto", "slot"] },
+          "then": { "required": ["output"], "properties": { "output": { "const": "filter" } } }
+        }
+      ]
     }
   }
 }

@@ -37,6 +37,7 @@
    5 ビルド           rasq build [--release]            dist/<id>-<version>.rasqpkg (+ .sig.json)
    (5')公開           rasq publish --central <url>      Central 管理 API への 3 要求(--dry-run で JSON)
    -                 rasq registry [slots|templates]   同梱の slots.json を表示
+   -                 rasq help <言葉…> [--central url]  同梱の文書 / 登録簿から探す(+ Central の掲載)
 ```
 
 ## 2. ワークスペース
@@ -220,6 +221,29 @@ rasq call rmqr viewer.open --args '{"token":"v1","mimeType":"image/png","width":
 - `rasq token list` — accountKey / host / 更新時刻と、トークンの先頭 4 文字だけ
 - `rasq token remove <accountKey>`
 - Central のトークン(`[central."<host>"]`)は同じファイルに置く想定(⑤ publish で使う)
+
+### ボタンの共通属性の検査(v0.14)
+
+`rasq check` は `manifest.actions[]` の `auto`(面が作られた瞬間の初期状態 = temp)と `placement`(auto / manual)を
+[slots.md §2.11](slots.md) の規則で見る: `auto: true` × `destructive` / `autoHookForbidden` は error、post.action の
+`auto: true` に権限 `auto_hook` が無ければ error、composer.media の `auto` は `output: "filter"` だけ、`placement: manual` で
+`tags` が無ければ warning、`auto_hook` を持つのに `auto: true` の post.action が無ければ warning(過剰宣言)。
+
+## 5.5 文書を探す(`rasq help`)
+
+```
+rasq help                         同梱の文書の一覧
+rasq help net.fetch               関数名 / スロット名 / 属性名 → その節(登録簿の hostFns、PROTOCOL、slots.md)
+rasq help auto                    manifest.actions[].auto の説明(スキーマの description)
+rasq help 全画面 初期状態 -n 3      言葉で探す(見出しの一致 > 本文の語の一致 > 文字 2-gram の Dice)
+rasq help --full post.action      節を省略せずに出す
+rasq help --central <url> QR       Central の掲載(ほかのプラグインの名前 / 概要)も探す。トークン不要
+rasq help --central <url> --plugin sample.media-fullscreen   そのプラグインの説明と権限の理由
+```
+
+探し方は rasq-client の RAi リファレンスと同じ考え(語の一致を最優先、それ以外は 2-gram の Dice)。埋め込みモデルは使わない
+(CLI はネット無し・軽量で動くことを優先)。文書は `docs/*.md` と `PROTOCOL.md` を見出し(`#`〜`###`)ごとに、登録簿はスロットごとに、
+マニフェストのボタン属性は 1 つずつ節にしている。
 
 ## 6. ビルド(`rasq build`)と配布物(実装済み)
 
