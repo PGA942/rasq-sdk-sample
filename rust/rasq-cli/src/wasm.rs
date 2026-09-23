@@ -82,8 +82,7 @@ impl Plugin {
 
     fn take(&mut self, packed: u64) -> Result<Vec<u8>> {
         let (ptr, len) = ((packed >> 32) as u32, (packed & 0xFFFF_FFFF) as u32);
-        let mut buf = vec![0u8; len as usize];
-        self.memory.read(&self.store, ptr as usize, &mut buf)?;
+        let buf = read_guest(&self.memory, &self.store, ptr, len)?;
         let dealloc: TypedFunc<(u32, u32), ()> = self.typed("dealloc")?;
         dealloc.call(&mut self.store, (ptr, len))?;
         Ok(buf)
@@ -116,11 +115,24 @@ impl Plugin {
     }
 }
 
+/// ゲストが指定した `(ptr, len)` を線形メモリから読む。確保より先に範囲を確かめる
+/// (`rasq_wasm_runtime_core::read_guest` と同じ。長さは u32 なので、先に確保すると最大 4 GiB を確保しにいく)。
+fn read_guest(memory: &Memory, ctx: impl wasmi::AsContext, ptr: u32, len: u32) -> Result<Vec<u8>, wasmi::Error> {
+    let (ptr, len) = (ptr as usize, len as usize);
+    let size = memory.data_size(&ctx);
+    if ptr.checked_add(len).is_none_or(|end| end > size) {
+        return Err(wasmi::Error::new(format!("guest buffer out of bounds: ptr {ptr} len {len} (memory {size} bytes)")));
+    }
+    // 直前で線形メモリの範囲 (ptr + len <= size) を確かめているので、この確保は size 以下。
+    let mut buf = vec![0u8; len];
+    memory.read(&ctx, ptr, &mut buf)?;
+    Ok(buf)
+}
+
 /// `rasq.host_fn` の代役: 決め打ちの応答があればそれを、無ければ `E01`(ホスト無し)。呼び出しは記録する。
 fn host_fn_stub(mut caller: Caller<'_, HostState>, ptr: u32, len: u32) -> Result<u64, wasmi::Error> {
     let memory = caller.get_export("memory").and_then(|e| e.into_memory()).ok_or_else(|| wasmi::Error::new("no memory"))?;
-    let mut req = vec![0u8; len as usize];
-    memory.read(&caller, ptr as usize, &mut req).map_err(|e| wasmi::Error::new(e.to_string()))?;
+    let req = read_guest(&memory, &caller, ptr, len)?;
     let req: Value = serde_json::from_slice(&req).unwrap_or(Value::Null);
     let call_id = req["callId"].as_str().unwrap_or("").to_string();
     let fn_name = req["fn"].as_str().unwrap_or("").to_string();

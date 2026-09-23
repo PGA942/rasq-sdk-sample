@@ -7,6 +7,14 @@
 //! only shuttles bytes across the host<->wasm boundary, it does not
 //! interpret the messages.
 
+// ホストの panic はアプリごと落ちる。プラグイン由来の値 (線形メモリ、host_fn の要求 JSON、wasm の
+// 戻り値) を扱う本体では unwrap / expect / panic を使わない (.semgrep/rasq-sdk.yml の
+// rasq-runtime-panic と同じ約束。CI の `rust` ジョブが clippy -D warnings で見る。テストは除く)。
+#![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unreachable, clippy::todo, clippy::unimplemented))]
+// C ABI (`rasq_wasm_*`) は埋込側 (Dart FFI) から生ポインタで呼ばれる。Rust の呼び出し元は無いので
+// `unsafe fn` にしても契約は伝わらず、各関数の doc に書いた所有権と null の扱いがその契約。
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::slice;
 use std::time::Duration;
@@ -156,8 +164,8 @@ struct HostState {
     native_fetch: bool,
     /// 壁時計の上限。ネイティブ `net.fetch` 一回ぶんの全体タイムアウト。
     fetch_timeout_ms: u64,
-    /// ネイティブ `net.fetch` が繋いでよいホスト(マニフェストの `network.hosts`
-    /// + 埋込側が今のセッションに与えたインスタンスのホスト)。小文字。
+    /// ネイティブ `net.fetch` が繋いでよいホスト(マニフェストの `network.hosts` と、
+    /// 埋込側が今のセッションに与えたインスタンスのホスト)。小文字。
     /// **空 = どこにも繋げない**(fail-closed): 埋込側が設定を忘れた時点で
     /// 黙って全開になる既定値にはしない。
     fetch_hosts: Vec<String>,
@@ -335,8 +343,7 @@ impl RasqWasmInstance {
         let packed = packed as u64;
         let ptr = (packed >> 32) as u32;
         let len = (packed & 0xFFFF_FFFF) as u32;
-        let mut buf = vec![0u8; len as usize];
-        self.memory.read(&mut self.store, ptr as usize, &mut buf)?;
+        let buf = read_guest(&self.memory, &self.store, ptr, len)?;
         let dealloc: TypedFunc<(u32, u32), ()> = self.typed_func("dealloc")?;
         dealloc.call(&mut self.store, (ptr, len))?;
         Ok(buf)
@@ -382,6 +389,22 @@ impl RasqWasmInstance {
     }
 }
 
+/// ゲストが指定した `(ptr, len)` を線形メモリから読む。**確保より先に範囲を確かめる**:
+/// `len` はゲストが自由に決める u32 なので、先に `vec![0; len]` すると最大 4 GiB を
+/// 確保しにいき、線形メモリの範囲外 (wasmi の `read` が失敗する) と分かる前にホストが
+/// abort する。ゲスト由来の長さでの確保はここ 1 箇所だけ (.semgrep の rasq-guest-len-alloc)。
+fn read_guest(memory: &Memory, ctx: impl wasmi::AsContext, ptr: u32, len: u32) -> Result<Vec<u8>, wasmi::Error> {
+    let (ptr, len) = (ptr as usize, len as usize);
+    let size = memory.data_size(&ctx);
+    if ptr.checked_add(len).is_none_or(|end| end > size) {
+        return Err(wasmi::Error::new(format!("guest buffer out of bounds: ptr {ptr} len {len} (memory {size} bytes)")));
+    }
+    // 直前で線形メモリの範囲 (ptr + len <= size) を確かめているので、この確保は size 以下。
+    let mut buf = vec![0u8; len];
+    memory.read(&ctx, ptr, &mut buf)?;
+    Ok(buf)
+}
+
 /// Implements the `rasq.host_fn` import (PROTOCOL.md §4.1, synchronous v1):
 /// read the request JSON from wasm memory → call the embedder's callback →
 /// allocate the response inside wasm memory (via the plugin's `alloc`) and
@@ -391,10 +414,7 @@ fn host_fn_impl(mut caller: Caller<'_, HostState>, ptr: u32, len: u32) -> Result
         Some(m) => m,
         None => return Err(wasmi::Error::new("plugin has no exported memory")),
     };
-    let mut request = vec![0u8; len as usize];
-    memory
-        .read(&caller, ptr as usize, &mut request)
-        .map_err(|e| wasmi::Error::new(format!("host_fn: bad request buffer: {e}")))?;
+    let request = read_guest(&memory, &caller, ptr, len).map_err(|e| wasmi::Error::new(format!("host_fn: bad request buffer: {e}")))?;
 
     // 通信の形の控え: ネイティブ経路でも埋込側の経路でも、要求はここを通る。
     if let Ok(req) = serde_json::from_slice::<serde_json::Value>(&request) {
@@ -442,15 +462,17 @@ fn host_fn_impl(mut caller: Caller<'_, HostState>, ptr: u32, len: u32) -> Result
     let response: String = match caller.data().callback {
         None => r#"{"ok":false,"error":{"code":"E00","message":"no host_fn handler registered"}}"#.to_string(),
         Some(callback) => {
-            let request_c = CString::new(request)
-                .unwrap_or_else(|_| CString::new("{}").unwrap());
+            // 要求に NUL が混ざっていたら (JSON としては不正) 空の要求に置き換える。
+            let request_c = CString::new(request).unwrap_or_else(|_| c"{}".to_owned());
             let user_data = caller.data().user_data as *mut c_void;
             let raw = callback(request_c.as_ptr(), user_data);
             if raw.is_null() {
                 r#"{"ok":false,"error":{"code":"E00","message":"host_fn handler returned null"}}"#.to_string()
             } else {
                 // Ownership: the callback allocated this via rasq_wasm_string_dup.
+                // nosemgrep: rasq-unsafe-outside-c-abi — 埋込側 (C ABI の callback) が rasq_wasm_string_dup で確保した NUL 終端文字列。ここで読んで解放する
                 let s = unsafe { CStr::from_ptr(raw) }.to_string_lossy().into_owned();
+                // nosemgrep: rasq-unsafe-outside-c-abi — 同上 (所有権はこの関数に移っている)
                 unsafe { drop(CString::from_raw(raw)) };
                 s
             }
@@ -476,8 +498,6 @@ fn write_response(caller: &mut Caller<'_, HostState>, memory: Memory, bytes: &[u
     Ok((((out_ptr as u64) << 32) | bytes.len() as u64) as i64)
 }
 
-/// Serves one `net.fetch` request with blocking ureq (host-fn schema:
-/// args {method, url, headers?, body?} → value {status, headers, bodyText}).
 // ---- gpu.compute (D-081) --------------------------------------------------
 // WGSL compute 専用の狭い GPU 口: 入力 1 バッファ(binding 0, read-only
 // storage)→ 出力 1 バッファ(binding 1, read_write storage)の 1 パス。
@@ -697,7 +717,7 @@ fn fetch_shape(args: &serde_json::Value) -> Option<(String, serde_json::Value)> 
         return None;
     }
     let host = url_host(url);
-    let rest = url.splitn(2, "://").nth(1).unwrap_or("");
+    let rest = url.split_once("://").map_or("", |x| x.1);
     let after_authority = rest.find('/').map(|i| &rest[i..]).unwrap_or("/");
     let (path, query) = match after_authority.split_once('?') {
         Some((p, q)) => (p, q.split('#').next().unwrap_or("")),
@@ -733,9 +753,13 @@ fn fetch_shape(args: &serde_json::Value) -> Option<(String, serde_json::Value)> 
 }
 
 /// URL のホスト部(小文字、userinfo とポートは落とす)。スキーム付きの URL だけ渡すこと。
+///
+/// 切り出しは、実際に接続する ureq (WHATWG の `url` クレート) と同じ区切りで行う。特に `\` は
+/// http(s) では `/` と同じ authority の終わりで、ここを見落とすと `https://evil.example\@good.example/`
+/// が「userinfo 付きの good.example」に見えて許可を素通りする (`url` は evil.example に繋ぐ)。
 fn url_host(url: &str) -> String {
-    let rest = url.splitn(2, "://").nth(1).unwrap_or("");
-    let authority = rest.split(|c| c == '/' || c == '?' || c == '#').next().unwrap_or("");
+    let rest = url.split_once("://").map_or("", |x| x.1);
+    let authority = rest.split(['/', '\\', '?', '#']).next().unwrap_or("");
     let host = authority.rsplit('@').next().unwrap_or("");
     // IPv6 リテラル `[::1]:8080` はポートの ':' と区別がつかないので、括弧を先に見る。
     let host = if let Some(stripped) = host.strip_prefix('[') {
@@ -769,6 +793,8 @@ fn host_permitted(host: &str, patterns: &[String]) -> bool {
     })
 }
 
+/// Serves one `net.fetch` request with blocking ureq (host-fn schema:
+/// args {method, url, headers?, body?} → value {status, headers, bodyText}).
 fn native_fetch_response(req: &serde_json::Value, timeout_ms: u64, hosts: &[String]) -> serde_json::Value {
     let call_id = req["callId"].clone();
     let args = &req["args"];
@@ -865,7 +891,7 @@ fn result_to_c_string<T: Into<String>>(result: Result<T, RasqWasmError>) -> *mut
         Err(e) => serde_error_json(&e),
     };
     CString::new(s)
-        .unwrap_or_else(|_| CString::new("{\"ok\":false,\"error\":{\"code\":\"D01\",\"message\":\"nul in output\"}}").unwrap())
+        .unwrap_or_else(|_| c"{\"ok\":false,\"error\":{\"code\":\"D01\",\"message\":\"nul in output\"}}".to_owned())
         .into_raw()
 }
 
@@ -1424,6 +1450,27 @@ mod tests {
         assert_eq!(url_host("http://[::1]:8080/"), "::1");
         assert_eq!(url_host("https://evil.example/?u=@good.example"), "evil.example");
         assert_eq!(url_host("https://"), "");
+        // `\` は http(s) では `/` と同じ (WHATWG URL)。`url` クレートは evil.example に繋ぐので、こちらもそう読む。
+        assert_eq!(url_host("https://evil.example\\@good.example/api"), "evil.example");
+        assert_eq!(url_host("https://good.example\\.evil.example/"), "good.example");
+    }
+
+    #[test]
+    fn guest_length_is_bounds_checked_before_allocation() {
+        // ゲストが返す packed の長さは自由に決められる。範囲外なら確保せずに C02 で返る。
+        const BOGUS_LEN_WAT: &str = r#"
+            (module
+              (memory (export "memory") 1)
+              (func (export "alloc") (param i32) (result i32) (i32.const 0))
+              (func (export "dealloc") (param i32 i32))
+              (func (export "call") (param i32 i32 i32 i32 i32 i32) (result i64)
+                (i64.const 0xFFFFFFFF)))
+        "#;
+        let mut instance = RasqWasmInstance::load_plain(BOGUS_LEN_WAT.as_bytes()).expect("instantiate");
+        let err = instance.call("x", "{}", "call-bogus").expect_err("out-of-bounds length must fail");
+        let json = serde_error_json(&err);
+        assert!(json.contains("out of bounds"), "{json}");
+        assert!(json.contains(r#""code":"C02""#), "{json}");
     }
 
     #[test]

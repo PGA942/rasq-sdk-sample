@@ -50,7 +50,7 @@ fn roots(root: &Path, ws: &crate::workspace::Workspace) -> Vec<PathBuf> {
     v
 }
 
-fn walk(base: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     let mut entries: Vec<_> = std::fs::read_dir(dir).with_context(|| format!("{} を読めません", dir.display()))?.collect::<std::io::Result<_>>()?;
     entries.sort_by_key(|e| e.file_name());
     for e in entries {
@@ -64,7 +64,7 @@ fn walk(base: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
             if SKIP_DIRS.contains(&name.as_str()) || name.starts_with('.') {
                 continue;
             }
-            walk(base, &p, out)?;
+            walk(&p, out)?;
         } else if ft.is_file() {
             if name.starts_with('.') {
                 continue;
@@ -88,7 +88,7 @@ pub fn archive(root: &Path, ws: &crate::workspace::Workspace, bundle: &Value) ->
     }
     for dir in roots(root, ws) {
         if dir.is_dir() {
-            walk(root, &dir, &mut files)?;
+            walk(&dir, &mut files)?;
         }
     }
     files.sort();
@@ -162,6 +162,7 @@ pub fn archive(root: &Path, ws: &crate::workspace::Workspace, bundle: &Value) ->
 /// `rustc --version` と `cargo --version`(取れなければ空)。再現ビルドの手掛かりとして記録するだけ。
 fn toolchain() -> Value {
     let run = |cmd: &str| {
+        // nosemgrep: rasq-command-spawn — 引数は固定 ("--version")。cmd は下の "rustc" / "cargo" だけで、外の文字列は入らない
         std::process::Command::new(cmd)
             .arg("--version")
             .output()

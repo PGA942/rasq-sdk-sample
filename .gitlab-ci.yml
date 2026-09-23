@@ -2,6 +2,7 @@
 # - rust: builds the wasm plugin sample + runs the wasmi runtime tests
 # - dart: runs the Flutter FFI plugin's tests (the build hook shells out to
 #   cargo, so Rust is installed in that job too).
+# - schema / deny / semgrep: 契約の検証と静的チェック (README「静的チェック」)。
 # Flutter: ghcr.io/cirruslabs/flutter has no 3.47.x tag, so the dart job starts from
 # the 3.44.0 image and switches the SDK checkout to FLUTTER_PIN (Dart 3.13 is needed).
 stages:
@@ -35,6 +36,9 @@ rust:
     - cargo build --release --target wasm32-unknown-unknown -p bluesky-wasm
     - cargo test
     - cargo test --release -p rasq_wasm_runtime_core
+    # ホスト側の 2 クレート (ランタイム本体と CLI) は clippy も -D warnings で (README「静的チェック」)。rust:1 は minimal プロファイルなので clippy を足す
+    - rustup component add clippy
+    - cargo clippy --all-targets -p rasq_wasm_runtime_core -p rasq-cli -- -D warnings
     # rasq CLI (docs/cli.md): 全雛形を new → check(wasm32 ビルド → plugin.manifest 往復 → スキーマ → cargo test)→ token / dev
     - cargo build -p rasq-cli
     - export RASQ=$PWD/target/debug/rasq
@@ -65,6 +69,34 @@ rust:
     - $RASQ inspect dist/ci.third.tpl-0.1.0.rasqpkg
     - $RASQ publish --central http://central.invalid:8080 --dry-run --no-build
     - test -f dist/publish/ci.third.tpl-0.1.0/04-upload-bundle.bin && test -f dist/publish/ci.third.tpl-0.1.0/03-publish-version.json
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+
+# 依存の脆弱性 (RustSec)・ライセンス・出どころ (deny.toml)。schedule でも回す: 新しい advisory は
+# 依存を変えなくても出るので、MR が無い日にも気づけるように。ワークスペースは rust/ にある。
+deny:
+  stage: test
+  image: rust:1
+  variables:
+    CARGO_DENY_VERSION: "0.20.2"
+  script:
+    - curl -sSfL "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz" | tar xz --strip-components=1 -C /usr/local/bin
+    - cargo deny --manifest-path rust/Cargo.toml check
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+
+# このコードベースの約束 (.semgrep/、README の「静的チェック」)。規則の例で規則そのものを確かめてから rust/ に掛ける。
+# `--test` にディレクトリ .semgrep を渡すと隠しディレクトリとして飛ばされ「No unit tests found」で通ってしまうので、
+# 規則と例のファイルを直接指定する。
+semgrep:
+  stage: test
+  image: semgrep/semgrep:1.177.0
+  script:
+    - semgrep --test --metrics=off --config .semgrep/rasq-sdk.yml .semgrep/rasq-sdk.rs
+    - semgrep scan --metrics=off --error --config .semgrep --exclude .semgrep rust
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH

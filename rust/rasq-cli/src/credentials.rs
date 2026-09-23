@@ -116,5 +116,6 @@ pub fn now() -> String {
 /// 端末に出す用: 先頭 4 文字だけ。
 pub fn mask(token: &str) -> String {
     let head: String = token.chars().take(4).collect();
+    // nosemgrep: rasq-secret-in-output — 出すのは先頭 4 文字と文字数だけ (これが伏字にする側)
     format!("{head}…({} 文字)", token.chars().count())
 }
