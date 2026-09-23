@@ -282,17 +282,87 @@ pub fn serialize(p: &Package) -> Result<Vec<u8>> {
     Ok(enc.finish()?)
 }
 
-/// `.rasqpkg` を全部読む(bundle.json / SHA512SUMS も含む)。
+/// 展開の上限(zstd 爆弾の対策)。`.rasqpkg` は他人の配布物で、`inspect` / `init --base` は中身を全部メモリに読む。
+/// 圧縮率に上限は無い(0 が続くだけの 1 GiB は数十 KiB に縮む)ので、展開した量で切る。
+/// モデル本体(onnx / gguf、lazy = false)を同梱できるので 1 ファイルは大きめに取ってある。
+#[derive(Clone, Copy)]
+pub struct ExtractLimits {
+    /// 中身の合計(tar のヘッダが申告する大きさの和)
+    pub total_bytes: u64,
+    /// 1 ファイル
+    pub entry_bytes: u64,
+    /// エントリの数
+    pub entries: usize,
+    /// zstd を解いた tar の流れそのもの(ヘッダ / 詰め物 / GNU の長い名前 / PAX を含む)。
+    /// 申告の検査より先に効く最後の線で、長い名前のエントリ(tar crate が丸ごとメモリに読む)もこれで止まる。
+    pub stream_bytes: u64,
+}
+
+impl ExtractLimits {
+    /// 合計 1 GiB / 1 ファイル 512 MiB / 4096 エントリ。流れは合計 + 64 MiB
+    /// (ヘッダと詰め物は 1 エントリ高々 1 KiB = 4096 エントリで 4 MiB)。
+    pub const DEFAULT: ExtractLimits = ExtractLimits {
+        total_bytes: 1024 * 1024 * 1024,
+        entry_bytes: 512 * 1024 * 1024,
+        entries: 4096,
+        stream_bytes: 1024 * 1024 * 1024 + 64 * 1024 * 1024,
+    };
+}
+
+/// 読んだ量が `left` を超えたらエラーにする Read。
+struct Capped<R> {
+    inner: R,
+    left: u64,
+}
+
+impl<R: Read> Read for Capped<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        if self.left == 0 {
+            // ちょうど上限で終わる入力は通す。まだ続くならそこで止める。
+            let mut one = [0u8; 1];
+            return match self.inner.read(&mut one)? {
+                0 => Ok(0),
+                _ => Err(std::io::Error::other("展開後の大きさが上限を超えました(zstd 爆弾?)")),
+            };
+        }
+        let n = buf.len().min(usize::try_from(self.left).unwrap_or(usize::MAX));
+        let got = self.inner.read(&mut buf[..n])?;
+        self.left -= got as u64;
+        Ok(got)
+    }
+}
+
+/// `.rasqpkg` を全部読む(bundle.json / SHA512SUMS も含む)。上限は [`ExtractLimits::DEFAULT`]。
 pub fn extract(bytes: &[u8]) -> Result<Vec<Entry>> {
+    extract_with(bytes, &ExtractLimits::DEFAULT)
+}
+
+pub fn extract_with(bytes: &[u8], limits: &ExtractLimits) -> Result<Vec<Entry>> {
     let dec = zstd::Decoder::new(bytes).context("zstd として読めません(.rasqpkg ではない?)")?;
-    let mut ar = tar::Archive::new(dec);
+    let mut ar = tar::Archive::new(Capped { inner: dec, left: limits.stream_bytes });
     let mut out = Vec::new();
+    let mut total: u64 = 0;
     for e in ar.entries().context("tar として読めません")? {
-        let mut e = e.context("zstd + tar として読めません(.rasqpkg ではない?)")?;
+        let mut e = e.context("zstd + tar として読めません(.rasqpkg ではない? 展開後の大きさが上限を超えた?)")?;
         let path = e.path()?.to_string_lossy().into_owned();
         check_path(&path)?;
+        if out.len() >= limits.entries {
+            bail!("エントリが多すぎます(上限 {} 個)", limits.entries);
+        }
+        // 読む前に申告の大きさで切る(読んでから数えると、その 1 ファイルぶんはメモリに載ってしまう)。
+        let size = e.size();
+        if size > limits.entry_bytes {
+            bail!("{path}: 展開後 {size} バイトは 1 ファイルの上限 {} バイトを超えます", limits.entry_bytes);
+        }
+        total = total.saturating_add(size);
+        if total > limits.total_bytes {
+            bail!("展開後の合計が上限 {} バイトを超えます({path} まで {total} バイト)", limits.total_bytes);
+        }
         let mut b = Vec::new();
-        e.read_to_end(&mut b)?;
+        (&mut e).take(size).read_to_end(&mut b).with_context(|| format!("{path} を読めません"))?;
         out.push(Entry { path, bytes: b });
     }
     if out.first().map(|e| e.path.as_str()) != Some(BUNDLE) {
@@ -410,3 +480,79 @@ pub fn describe(p: &Package) -> String {
 }
 
 use std::fmt::Write as _;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pack(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut tar = tar::Builder::new(Vec::new());
+        for (path, bytes) in files {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(bytes.len() as u64);
+            h.set_mode(0o644);
+            h.set_cksum();
+            tar.append_data(&mut h, path, *bytes).unwrap();
+        }
+        zstd::encode_all(&tar.into_inner().unwrap()[..], 3).unwrap()
+    }
+
+    const SMALL: ExtractLimits = ExtractLimits { total_bytes: 4096, entry_bytes: 2048, entries: 4, stream_bytes: 64 * 1024 };
+
+    #[test]
+    fn extract_within_the_limits() {
+        let bytes = pack(&[(BUNDLE, b"{}"), ("a.wasm", &[1u8; 2048]), ("b/c.json", &[2u8; 2000])]);
+        let out = extract_with(&bytes, &SMALL).unwrap();
+        assert_eq!(out.iter().map(|e| (e.path.as_str(), e.bytes.len())).collect::<Vec<_>>(), [(BUNDLE, 2), ("a.wasm", 2048), ("b/c.json", 2000)]);
+    }
+
+    #[test]
+    fn extract_refuses_too_many_entries() {
+        let files: Vec<(String, Vec<u8>)> = (0..5).map(|i| (if i == 0 { BUNDLE.to_string() } else { format!("f{i}") }, vec![0u8; 1])).collect();
+        let refs: Vec<(&str, &[u8])> = files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
+        let err = extract_with(&pack(&refs), &SMALL).err().unwrap().to_string();
+        assert!(err.contains("エントリが多すぎます"), "{err}");
+    }
+
+    #[test]
+    fn extract_refuses_a_file_over_the_per_file_cap() {
+        let big = vec![0u8; 2049];
+        let err = extract_with(&pack(&[(BUNDLE, b"{}"), ("model.onnx", &big)]), &SMALL).err().unwrap().to_string();
+        assert!(err.contains("1 ファイルの上限"), "{err}");
+    }
+
+    #[test]
+    fn extract_refuses_a_total_over_the_cap() {
+        let part = vec![0u8; 2000];
+        let err = extract_with(&pack(&[(BUNDLE, b"{}"), ("a", &part), ("b", &part), ("c", &part)]), &SMALL).err().unwrap().to_string();
+        assert!(err.contains("合計が上限"), "{err}");
+    }
+
+    #[test]
+    fn extract_stops_a_stream_over_the_cap() {
+        // 申告の検査が効かない部分(GNU の長い名前は tar crate がそのままメモリに読む)も流れの上限で止まる。
+        let long = format!("{}/x", "a".repeat(8000));
+        let limits = ExtractLimits { stream_bytes: 4096, ..SMALL };
+        let err = extract_with(&pack(&[(BUNDLE, b"{}"), (&long, b"1")]), &limits).err().unwrap();
+        assert!(format!("{err:#}").contains("上限を超えました"), "{err:#}");
+    }
+
+    #[test]
+    fn extract_refuses_a_zstd_bomb_before_reading_it() {
+        // 既定の上限で: 0 が 512 MiB + 1 続くエントリは圧縮すると 1 MiB を切る。申告の大きさで、読む前に切れる。
+        let n = ExtractLimits::DEFAULT.entry_bytes + 1;
+        let mut tar = tar::Builder::new(zstd::Encoder::new(Vec::new(), 1).unwrap());
+        for (path, size) in [(BUNDLE, 2u64), ("zeros.bin", n)] {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(size);
+            h.set_mode(0o644);
+            h.set_cksum();
+            let data: Box<dyn Read> = if size == 2 { Box::new(&b"{}"[..]) } else { Box::new(std::io::repeat(0).take(size)) };
+            tar.append_data(&mut h, path, data).unwrap();
+        }
+        let bomb = tar.into_inner().unwrap().finish().unwrap();
+        assert!(bomb.len() < 1024 * 1024, "{}", bomb.len());
+        let err = extract(&bomb).err().unwrap().to_string();
+        assert!(err.contains("1 ファイルの上限"), "{err}");
+    }
+}

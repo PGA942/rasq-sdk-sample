@@ -68,6 +68,17 @@ FFI_PLUGIN_EXPORT uint64_t rasq_wasm_fuel_budget_standard(void);
 // host changes.
 FFI_PLUGIN_EXPORT void rasq_wasm_set_fetch_hosts(RasqWasmInstance *instance, const char *hosts);
 
+// Grants or revokes gpu.compute (D-081) for this instance. Pass true only
+// when the plugin's manifest declares the `gpu_ml` permission and the store
+// review approved it. gpu.compute is served inside the runtime, so the
+// host-function callback's own permission checks never see it — this flag
+// is the gate. A fresh instance starts closed: every gpu.compute answers
+// E01 (permission denied) until this is called with true. Requests are also
+// bounded inside the runtime (input 64 MiB, outputSize a multiple of 4 up to
+// 64 MiB, WGSL 256 KiB, workgroups <= the device limit per dimension and
+// 2^20 in total, 10 s wall clock) — see docs/host-functions.md.
+FFI_PLUGIN_EXPORT void rasq_wasm_set_gpu_compute(RasqWasmInstance *instance, bool enabled);
+
 // Takes the net.fetch request *shapes* this instance has seen for the first
 // time since the previous call, as a JSON array of {hash, shape} (or a single
 // {overflow: true} once the per-instance cap is exceeded). A shape carries no

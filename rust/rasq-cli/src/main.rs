@@ -840,12 +840,22 @@ fn inspect(path: &Path, extract: Option<&Path>) -> Result<()> {
         println!("  {:>9}  {}", e.bytes.len(), e.path);
     }
     let sp = key::sig_path(path);
+    // 署名が合わないのは「中身が差し替わった」か「別の鍵」。表示だけして 0 で終わると、スクリプトや CI から見て通ってしまう。
+    let mut sig_error = None;
     if sp.is_file() {
         let sig: Value = serde_json::from_slice(&std::fs::read(&sp)?)?;
         let digest: [u8; 64] = Sha512::digest(&bytes).into();
         match key::verify(&sig, &digest) {
-            Ok(pk) => println!("署名: ok(開発者鍵 指紋 {})", key::fingerprint(&pk)),
-            Err(e) => println!("署名: NG — {e}"),
+            Ok(pk) => {
+                // 公開鍵は .sig.json 自身に書いてある = 誰でも自分の鍵で署名し直せる。合っていることは「この鍵で署名された」までしか言わない。
+                println!("署名: ok(ただし鍵は .sig.json の自己申告)");
+                println!("  自己申告の開発者鍵: 指紋 {}  public {pk}", key::fingerprint(&pk));
+                println!("  この指紋を開発者が登録している鍵(Central の掲載 / 開発者本人の告知)と見比べてください。違えば別人の署名です");
+            }
+            Err(e) => {
+                println!("署名: NG — {e}");
+                sig_error = Some(e);
+            }
         }
     } else {
         println!("署名: なし({} が無い)", sp.file_name().unwrap().to_string_lossy());
@@ -860,12 +870,16 @@ fn inspect(path: &Path, extract: Option<&Path>) -> Result<()> {
     }
     if ins.problems.is_empty() {
         println!("目次と中身: ok");
-        Ok(())
     } else {
         for p in &ins.problems {
             println!("  ERROR: {p}");
         }
-        bail!("{} 件の問題", ins.problems.len());
+    }
+    match (ins.problems.len(), sig_error) {
+        (0, None) => Ok(()),
+        (0, Some(e)) => bail!("署名の検証に失敗しました: {e}"),
+        (n, None) => bail!("{n} 件の問題"),
+        (n, Some(e)) => bail!("{n} 件の問題、署名の検証にも失敗しました: {e}"),
     }
 }
 
