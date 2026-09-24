@@ -44,8 +44,8 @@ rasq-client(Flutter)を起動し、カタログ → **「WASMプラグイン試�
 
 misskey-wasm-sample は同梱アセットとして最初から読み込まれており、
 `TL取得` で実際の Misskey local TL(net.fetch 経由)を RRL で描画する
-(ただし同梱アセットは下の**制限モード**なので `net.fetch` は `E01` になる。ネットワークを使う機能は、自分の鍵で署名した
-`.rasqpkg` を入れて試す)。
+(アプリに同梱しているアセットはアプリと同じ信頼で**フル**なので、そのまま動く。自分で作ったものをネットワーク込みで試すときは、
+下の**制限モード**を避けるために自分の鍵で署名した `.rasqpkg` を入れる)。
 
 ### サイドロードの 2 つのモード(全機能モード / 制限モード)
 
@@ -55,7 +55,8 @@ misskey-wasm-sample は同梱アセットとして最初から読み込まれて
   1. `rasq key init`(1 度だけ。`~/.config/rasq/dev-key.toml` に鍵を作る)→ `rasq key show` で指紋を見る
   2. Web コンソールの `/console/keys` で、その鍵を自分の RASQ アカウントに登録する
   3. `rasq build` → `dist/<id>-<version>.rasqpkg`(+ `.sig.json`)を、同じ RASQ アカウントでログインした rasq-client の試験画面から入れる
-- **制限モード**: それ以外 — 署名の無いもの、ほかの人の鍵のもの、`rasq dev` の**生の `.wasm`**(上の「パスからインポート」)、`asset:` の同梱バンドル。
+- **制限モード**: それ以外 — 署名の無いもの、ほかの人の鍵のもの、`rasq dev` の**生の `.wasm`**(上の「パスからインポート」)、あとから入れた `asset:`。
+  アプリに同梱しているアセットは例外でフル。
   `net.fetch` / `gpu.compute` / `storage.unsafe` は `network` などを宣言していても `E01`、FOW は `fow.widget` だけ、
   `composer.open` / `astell.share` / `mute.add` / `url.open` も `E01`(`clipboard.set` / `toast` は使える)、燃料と時間の上限は半分、
   `actions[].auto` は読まない。描画のスロット(`post.transform` / `tl` / `viewer.overlay` の描画)は動く。
