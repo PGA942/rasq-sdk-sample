@@ -110,9 +110,10 @@ pub fn check_manifest(v: &Validator, registry: &[Slot], m: &Value, declared_slot
             if slot == "post.action" && !perms.contains(&"auto_hook") {
                 f.errors.push(format!("action {} の auto: true(タイルごとに自動で実行)には permissions に auto_hook が要ります", a["id"]));
             }
-            if slot == "composer.media" && a["output"] != "filter" {
-                f.errors.push(format!("action {} の auto は output = \"filter\" の宣言にだけ書けます(replace / sticker は編集セッションを開く)", a["id"]));
-            }
+        }
+        // composer.media で初期状態を持つのはフィルターだけ。replace / sticker には true でも false でも書けない。
+        if !a["auto"].is_null() && slot == "composer.media" && a["output"] != "filter" {
+            f.errors.push(format!("action {} の auto は output = \"filter\" の宣言にだけ書けます(replace / sticker は状態を持たない)", a["id"]));
         }
         if a["placement"] == "manual" && a["tags"].is_null() && a["genreTag"].is_null() {
             f.warnings.push(format!("action {} は placement: manual で tags が無いので、検索でタグでは見つかりません(label だけ)", a["id"]));
@@ -200,6 +201,9 @@ mod tests {
         let f = check(base(json!({"id": "g", "slot": "composer.media", "label": "g", "tags": ["Filter"], "output": "filter", "auto": true})));
         assert!(f.errors.is_empty(), "{:?}", f.errors);
         let f = check(base(json!({"id": "g", "slot": "composer.media", "label": "g", "tags": ["Filter"], "auto": true})));
+        assert!(f.errors.iter().any(|e| e.contains("filter")), "{:?}", f.errors);
+        // false でも同じ(状態を持たないボタンに初期状態は書けない)。
+        let f = check(base(json!({"id": "g", "slot": "composer.media", "label": "g", "tags": ["Filter"], "auto": false})));
         assert!(f.errors.iter().any(|e| e.contains("filter")), "{:?}", f.errors);
     }
 

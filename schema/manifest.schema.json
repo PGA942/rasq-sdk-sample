@@ -133,8 +133,8 @@
           "then": { "properties": { "destructive": { "const": false }, "autoHookForbidden": { "const": false } } }
         },
         {
-          "$comment": "composer.media で初期状態を持てるのはカスタムフィルター(ON / OFF のボタン)だけ。replace / sticker は編集セッションを開くので自動では始めない。",
-          "if": { "properties": { "auto": { "const": true }, "slot": { "const": "composer.media" } }, "required": ["auto", "slot"] },
+          "$comment": "composer.media で初期状態(auto)を持てるのはカスタムフィルター(ON / OFF のボタン)だけ。replace / sticker は状態を持たないので、auto は true でも false でも書けない。",
+          "if": { "properties": { "slot": { "const": "composer.media" } }, "required": ["auto", "slot"] },
           "then": { "required": ["output"], "properties": { "output": { "const": "filter" } } }
         }
       ]
