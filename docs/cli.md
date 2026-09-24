@@ -211,6 +211,8 @@ rasq call rmqr viewer.open --args '{"token":"v1","mimeType":"image/png","width":
   第一期の dev 画面は単体 wasm の読み込みなので、**土台のデータが要るスロット**(`post.*` / `tl` など)はホスト側が既に持つアカウントで
   動かし、トークンは SNS プラグイン自体を作るときの `sns.login` 確認に使う
 - 第二期: `rasq dev --serve` で `http://<host>:7391/` にワークスペースを出し、dev 画面に「ワークスペースから読み込み」(= `dev.json` の読み込み)を足してホットリロード
+- 試験画面で全機能を試すには、署名した .rasqpkg を入れる(rasq build)。rasq dev の生の wasm は制限モード
+  ([PROTOCOL §6.1](../PROTOCOL.md)。`net.fetch` / `gpu.compute` / `storage.unsafe` などが `E01`)
 
 `rasq token`(実装済み、D-244e):
 
@@ -236,6 +238,7 @@ rasq help                         同梱の文書の一覧
 rasq help net.fetch               関数名 / スロット名 / 属性名 → その節(登録簿の hostFns、PROTOCOL、slots.md)
 rasq help auto                    manifest.actions[].auto の説明(スキーマの description)
 rasq help 全画面 初期状態 -n 3      言葉で探す(見出しの一致 > 本文の語の一致 > 文字 2-gram の Dice)
+rasq help 制限モード -n 2            サイドロードの全機能モード / 制限モード(PROTOCOL §6.1、slots.md §5.1 …)
 rasq help --full post.action      節を省略せずに出す
 rasq help --central <url> QR       Central の掲載(ほかのプラグインの名前 / 概要)も探す。トークン不要
 rasq help --central <url> --plugin sample.media-fullscreen   そのプラグインの説明と権限の理由
@@ -249,6 +252,10 @@ rasq help --central <url> --plugin sample.media-fullscreen   そのプラグイ�
 
 `rasq build [--raw] [--no-sign] [--no-build] [--with-source]` は release の wasm32 ビルド → `rasq check` と同じ往復検査(エラーがあれば止まる)→
 `dist/<root.id>-<root.version>.rasqpkg`(+ `.sig.json`)。`--raw` を付けると生の `.wasm` も `dist/` に出す(今のホストのパス読み込み用)。
+
+試験画面で全機能を試すには、署名した .rasqpkg を入れる(rasq build)。rasq dev の生の wasm は制限モード。全機能になるのは、
+自分の RASQ アカウントに登録した鍵(Web コンソールの `/console/keys`)で署名したものだけ([PROTOCOL §6.1](../PROTOCOL.md))。
+`--raw` の `.wasm` / `--no-sign` の `.rasqpkg` も制限モード。
 `rasq inspect <x.rasqpkg> [--extract DIR]` が目次と中身(sha512 / sizeBytes / `SHA512SUMS` / 余分なファイル)と `.sig.json` を確かめる。
 目次と中身の食い違い、または `.sig.json` があって署名が合わないときは**終了コード 1**(表示は同じ)。`.sig.json` が無いのは 0
 (開発者鍵の署名は任意)。署名が合っても、公開鍵は `.sig.json` 自身に書かれた**自己申告**なので、`inspect` は

@@ -309,6 +309,36 @@ SNS プラグインが RRL の icon/body に**タグ付け必須**なのはこ�
 | V11 | `tag` の付与先(投稿内容外ノードへの tag) | 無視 |
 | V12 | スロット単位の障害隔離 | 当該スロットのみ標準部品化(B系) |
 
+### 6.1 サイドロードの 2 つのモード(全機能モード / 制限モード)
+
+ストアを通らずに入れたプラグイン(サイドロード)を、ホストは次の 2 つのどちらかで動かす。**ストアの審査を通ったものは、いつも全機能**
+(この節の対象外)。V1 / V2 の「sideload」は、下の制限モードのサイドロードのこと。
+
+- **全機能モード**: `.rasqpkg` が**利用者自身の開発者鍵**で署名されているとき。自分の鍵 = 自分の RASQ アカウントに登録した鍵
+  (`rasq key init` で `~/.config/rasq/dev-key.toml` に作り、`rasq build` がこの鍵で `.sig.json` を付ける。`rasq key show` が指紋を出す。
+  鍵は Web コンソールの `/console/keys` で登録する)。宣言した権限どおりに、ホスト関数・スロットを試せる。
+- **制限モード**: それ以外のサイドロード全部 — 署名の無い `.rasqpkg`、ほかの人の鍵(自分のアカウントに登録していない鍵)で署名したもの、
+  `rasq dev` の生の `.wasm`(パスからの読み込み)、`asset:` の同梱バンドル。
+
+制限モードでの扱い(宣言した権限より、こちらが優先する):
+
+| 対象 | 制限モード |
+|---|---|
+| `net.fetch` | 閉じる(`E01`)。マニフェストの `network` の宣言があっても同じ |
+| `gpu.compute` | 閉じる(`E01`) |
+| `storage.*` | `storage.unsafe` は閉じる(`E01`)。`storage.safe` は使える |
+| `fow.open` | `fow.widget` だけ。`fow.interstitial` / `fow.system` は断る(`E01`) |
+| `composer.open` / `astell.share` / `mute.add` / `url.open` | 断る(`E01`) |
+| `clipboard.set` / `toast` | 使える |
+| 燃料(命令数)/ 時間の上限 | 半分 |
+| `manifest.actions[].auto` | 読まない(ホスト既定。[docs/slots.md §2.11](docs/slots.md)) |
+| 描画のスロット(`post.transform`、`tl`、`viewer.overlay` の描画) | 動く |
+
+- 断られた fn は、ほかの権限の無い fn と同じく `{ok:false, error:{code:"E01"}}`(トラップしない)。プラグインは戻りの `ok` を見て、
+  その機能を隠すか縮退させる(`net.fetch` が E01 なら「ネットワークはストア版で」と出す、など)。
+- **チャイルドセーフで見守られている子の端末**には開発者の鍵が無いので、その端末のサイドロードは**すべて制限モード**になる
+  (保護者が Central の方針 `allow.plugins.ids` でその id を許しても同じ。rasq-client D-306 / D-308)。
+
 ## 7. 未決
 - ~~D-005 content/action スロット仕様の形式定義~~ → `schema/slots.json`(登録簿)+ `schema/slot-registry.schema.json`。manifest v0.3 の `slots` / `roles` / `actions[].tags`
 - ~~D-006 `ActionRef` 形式の確定~~ → `schema/action-ref.schema.json`(ActionRef = 実行時の完全修飾、ActionKey = `slot:<pluginId>:<actionId>` の永続キー、InstanceScope = この §3 の `scope`)

@@ -358,7 +358,7 @@ TL プラグインはタブではなく、簡略カスタマイズ UI / ノー�
 - `post.action` の temp オン = そのタイルで 1 回自動で実行(§2.9)。これは v0.13 までの `auto_hook`(フック)の置き換えで、
   権限 `auto_hook` は「`auto: true` を書ける」の意味に変わる。宣言に `auto: true` の post.action が 1 つも無いのに
   `auto_hook` を持つのは過剰宣言(審査の許容の枠内で数える)。
-- サイドロード(未審査)のプラグインでは `auto` を読まず、ホスト既定だけを使う(`auto_hook` は `action` ティア = 審査済みのみ)。
+- 制限モード(§5.1)のサイドロードでは `auto` を読まず、ホスト既定だけを使う(`auto_hook` は `action` ティア = 審査済みのみ)。
 - 宣言に `auto` / `placement` の無い既存のプラグインは、見た目・挙動が変わらない(全画面のオン / オフだけが「永続」から
   「面ローカル + 既定」になる。ホストは移行時に、保存されていた値を既定に写す)。
 - `rasq check`: `auto: true` × (`destructive` | `autoHookForbidden`)は error、post.action の `auto: true` に `auto_hook` が無ければ
@@ -403,3 +403,25 @@ TL プラグインはタブではなく、簡略カスタマイズ UI / ノー�
 - 権限外のホスト関数は `E01`。スロットに宣言の無い `call` は来ない。
 - **FOW の着き方(v0.2)**: プラグインの `fow.open` は、呼び出し元の面の**子**として開く(コンポーザー → MFM ピッカーと同じ
   インライン FOW、AsTell ルーム FOW → その下、メディアエディター → 下付き)。親が閉じれば連動して閉じる。
+
+### 5.1 サイドロードの 2 つのモード(全機能モード / 制限モード)
+
+試験画面などからストアを通さずに入れたもの(サイドロード)は、署名で 2 つに分かれる。正典は [PROTOCOL §6.1](../PROTOCOL.md)。
+
+- **全機能モード** = `.rasqpkg` が**自分の開発者鍵**(自分の RASQ アカウントに登録した鍵)で署名されている。`rasq build` は
+  `~/.config/rasq/dev-key.toml` の鍵で署名し、`rasq key show` が指紋を出す。鍵の登録は Web コンソールの `/console/keys`。
+- **制限モード** = それ以外(署名の無いもの、ほかの人の鍵、`rasq dev` の生の `.wasm`、`asset:` の同梱バンドル)。
+- **ストアの審査を通ったものは、いつも全機能**。チャイルドセーフで見守られている子の端末には開発者の鍵が無いので、
+  そこでのサイドロードは**すべて制限モード**。
+
+| 制限モードで | 扱い |
+|---|---|
+| `net.fetch` | 閉じる(`E01`。`network` を宣言していても) |
+| `gpu.compute` / `storage.unsafe` | 閉じる(`E01`。`storage.safe` は使える) |
+| `fow.open` | `fow.widget` だけ(`fow.interstitial` / `fow.system` は断る) |
+| `composer.open` / `astell.share` / `mute.add` / `url.open`(§4) | 断る(`E01`)。`clipboard.set` / `toast` は使える |
+| 燃料 / 時間の上限 | 半分 |
+| `actions[].auto`(§2.11) | 読まない(ホスト既定) |
+| 描画のスロット(`post.transform`、`tl`、`viewer.overlay` の描画) | 動く |
+
+断られたホスト関数は `{ok:false, error:{code:"E01"}}` を返す(トラップしない)。プラグインは戻りの `ok` を見て、その機能を隠すか縮退させる。
