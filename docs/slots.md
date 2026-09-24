@@ -362,7 +362,7 @@ TL プラグインはタブではなく、簡略カスタマイズ UI / ノー�
 - 宣言に `auto` / `placement` の無い既存のプラグインは、見た目・挙動が変わらない(全画面のオン / オフだけが「永続」から
   「面ローカル + 既定」になる。ホストは移行時に、保存されていた値を既定に写す)。
 - `rasq check`: `auto: true` × (`destructive` | `autoHookForbidden`)は error、post.action の `auto: true` に `auto_hook` が無ければ
-  error、composer.media の `auto` は `output: "filter"` だけ、`placement: "manual"` で `tags` が無ければ「検索でタグ一致しない」warning。
+  error、composer.media の `auto` は `output: "filter"` だけ(replace / sticker は true でも false でも error)、`placement: "manual"` で `tags` が無ければ「検索でタグ一致しない」warning。
   スキーマ(`manifest.schema.json` v0.5)も同じ規則を持つ。
 
 ## 3. RRL のホスト拡張(rasq-client D-167 以降。古いホストは無視/⚠ボックス)
