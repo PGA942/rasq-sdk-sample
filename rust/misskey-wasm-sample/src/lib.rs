@@ -263,7 +263,7 @@ fn post_tile(note: &Value, fallback_instance: &str) -> Value {
             "actions": [
                 { "id": "reply", "label": "返信", "icon": "subdirectory_arrow_left" },
                 { "id": "renote", "label": "リノート", "icon": "repeat", "doneIcon": "repeat_on" },
-                { "id": "reaction", "label": "リアクション", "icon": "add_reaction_outlined", "doneIcon": "add_reaction" }
+                { "id": "reaction", "label": "リアクション", "icon": "add_reaction_outlined", "doneIcon": "add_reaction", "iconPerPost": true }
             ],
             "states": {
                 "reply": { "count": note["repliesCount"] },
@@ -489,6 +489,8 @@ fn post_wire_at(note: &Value, fallback_instance: &str, depth: usize) -> Value {
         "reactionEmojis": reaction_emojis,
         "visibility": note["visibility"],
         "myReaction": note["myReaction"],
+        // いいねのみ (likeOnly / likeOnlyForRemote …) のノートでは、ホストが絵文字のチップとピッカーを出さない (rasq-client D-321)。
+        "reactionAcceptance": note["reactionAcceptance"],
     })
 }
 
