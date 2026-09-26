@@ -1,6 +1,6 @@
 {
   "schema": "rasq.slots/1",
-  "$comment": "スロット登録簿 (D-005)。プラグインが差し込める面を 1 か所で定義する。マニフェストの `slots` はここにある id だけを指せる(schema/validate.py が照合)。`status: planned` は仮案(RRL&プラグイン周り §17)から採った未実装の面で、id だけ先に予約する。 tiers: 権限ティア(PROTOCOL §6 V1)。サイドロード(未審査)は content だけ、media は tag だけ、action / avatar / full / page は審査済みのみ。 permissions.required はホスト(rasq-client slot_plugins.dart)が v1 で実際に見る権限(fow.* / storage.* / mute.words)だけ。操作語彙(replace_media / register_action など、CONTRACT §8)は審査で付くので optional。 v0.14: ボタン共通の auto(初期状態 = temp)/ placement(auto | manual)を manifest.actions に追加。全体のオン / オフ(switch)はホスト設定。docs/slots.md §2.11。",
+  "$comment": "スロット登録簿 (D-005)。プラグインが差し込める面を 1 か所で定義する。マニフェストの `slots` はここにある id だけを指せる(schema/validate.py が照合)。`status: planned` は仮案(RRL&プラグイン周り §17)から採った未実装の面で、id だけ先に予約する。 tiers: 権限ティア(PROTOCOL §6 V1)。サイドロード(未審査)は content だけ、media は tag だけ、action / avatar / full / page は審査済みのみ。 permissions.required はホスト(rasq-client slot_plugins.dart)が v1 で実際に見る権限(fow.* / storage.* / mute.words)だけ。操作語彙(replace_media / register_action など、CONTRACT §8)は審査で付くので optional。 v0.14: ボタン共通の auto(初期状態 = temp)/ placement(auto | manual)を manifest.actions に追加。全体のオン / オフ(switch)はホスト設定。docs/slots.md §2.11。 v0.15: astell.action も manifest.actions で宣言(1 つ = ルーム下段のボタン 1 つ、astell.open に action)。docs/slots.md §2.1。",
   "tiers": {
     "content": {
       "sideload": true,
@@ -342,7 +342,7 @@
       "id": "astell.action",
       "status": "stable",
       "since": "v0.1",
-      "label": "AsTell のプラグインアクション",
+      "label": "AsTell のルーム下段のボタン(プラグインが宣言、v0.15)",
       "tier": "action",
       "kinds": [
         "action"
