@@ -1,4 +1,4 @@
-# RASQ スロットプラグイン契約 v0.14(正典)
+# RASQ スロットプラグイン契約 v0.15(正典)
 
 > **ここが正典。** 以前は `orgate-question/plugin-sample/*/CONTRACT.md` に同じ文書が複製されていたが、v0.8 から
 > 各リポジトリの `CONTRACT.md` はこのファイルへのポインタだけになった。節番号(§2.1〜§2.9 / §3 / §4 / §5)は複製時代のまま。
@@ -54,7 +54,22 @@
 
 ### 2.1 `astell.action` — AsTell プラグイン
 
-- `astell.open {token, room, me, peers, shares}` — ユーザーがプラグインアクションからこのプラグインを選んだ。
+**ボタンの宣言(v0.15、rasq-client D-328)**: ほかのアクションバーと同じく、マニフェストの `actions` に `slot: "astell.action"` の
+項目を書くと、**その 1 つが ルーム FOW 下段のボタン 1 つ**になる(label / icon / tags / `placement` は §2.11 どおり。
+`placement` の既定 `auto` = 宣言だけで、並びの最後の 1 つ(入力欄の隣、既定では字幕)の手前に入る。`tags` が内蔵のボタン
+(Speaker / Mic / Screen / Fullscreen / Captions)に似ていればそのバンドルへ。`manual` = 利用者が (+) で足すまで出ない)。
+宣言が**無い**プラグインは、プラグイン名 + パズルのボタン 1 つ(手動配置)。v0.14 までの「プラグインアクション」ボタン
+(登録済みのプラグインを選ぶシート)は**廃止**。
+
+```json
+"actions": [
+  { "id": "panel",  "slot": "astell.action", "label": "効果音・効果映像", "icon": "celebration", "tags": ["Effect"] },
+  { "id": "ping",   "slot": "astell.action", "label": "ピンポン",         "icon": "notifications_active" }
+]
+```
+
+- `astell.open {token, action?, room, me, peers, shares}` — ユーザーがこのプラグインのボタンを押した。`action` = 押された
+  ボタンの宣言 `id`(v0.15。宣言の無い既定ボタンでは載らない)。
   `room` = `AstellRoom` ワイヤ(`id, title, ownerId, genres, …`)、`me` = `{accountId, peerId, handle, displayName}`、
   `peers` = `[{peerId, accountId, handle, displayName, micOn}]`(自分は含まない)、
   `shares` = 直近 10 件の共有(**古い → 新しい**、`[{id, kind, payload, displayName, handle, createdAt}]`)。
