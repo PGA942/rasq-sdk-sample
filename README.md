@@ -42,7 +42,7 @@ Misskey アダプタ(`packages/sns_misskey`)で検証したものを、ここで
 プラグイン作者向けの CLI は次の流れになる想定。ここに書いておき、実装時に `schema/` の登録簿とマニフェストを土台にする。
 コマンド・ディレクトリ・配布物の形まで落とした設計は [`docs/cli.md`](docs/cli.md)(D-244)。
 **実装済み(第一期 ①〜⑤)**: [`rust/rasq-cli`](rust/rasq-cli) の `rasq init / new / check / test / call / build [--raw] / registry / token / dev / key / inspect / publish` と、
-[`templates/`](templates)(stable 9 スロット + sns の雛形)、[`rust/rasq-plugin-kit`](rust/rasq-plugin-kit)(kit の正典)。
+[`templates/`](templates)(stable 9 スロット + sns + アセットパック `assets` / 着せ替え `theme` の雛形)、[`rust/rasq-plugin-kit`](rust/rasq-plugin-kit)(kit の正典)。
 
 ```sh
 cd rust && cargo build --release -p rasq-cli          # → rust/target/release/rasq
@@ -52,6 +52,7 @@ rasq token set misskey:misskey.io:yamada   # トークンは非表示入力 → 
 rasq dev --watch                           # ビルド → 往復検査 → dev 画面に入れる絶対パス(変更のたびに再ビルド)
 rasq key init && rasq build                # dist/<id>-<version>.rasqpkg(zstd tar + bundle.json)+ 開発者署名 .sig.json
 rasq inspect dist/net.example.later-0.1.0.rasqpkg   # 目次 / ハッシュ / 署名を確かめる
+rasq new assets stickers && rasq new theme starry   # wasm 無しの配布物: アセットパック(docs/slots.md §2.10)/ 着せ替え(§2.12)を packs/ に
 rasq token set --central 100.91.218.56:8080 && rasq publish --central http://100.91.218.56:8080   # 掲載 → 版 → 配布物(--dry-run で要求の書き出しだけ)
 ```
 

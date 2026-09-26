@@ -147,12 +147,13 @@ fn listing(ws: &Workspace, manifest: &Value) -> Value {
     if let Some(c) = l.and_then(|l| l.category.clone()) {
         v["category"] = json!(c);
     }
-    // アセットパックは同じワークスペースのプラグインと掲載を分ける: 名前 / 説明は自分の manifest、カテゴリは assets。
-    if manifest["kind"] == "assets" {
+    // アセットパック / 着せ替えは同じワークスペースのプラグインと掲載を分ける: 名前 / 説明は自分の manifest、
+    // カテゴリは kind そのもの(assets / theme)。
+    if let Some(kind) = manifest["kind"].as_str().filter(|k| crate::pack::PACK_KINDS.contains(k)) {
         v["name"] = manifest["name"].clone();
         v["summary"] = json!(desc.chars().take(80).collect::<String>());
         v["description"] = json!(desc);
-        v["category"] = json!("assets");
+        v["category"] = json!(kind);
     }
     if let Some(u) = l.and_then(|l| l.icon_url.clone()) {
         v["iconUrl"] = json!(u);
@@ -306,4 +307,23 @@ pub fn run(root: &Path, ws: &Workspace, packages: &[(String, Value)], opts: &Opt
         out.push(Published { id, version });
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packs_are_listed_under_their_own_kind() {
+        let ws = Workspace::new("0.1.0", "sample");
+        for kind in ["assets", "theme"] {
+            let m = json!({"id": "sample.p", "name": "星空", "version": "0.1.0", "kind": kind, "description": "夜空"});
+            let v = listing(&ws, &m);
+            assert_eq!(v["category"], kind);
+            assert_eq!(v["name"], "星空");
+        }
+        // コードのプラグインはカテゴリを manifest から決めない([listing] があればそれ)。
+        let v = listing(&ws, &json!({"id": "sample.a", "name": "a", "version": "0.1.0", "kind": "action"}));
+        assert!(v["category"].is_null());
+    }
 }

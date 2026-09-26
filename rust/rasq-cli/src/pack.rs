@@ -1,5 +1,6 @@
-//! アセットパック(docs/slots.md §2.10、契約 v0.11): wasm を持たない配布物。`packs/<name>/manifest.json`(kind = "assets")と画像。
-//! ホストは画像を読むだけなので、ここでは「画像であること」と大きさだけを確かめる。
+//! アセットパック(docs/slots.md §2.10、契約 v0.11)と着せ替え(§2.12、v0.16): wasm を持たない配布物。
+//! `packs/<name>/manifest.json`(kind = "assets" / "theme")と画像。
+//! ホストは画像と宣言を読むだけなので、ここでは「画像であること」と大きさ、着せ替えなら宣言の参照先があることを確かめる。
 
 use crate::pkg::{self, Entry, Package};
 use crate::schema;
@@ -13,6 +14,9 @@ use std::path::Path;
 pub const MAX_FILE: usize = 2 * 1024 * 1024;
 /// パック全体の上限。
 pub const MAX_TOTAL: usize = 16 * 1024 * 1024;
+
+/// packs/ に置ける kind(wasm を持たない配布物)。
+pub const PACK_KINDS: [&str; 2] = ["assets", "theme"];
 
 /// マジックナンバーから画像の形式。
 pub fn image_kind(b: &[u8]) -> Option<&'static str> {
@@ -48,14 +52,14 @@ pub struct Checked {
     pub warnings: Vec<String>,
 }
 
-/// スキーマ → id / kind → 各画像(実在 / 形式 / 大きさ / 重複)→ 書き忘れ。
+/// スキーマ → id / kind → 各画像(実在 / 形式 / 大きさ / 重複)→ 書き忘れ → (着せ替えなら)宣言の参照先。
 pub fn check(dir: &Path, entry: &PackEntry) -> Result<Checked> {
     let manifest_bytes = std::fs::read(dir.join("manifest.json")).with_context(|| format!("{}/manifest.json を読めません", dir.display()))?;
     let manifest: Value = serde_json::from_slice(&manifest_bytes).context("manifest.json が JSON ではありません")?;
     let mut errors = schema::violations(&schema::manifest_validator()?, &manifest).into_iter().map(|e| format!("schema: {e}")).collect::<Vec<_>>();
     let mut warnings = Vec::new();
-    if manifest["kind"] != "assets" {
-        errors.push(format!("packs/ の manifest は kind = \"assets\" でなければなりません: {}", manifest["kind"]));
+    if !manifest["kind"].as_str().is_some_and(|k| PACK_KINDS.contains(&k)) {
+        errors.push(format!("packs/ の manifest は kind = \"assets\" か \"theme\" でなければなりません: {}", manifest["kind"]));
     }
     if manifest["id"].as_str() != Some(entry.id.as_str()) {
         errors.push(format!("manifest.id {} が rasq.toml の id {} と違います", manifest["id"], entry.id));
@@ -105,7 +109,41 @@ pub fn check(dir: &Path, entry: &PackEntry) -> Result<Checked> {
             warnings.push(format!("{p}: manifest.assets に書かれていない画像(配布物には入りません)"));
         }
     }
+    if manifest["kind"] == "theme" {
+        let (e, w) = theme_problems(&manifest);
+        errors.extend(e);
+        warnings.extend(w);
+    }
     Ok(Checked { manifest, manifest_bytes, files, errors, warnings })
+}
+
+/// 着せ替え(docs/slots.md §2.12)の整合。スキーマでは書けない「id の参照先がある」を見る(schema/validate.py の
+/// theme_problems と同じ規則)。色の形 / 面のキー / layers の数はスキーマが見る。戻りは (errors, warnings)。
+pub fn theme_problems(m: &Value) -> (Vec<String>, Vec<String>) {
+    let (mut errors, mut warnings) = (Vec::new(), Vec::new());
+    let theme_ids: std::collections::BTreeSet<&str> =
+        m["assets"].as_array().into_iter().flatten().filter(|a| a["use"] == "theme").filter_map(|a| a["id"].as_str()).collect();
+    let mut used = std::collections::BTreeSet::new();
+    for (name, surface) in m["theme"]["surfaces"].as_object().into_iter().flatten() {
+        for (i, layer) in surface["layers"].as_array().into_iter().flatten().enumerate() {
+            let Some(id) = layer["asset"].as_str() else { continue };
+            used.insert(id);
+            if !theme_ids.contains(id) {
+                errors.push(format!("theme.surfaces.{name}.layers[{i}].asset {id:?} が assets(use = theme)にありません"));
+            }
+        }
+    }
+    for (icon, r) in m["theme"]["icons"].as_object().into_iter().flatten() {
+        let Some(id) = r.as_str().and_then(|r| r.strip_prefix("asset:")) else { continue };
+        used.insert(id);
+        if !theme_ids.contains(id) {
+            errors.push(format!("theme.icons.{icon} の \"asset:{id}\" が assets(use = theme)にありません"));
+        }
+    }
+    for id in theme_ids.difference(&used) {
+        warnings.push(format!("asset {id} は theme のどこからも指されていません(配布物には入るが使われない)"));
+    }
+    (errors, warnings)
 }
 
 fn walk(base: &Path, dir: &Path, out: &mut Vec<String>) {
@@ -119,9 +157,9 @@ fn walk(base: &Path, dir: &Path, out: &mut Vec<String>) {
     }
 }
 
-/// パック 1 つ = 配布物 1 つ(root.kind = assets、wasm 無し)。
+/// パック 1 つ = 配布物 1 つ(root.kind = assets / theme = manifest の kind、wasm 無し)。
 pub fn package(c: &Checked) -> Result<Package> {
-    let root = json!({"id": c.manifest["id"], "version": c.manifest["version"], "kind": "assets", "manifest": "manifest.json"});
+    let root = json!({"id": c.manifest["id"], "version": c.manifest["version"], "kind": c.manifest["kind"], "manifest": "manifest.json"});
     let mut entries = vec![Entry { path: "manifest.json".into(), bytes: c.manifest_bytes.clone() }];
     let mut assets = Vec::new();
     for (path, bytes) in &c.files {
@@ -129,4 +167,112 @@ pub fn package(c: &Checked) -> Result<Package> {
         entries.push(Entry { path: path.clone(), bytes: bytes.clone() });
     }
     pkg::assemble_with(root, vec![], vec![], assets, vec![], entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::embed;
+
+    /// 雛形を一時ディレクトリに展開する(`rasq new assets|theme` と同じ)。
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let d = std::env::temp_dir().join(format!("rasq-pack-test-{}-{tag}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        d
+    }
+
+    fn from_template(kind: &str) -> (std::path::PathBuf, PackEntry) {
+        let dir = scratch(kind);
+        embed::render_template(kind, &dir, &[("id", "sample.p"), ("name", "p"), ("display", "p")]).unwrap();
+        (dir, PackEntry { name: "p".into(), id: "sample.p".into() })
+    }
+
+    fn edit(dir: &Path, f: impl FnOnce(&mut Value)) {
+        let path = dir.join("manifest.json");
+        let mut m: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        f(&mut m);
+        std::fs::write(&path, serde_json::to_vec_pretty(&m).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn bundled_pack_templates_pass_the_check_and_package_without_wasm() {
+        for kind in PACK_KINDS {
+            let (dir, entry) = from_template(kind);
+            let c = check(&dir, &entry).unwrap();
+            assert!(c.errors.is_empty(), "{kind}: {:?}", c.errors);
+            assert!(c.warnings.is_empty(), "{kind}: {:?}", c.warnings);
+            assert_eq!(c.files.len(), 1, "{kind}");
+            let p = package(&c).unwrap();
+            assert_eq!(p.bundle["root"]["kind"], kind);
+            assert!(p.bundle["root"]["wasm"].is_null());
+            assert_eq!(p.bundle["assets"][0]["kind"], "image");
+            assert_eq!(p.file_name, "sample.p-0.1.0.rasqpkg");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn theme_references_must_point_at_theme_assets() {
+        let (dir, entry) = from_template("theme");
+        edit(&dir, |m| {
+            m["theme"]["surfaces"]["postTile"]["layers"] = json!([{ "asset": "nope", "position": "above", "repeat": "repeat" }]);
+            m["theme"]["icons"]["favorite_border"] = json!("asset:heart");
+        });
+        let c = check(&dir, &entry).unwrap();
+        assert!(c.errors.iter().any(|e| e.contains("theme.surfaces.postTile.layers[0].asset \"nope\"")), "{:?}", c.errors);
+        assert!(c.errors.iter().any(|e| e.contains("theme.icons.favorite_border")), "{:?}", c.errors);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn theme_shape_is_checked_by_the_schema() {
+        let (dir, entry) = from_template("theme");
+        edit(&dir, |m| {
+            m["theme"]["colors"]["dark"]["primary"] = json!("#123"); // 3 桁は不可
+            m["theme"]["surfaces"]["header"] = json!({}); // 今の面は 4 つだけ
+            m["slots"] = json!(["post.action"]); // コードに関わる宣言は書けない
+        });
+        let c = check(&dir, &entry).unwrap();
+        let all = c.errors.join("\n");
+        assert!(all.contains("#123"), "{all}");
+        assert!(all.contains("header"), "{all}");
+        assert!(all.contains("/slots"), "{all}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_colour_only_theme_needs_no_images_but_unused_images_warn() {
+        let (dir, entry) = from_template("theme");
+        edit(&dir, |m| {
+            m["theme"]["surfaces"]["app"]["layers"] = json!([]);
+        });
+        let c = check(&dir, &entry).unwrap();
+        assert!(c.errors.is_empty(), "{:?}", c.errors);
+        assert!(c.warnings.iter().any(|w| w.contains("background")), "{:?}", c.warnings);
+        // 画像ゼロ(色だけ)も配布物になる。
+        edit(&dir, |m| m["assets"] = json!([]));
+        std::fs::remove_file(dir.join("theme/background.png")).unwrap();
+        let c = check(&dir, &entry).unwrap();
+        assert!(c.errors.is_empty(), "{:?}", c.errors);
+        let p = package(&c).unwrap();
+        assert_eq!(p.bundle["assets"], json!([]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn theme_is_refused_outside_a_theme_pack_and_packs_refuse_code_kinds() {
+        let (dir, entry) = from_template("assets");
+        edit(&dir, |m| m["theme"] = json!({}));
+        let c = check(&dir, &entry).unwrap();
+        assert!(!c.errors.is_empty());
+        edit(&dir, |m| {
+            m.as_object_mut().unwrap().remove("theme");
+            m["kind"] = json!("action");
+        });
+        let c = check(&dir, &entry).unwrap();
+        assert!(c.errors.iter().any(|e| e.contains("\"theme\"")), "{:?}", c.errors);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

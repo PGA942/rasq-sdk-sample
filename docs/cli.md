@@ -117,6 +117,7 @@ lazy = true
   (`owned = true` → `<base.id>.<name>`、そうでなければ `<namespace>.<name>`)、`slots = [<slot>]`、`permissions` は
   登録簿の `permissions.required` をそのまま入れる
 - **`rasq new assets <name>`** はスロットではなく**アセットパック**(`kind: "assets"`、wasm 無し、[slots.md §2.10](slots.md))を `packs/<name>/` に作り、rasq.toml に `[[packs]]`(`name` / `id`)を足す。id は土台に依らず常に `<namespace>.<name>`。`rasq check` / `build` / `publish` はコードのプラグインと一緒に扱う(パックだけのワークスペースなら Rust のビルドは走らない)
+- **`rasq new theme <name>`** は**着せ替え(テーマ)パック**(`kind: "theme"`、wasm 無し、[slots.md §2.12](slots.md))を同じく `packs/<name>/` に作る(`manifest.json` の `theme`(色 / アイコンの差し替え / 面ごとの背景)+ `theme/` の画像 1 枚)。rasq.toml の `[[packs]]` もアセットパックと共通で、kind は `manifest.json` が持つ。`rasq check` はアセットパックと同じ検査に加えて参照の整合(`theme.surfaces.*.layers[].asset` と `theme.icons` の `asset:<id>` が `assets` に `use: "theme"` であること)を見て、どこからも指されていない画像は警告。`rasq build` は kind theme の配布物(wasm 無し)、`rasq publish` は掲載のカテゴリを `theme` にする
 - 生成直後に `rasq check` が通る状態であること(雛形の CI: SDK 側 `rust` ジョブで全雛形を `rasq new` → `check`)
 
 雛形の対応表(第一期、登録簿の stable 9 スロット):
@@ -378,7 +379,7 @@ rasq publish --central http://100.91.218.56:8080 [--channel stable|beta] [--note
 - `rust/rasq-cli`(bin `rasq`): `clap` / `serde` / `toml` / `jsonschema` / `wasmi` / `sha2` / `ed25519-dalek` + `getrandom` / `tar` + `zstd` / `rpassword` / `ureq`(rustls、publish のみ)。
   `schema/*.json` と `templates/` は `include_dir!` で同梱し、`rasq registry` はその同梱物を出す
 - `rust/rasq-plugin-kit`: plugin-sample の `kit/src/lib.rs` をそのまま移す(D-244i)。`rasq init` がワークスペースの `kit/` に写し、雛形は `path = "../../kit"`
-- `templates/<slot>/`: §3 の 9 つ + `sns`。`{{id}}` / `{{name}}` / `{{display}}` / `{{slot}}` / `{{kit_path}}` の置換だけ(テンプレートエンジンは使わない)
+- `templates/<slot>/`: §3 の 9 つ + `sns` + `assets` / `theme`(wasm 無しのパック)。`{{id}}` / `{{name}}` / `{{display}}` / `{{slot}}` / `{{kit_path}}` の置換だけ(テンプレートエンジンは使わない)
 - CI(`.gitlab-ci.yml`): `rust` ジョブで `rasq-cli` を組み、全雛形を `new → check` する
 - 順番: ✅ ① kit 引き上げ + 雛形 → ✅ ② `init / new / check / build --raw` → ✅ ③ `token / dev` → ✅ ④ `build`(.rasqpkg)+ `key` + `inspect` → ✅ ⑤ `publish`(第一期完了)。
   ①〜② で今日の plugin-sample と同じものが CLI から作れる

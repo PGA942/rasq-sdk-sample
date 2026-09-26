@@ -8,6 +8,8 @@
 - schema/slots.json → slot-registry.schema.json
 - 突き合わせ: マニフェストの slots は登録簿にあること(planned は警告)、kind がそのスロットで許されること、
   必要権限を持つこと、登録簿の hostFns は host-fn.schema.json の $defs.fns と boundary の hostFnName にあること
+- 着せ替え(kind = theme、docs/slots.md §2.12): theme.surfaces.*.layers[].asset と theme.icons の asset:<id> が
+  assets[] に use = theme で載っていること(assets[].id の重複も見る)
 - action-ref.schema.json の examples が自分のパターンに合うこと
 
 依存: pip install jsonschema referencing
@@ -76,6 +78,24 @@ def validate(rep: Report, reg: Registry, schema_name: str, doc, label: str) -> b
     return not errs
 
 
+def theme_problems(m: dict) -> list[str]:
+    """着せ替え(kind = theme)の整合。スキーマでは書けない「id の参照先がある」を見る(rasq check の pack::theme_problems と同じ規則)。"""
+    out: list[str] = []
+    ids: list[str] = [a["id"] for a in m.get("assets", [])]
+    for dup in sorted({i for i in ids if ids.count(i) > 1}):
+        out.append(f"asset id が重複しています: {dup}")
+    theme_ids = {a["id"] for a in m.get("assets", []) if a.get("use") == "theme"}
+    t = m.get("theme") or {}
+    for name, surface in (t.get("surfaces") or {}).items():
+        for i, layer in enumerate(surface.get("layers", [])):
+            if layer["asset"] not in theme_ids:
+                out.append(f"theme.surfaces.{name}.layers[{i}].asset {layer['asset']!r} が assets(use = theme)にありません")
+    for icon, ref in (t.get("icons") or {}).items():
+        if ref.startswith("asset:") and ref[len("asset:") :] not in theme_ids:
+            out.append(f"theme.icons.{icon} の {ref!r} が assets(use = theme)にありません")
+    return out
+
+
 def main() -> int:
     rep = Report()
     reg = registry()
@@ -129,6 +149,9 @@ def main() -> int:
                 rep.error(f"{label}: action {a['id']} の output は slot = composer.media の宣言にだけ書けます")
             if "accepts" in a and a.get("slot") != "composer.media":
                 rep.error(f"{label}: action {a['id']} の accepts は slot = composer.media の宣言にだけ書けます")
+        if m["kind"] == "theme":
+            for problem in theme_problems(m):
+                rep.error(f"{label}: {problem}")
         if "composer.media" in m.get("slots", []) and not any(a.get("slot") == "composer.media" for a in m.get("actions", [])):
             rep.warn(f"{label}: 加工画面の下段バーのボタン宣言(actions[].slot = composer.media)が無い(ホストが既定の見た目で、画像にだけ出す)")
         if "viewer.overlay" in m.get("slots", []) and not any(a.get("slot") == "viewer.overlay" for a in m.get("actions", [])):

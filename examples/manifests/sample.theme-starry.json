@@ -1,0 +1,31 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "sample.theme-starry",
+  "name": "星空",
+  "version": "0.1.0",
+  "kind": "theme",
+  "description": "夜空の背景と星のボタン",
+  "assets": [
+    { "id": "sky", "path": "theme/sky.png", "use": "theme", "label": "夜空" },
+    { "id": "stars", "path": "theme/stars.png", "use": "theme", "label": "星の粒(上付き)" },
+    { "id": "button", "path": "theme/button.png", "use": "theme", "label": "ボタンの背景" },
+    { "id": "heart", "path": "theme/heart.png", "use": "theme", "label": "いいねのアイコン" }
+  ],
+  "theme": {
+    "brightness": "dark",
+    "colors": {
+      "dark": { "primary": "#8AB4FF", "surface": "#0B1026", "onSurface": "#E8ECFF", "outline": "#3A4470" },
+      "light": { "primary": "#3355CC" }
+    },
+    "icons": {
+      "favorite_border": "asset:heart",
+      "repeat": "material:autorenew"
+    },
+    "surfaces": {
+      "app": { "color": "#060914", "layers": [{ "asset": "sky", "position": "below", "fit": "cover", "opacity": 0.9 }] },
+      "postTile": { "color": "#CC0B1026", "radius": 12, "layers": [{ "asset": "stars", "position": "above", "fit": "none", "repeat": "repeat", "opacity": 0.35 }] },
+      "fow": { "color": "#0B1026", "layers": [{ "asset": "sky", "position": "below", "fit": "cover", "alignment": "bottomCenter", "opacity": 0.5 }] },
+      "actionButton": { "radius": 18, "layers": [{ "asset": "button", "position": "below", "fit": "fill" }] }
+    }
+  }
+}

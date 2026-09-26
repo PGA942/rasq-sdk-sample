@@ -21,7 +21,7 @@ pub struct Workspace {
     pub sns: Option<Sns>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<PluginEntry>,
-    /// アセットパック(`packs/<name>/`、wasm 無し。docs/slots.md §2.10)。パックごとに配布物 1 つ。
+    /// アセットパック / 着せ替え(`packs/<name>/`、wasm 無し。docs/slots.md §2.10 / §2.12)。kind は manifest.json が持つ。パックごとに配布物 1 つ。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub packs: Vec<PackEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
