@@ -1,4 +1,4 @@
-# RASQ スロットプラグイン契約 v0.15(正典)
+# RASQ スロットプラグイン契約 v0.16(正典)
 
 > **ここが正典。** 以前は `orgate-question/plugin-sample/*/CONTRACT.md` に同じ文書が複製されていたが、v0.8 から
 > 各リポジトリの `CONTRACT.md` はこのファイルへのポインタだけになった。節番号(§2.1〜§2.9 / §3 / §4 / §5)は複製時代のまま。
@@ -30,7 +30,7 @@
   "permissions": ["fow.widget", "storage.safe"] }
 ```
 
-- 形は [`../schema/manifest.schema.json`](../schema/manifest.schema.json)(v0.3)。`kind` はその enum(`sns` / `action` / `view` / `trend` / `mediaViewer` / `postProcessor`)。
+- 形は [`../schema/manifest.schema.json`](../schema/manifest.schema.json)(v0.3)。`kind` はその enum(`sns` / `action` / `view` / `trend` / `mediaViewer` / `postProcessor`。wasm を持たない配布物の `assets`(§2.10)/ `theme`(§2.12)も)。
 - `slots` = [`../schema/slots.json`](../schema/slots.json) にある id(下表は `stable` のもの。`planned` の面は id だけ予約)。複数可。
   どの `kind` がどのスロットを宣言できるか、必要な権限は登録簿が持ち、`python3 schema/validate.py` が突き合わせる。
 - `permissions` = ホスト関数の権限(`fow.widget` / `storage.safe` / `network` / `mute.words` …)。
@@ -348,6 +348,8 @@ TL プラグインはタブではなく、簡略カスタマイズ UI / ノー�
 - 画像は **PNG / JPEG / WebP / GIF**(中身のマジックナンバーで判定、拡張子と一致すること)、**1 枚 2 MiB・合計 16 MiB・256 枚**まで。
 - `slots` / `permissions` / `actions` / `roles` は書けない。土台(SNS プラグイン)にも依らない(`requires` 無し)。
   ほかの `kind` のマニフェストは `assets` を書けない(プラグインに同梱するファイルは rasq.toml の `[[assets]]`)。
+  例外は着せ替え(`kind: "theme"`、§2.12、v0.16)で、同じ `assets[]` に `use: "theme"` で画像を載せる(形式と上限はここと同じ)。
+  アセットパックの `use` は `sticker`、着せ替えの `use` は `theme` だけ(混ぜられない)。
 - 配布物(`.rasqpkg`): `bundle.json` の `root` は `{id, version, kind: "assets", manifest}` で **`wasm` を持たない**。`children` / `libs` /
   `models` は空、`assets[]` は全部 `kind: "image"` で `sha512` / `sizeBytes` 必須([`bundle.schema.json`](../schema/bundle.schema.json))。
   署名 / ハッシュの扱いはほかの配布物と同じ。
@@ -379,6 +381,87 @@ TL プラグインはタブではなく、簡略カスタマイズ UI / ノー�
 - `rasq check`: `auto: true` × (`destructive` | `autoHookForbidden`)は error、post.action の `auto: true` に `auto_hook` が無ければ
   error、composer.media の `auto` は `output: "filter"` だけ(replace / sticker は true でも false でも error)、`placement: "manual"` で `tags` が無ければ「検索でタグ一致しない」warning。
   スキーマ(`manifest.schema.json` v0.5)も同じ規則を持つ。
+
+### 2.12 着せ替え(テーマ)パック — `kind: "theme"`(v0.16、スロットではない)
+
+アセットパック(§2.10)と同じ **wasm を持たない配布物**(rasq-client D-335)。中身はマニフェストの `theme`(宣言)と
+画像(`assets[]`、`use: "theme"`)だけで、ホストは宣言を読むだけ(コードは動かない / 権限も無い)。
+ホストで**同時に有効にできる着せ替えは 1 つ**(設定 → アプリの外観 → フォントやカラースキーム)。
+
+```json
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "sample.theme-starry", "name": "星空", "version": "0.1.0", "kind": "theme",
+  "description": "夜空の背景と星のボタン",
+  "assets": [
+    { "id": "sky",    "path": "theme/sky.png",    "use": "theme", "label": "夜空" },
+    { "id": "stars",  "path": "theme/stars.png",  "use": "theme", "label": "星の粒(上付き)" },
+    { "id": "button", "path": "theme/button.png", "use": "theme", "label": "ボタンの背景" },
+    { "id": "heart",  "path": "theme/heart.png",  "use": "theme", "label": "いいねのアイコン" }
+  ],
+  "theme": {
+    "brightness": "dark",
+    "colors": {
+      "dark":  { "primary": "#8AB4FF", "surface": "#0B1026", "onSurface": "#E8ECFF", "outline": "#3A4470" },
+      "light": { "primary": "#3355CC" }
+    },
+    "icons": {
+      "favorite_border": "asset:heart",
+      "repeat": "material:autorenew"
+    },
+    "surfaces": {
+      "app":          { "color": "#060914", "layers": [ { "asset": "sky", "position": "below", "fit": "cover", "opacity": 0.9 } ] },
+      "postTile":     { "color": "#CC0B1026", "radius": 12, "layers": [ { "asset": "stars", "position": "above", "fit": "none", "repeat": "repeat", "opacity": 0.35 } ] },
+      "fow":          { "color": "#0B1026", "layers": [ { "asset": "sky", "position": "below", "fit": "cover", "alignment": "bottomCenter", "opacity": 0.5 } ] },
+      "actionButton": { "radius": 18, "layers": [ { "asset": "button", "position": "below", "fit": "fill" } ] }
+    }
+  }
+}
+```
+
+(同じものが [`../examples/manifests/sample.theme-starry.json`](../examples/manifests/sample.theme-starry.json)、画像つきの一式は
+plugin-sample の `theme-plugin`。)
+
+**`theme` のキー**([`manifest.schema.json`](../schema/manifest.schema.json) の `$defs.theme` / `themeColors` / `themeSurface` / `themeLayer`):
+
+| キー | 形 | 意味 |
+|---|---|---|
+| `brightness` | `"light"` \| `"dark"` \| `"both"`(既定 `both`) | どちらの明るさのときに効くか。アプリの明暗設定と合わない側では `colors` と `surfaces` を使わない(`icons` の差し替えは常に効く) |
+| `colors` | `{ "light"?: Colors, "dark"?: Colors }` | Material の ColorScheme の上書き。Colors に書けるのは `primary` / `onPrimary` / `secondary` / `onSecondary` / `tertiary` / `error` / `surface` / `onSurface` / `onSurfaceVariant` / `surfaceContainer` / `surfaceContainerHigh` / `surfaceContainerHighest` / `outline` / `outlineVariant` だけ(ほかは不可) |
+| `icons` | `{ "<Material のアイコン名>": "asset:<assets[].id>" \| "material:<Material のアイコン名>" }` | 名前で持っているアイコン(アクションバー / バンドル / 全画面バー / AsTell の下段など、`icon: "favorite_border"` のように名前で持つもの)を差し替える。キーと名前は `^[a-z0-9_]+$` |
+| `surfaces` | `{ "app"?, "postTile"?, "fow"?, "actionButton"?: Surface }` | 面ごとの見た目(ほかのキーは不可。今の面はこの 4 つ) |
+
+- 色は `#RRGGBB` か `#AARRGGBB`(8 桁は**先頭**が不透明度。Flutter の `Color(0xAARRGGBB)` / media filter の色と同じ並びで、
+  例の `#CC0B1026` = `#0B1026` の 80%。§3 の RRL の色 `#RRGGBBAA`(末尾が不透明度)とは逆なので注意)。
+- **面(surfaces)**: `app` = メインの画面の背景、`postTile` = 投稿タイル、`fow` = FOW(下から出るパネル)の背景、
+  `actionButton` = アクションバーのボタン。
+- **Surface** = `{ "color"?: 色, "radius"?: 0〜48 の数, "layers"?: Layer[](最大 8)}`。`color` は画像の下に敷く塗り、`radius` は角丸。
+- **Layer** = 面に重ねる画像 1 枚。書いた順に下から描く。
+
+| キー | 値(既定) | 意味 |
+|---|---|---|
+| `asset` | `assets[].id`(必須) | `use: "theme"` の画像 |
+| `position` | `below` \| `above`(`below`) | `below` = 中身の下(背景)、`above` = 中身の上に重ねる。**`above` の層はタッチを受けない**(押せる部分を邪魔しない) |
+| `fit` | `cover` \| `contain` \| `fill` \| `fitWidth` \| `fitHeight` \| `none` \| `scaleDown`(`cover`) | 面への合わせ方(Flutter の `BoxFit`) |
+| `alignment` | `topLeft` \| `topCenter` \| `topRight` \| `centerLeft` \| `center` \| `centerRight` \| `bottomLeft` \| `bottomCenter` \| `bottomRight`(`center`) | 寄せ方(`Alignment`) |
+| `repeat` | `none` \| `repeat` \| `repeatX` \| `repeatY`(`none`) | 敷き詰め(`ImageRepeat`)。`fit: "none"` と組み合わせてタイル状に |
+| `opacity` | 0〜1(1) | 不透明度 |
+
+- **整合**(`rasq check` / `python3 schema/validate.py` / ホストが同じ規則で見る): `layers[].asset` と `icons` の `asset:<id>` は
+  `assets[]` に **`use: "theme"`** で載っている id であること。`theme` は `kind: "theme"` のマニフェストにだけ書ける。
+  `kind: "theme"` は `theme` と `assets` が必須。ただし `assets` は **0 枚でもよい**(色だけのテーマ)。
+- 画像の形式と上限はアセットパックと同じ(**PNG / JPEG / WebP / GIF**、1 枚 2 MiB・合計 16 MiB・256 枚)。
+- `slots` / `permissions` / `actions` / `roles` は書けない。土台(SNS プラグイン)にも依らない(`requires` 無し)。
+- 配布物(`.rasqpkg`): `bundle.json` の `root` は `{id, version, kind: "theme", manifest}` で **`wasm` を持たない**。`children` / `libs` /
+  `models` は空、`assets[]` は全部 `kind: "image"` で `sha512` / `sizeBytes` 必須(色だけのテーマなら空)。アセットパックと同じ扱い
+  ([`bundle.schema.json`](../schema/bundle.schema.json))。
+- CLI: `rasq new theme <name>` → `packs/<name>/`(`manifest.json`(kind = theme、上の例に近い雛形)+ `theme/` の画像 1 枚)、
+  rasq.toml に `[[packs]]`。`rasq check` はアセットパックと同じ検査(スキーマ / 形式 / 大きさ / 書き忘れ)に加えて上の整合
+  (asset の参照、色の形、面のキー)を見る。どこからも指されていない `use: "theme"` の画像は警告。`rasq build` はパックごとに
+  配布物 1 つ(kind theme)、`rasq publish` は掲載のカテゴリを `theme` にする。
+- ホスト(rasq-client): インストールすると画像を端末に保存し、設定 → アプリの外観 → フォントやカラースキーム に並ぶ。
+  有効にできるのは 1 つだけ(別のものを選ぶと前のものは外れる)。`above` の層は描くだけでタッチを通す。
+  ホストは配布物に wasm が 1 つでも入っていたら着せ替えとして扱わない(アセットパックと同じ)。
 
 ## 3. RRL のホスト拡張(rasq-client D-167 以降。古いホストは無視/⚠ボックス)
 

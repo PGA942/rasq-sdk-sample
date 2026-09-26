@@ -7,10 +7,15 @@
   "required": ["schema", "root", "children", "libs", "assets", "models"],
   "allOf": [
     {
-      "$comment": "アセットパック(root.kind = assets、契約 v0.11): wasm / children / libs / models 無し、assets は画像だけ(sha512 / sizeBytes 必須)。それ以外の root は wasm が要る。",
-      "if": { "properties": { "root": { "properties": { "kind": { "const": "assets" } }, "required": ["kind"] } } },
-      "then": { "properties": { "root": { "not": { "required": ["wasm"] } }, "children": { "maxItems": 0 }, "libs": { "maxItems": 0 }, "models": { "maxItems": 0 }, "assets": { "minItems": 1, "items": { "properties": { "kind": { "const": "image" } }, "required": ["path", "kind", "sha512", "sizeBytes"] } } } },
+      "$comment": "アセットパック(root.kind = assets、契約 v0.11)と着せ替え(root.kind = theme、v0.16): wasm / children / libs / models 無し、assets は画像だけ(sha512 / sizeBytes 必須)。それ以外の root は wasm が要る。",
+      "if": { "properties": { "root": { "properties": { "kind": { "enum": ["assets", "theme"] } }, "required": ["kind"] } } },
+      "then": { "properties": { "root": { "not": { "required": ["wasm"] } }, "children": { "maxItems": 0 }, "libs": { "maxItems": 0 }, "models": { "maxItems": 0 }, "assets": { "items": { "properties": { "kind": { "const": "image" } }, "required": ["path", "kind", "sha512", "sizeBytes"] } } } },
       "else": { "properties": { "root": { "required": ["wasm"] } } }
+    },
+    {
+      "$comment": "アセットパックは画像 1 枚以上。着せ替えは 0 枚でもよい(色だけのテーマ)。",
+      "if": { "properties": { "root": { "properties": { "kind": { "const": "assets" } }, "required": ["kind"] } } },
+      "then": { "properties": { "assets": { "minItems": 1 } } }
     }
   ],
   "additionalProperties": false,

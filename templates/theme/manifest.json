@@ -1,0 +1,27 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "{{id}}",
+  "name": "{{display}}",
+  "version": "0.1.0",
+  "kind": "theme",
+  "description": "{{display}}(rasq new theme の雛形)",
+  "assets": [
+    { "id": "background", "path": "theme/background.png", "use": "theme", "label": "背景" }
+  ],
+  "theme": {
+    "brightness": "dark",
+    "colors": {
+      "dark": { "primary": "#8AB4FF", "surface": "#0B1026", "onSurface": "#E8ECFF", "outline": "#3A4470" },
+      "light": { "primary": "#3355CC" }
+    },
+    "icons": {
+      "repeat": "material:autorenew"
+    },
+    "surfaces": {
+      "app": { "color": "#060914", "layers": [{ "asset": "background", "position": "below", "fit": "cover", "opacity": 0.9 }] },
+      "postTile": { "color": "#CC0B1026", "radius": 12 },
+      "fow": { "color": "#0B1026" },
+      "actionButton": { "radius": 18 }
+    }
+  }
+}

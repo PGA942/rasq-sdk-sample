@@ -45,8 +45,9 @@ rust:
     - rm -rf /tmp/rasq-e2e && mkdir -p /tmp/rasq-e2e && cd /tmp/rasq-e2e
     - $RASQ init --sns ci.test.sns --namespace ci.test
     - for s in post.transform tl trend.suggest viewer.overlay composer.media composer.text astell.action post.share post.action; do $RASQ new $s $(echo $s | tr . -); done
-    # アセットパック(wasm 無し、docs/slots.md §2.10)も同じワークスペースに
+    # アセットパック / 着せ替え(wasm 無し、docs/slots.md §2.10 / §2.12)も同じワークスペースに
     - $RASQ new assets stickers
+    - $RASQ new theme starry
     - $RASQ check
     # wasm そのものを wasmi で叩く(native の cargo test では見つからない wasm だけの panic を拾う)
     - $RASQ call post-transform post.transform --args '{"posts":[{"id":"a","body":"こんにちは 世界"}]}' | tee /tmp/call.out && grep -q "こんにちは👋" /tmp/call.out
@@ -61,6 +62,7 @@ rust:
     - $RASQ build --raw --no-build
     - $RASQ inspect dist/ci.test.sns-0.1.0.rasqpkg
     - $RASQ inspect dist/ci.test.stickers-0.1.0.rasqpkg | tee /tmp/pack.out && grep -q '(assets)' /tmp/pack.out
+    - $RASQ inspect dist/ci.test.starry-0.1.0.rasqpkg | tee /tmp/theme.out && grep -q '(theme)' /tmp/theme.out
     # 他人の土台として読み込み、子ごとの .rasqpkg(requires 付き)を出す
     - rm -rf /tmp/rasq-e2e-third && mkdir -p /tmp/rasq-e2e-third && cd /tmp/rasq-e2e-third
     - $RASQ init --base /tmp/rasq-e2e/dist/ci.test.sns-0.1.0.rasqpkg --namespace ci.third

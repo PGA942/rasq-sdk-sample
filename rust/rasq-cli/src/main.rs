@@ -49,9 +49,9 @@ enum Cmd {
         #[arg(long, default_value = "local.dev")]
         namespace: String,
     },
-    /// スロットの雛形から子プラグインを作る(土台の配下にバンドル)
+    /// スロットの雛形から子プラグインを作る(土台の配下にバンドル)。assets = アセットパック、theme = 着せ替え(どちらも wasm 無し、packs/<name>/)
     New {
-        /// スロット id(rasq registry で一覧)
+        /// スロット id(rasq registry で一覧)か assets / theme
         slot: String,
         /// プラグインの名前(ディレクトリ名 / crate 名)
         name: String,
@@ -349,8 +349,8 @@ fn new(slot: &str, name: &str, id: Option<String>, display: Option<String>, allo
     if name == "sns" || name == "kit" || ws.plugin(name).is_some() || ws.packs.iter().any(|p| p.name == name) {
         bail!("その名前は使えません(予約語か既にある): {name}");
     }
-    if slot == "assets" {
-        return new_pack(&root, ws, name, id, display);
+    if pack::PACK_KINDS.contains(&slot) {
+        return new_pack(&root, ws, slot, name, id, display);
     }
     let reg = embed::registry()?;
     let s = reg.iter().find(|s| s.id == slot).ok_or_else(|| anyhow!("slot {slot} は登録簿にありません(rasq registry)"))?;
@@ -376,8 +376,9 @@ fn new(slot: &str, name: &str, id: Option<String>, display: Option<String>, allo
     Ok(())
 }
 
-/// `rasq new assets <name>`: アセットパック(wasm 無し、`packs/<name>/`)。土台に依らないので id は常に `<namespace>.<name>`。
-fn new_pack(root: &Path, mut ws: Workspace, name: &str, id: Option<String>, display: Option<String>) -> Result<()> {
+/// `rasq new assets <name>` / `rasq new theme <name>`: アセットパック / 着せ替え(wasm 無し、`packs/<name>/`)。
+/// 土台に依らないので id は常に `<namespace>.<name>`。`kind` は雛形の名前でもある(templates/assets、templates/theme)。
+fn new_pack(root: &Path, mut ws: Workspace, kind: &str, name: &str, id: Option<String>, display: Option<String>) -> Result<()> {
     let id = id.unwrap_or_else(|| format!("{}.{name}", ws.namespace()));
     workspace::valid_plugin_id(&id)?;
     let display = display.unwrap_or_else(|| name.to_string());
@@ -386,15 +387,19 @@ fn new_pack(root: &Path, mut ws: Workspace, name: &str, id: Option<String>, disp
         bail!("{} が既にあります", dest.display());
     }
     let vars = [("id", id.as_str()), ("name", name), ("display", display.as_str())];
-    let files = embed::render_template("assets", &dest, &vars)?;
+    let files = embed::render_template(kind, &dest, &vars)?;
     ws.packs.push(workspace::PackEntry { name: name.into(), id: id.clone() });
     ws.save(root)?;
-    println!("packs/{name}/ を作りました(id = {id}, kind = assets): {}", files.join(", "));
-    println!("  次: stickers/ に画像を置いて manifest.json の assets に書く → rasq check");
+    println!("packs/{name}/ を作りました(id = {id}, kind = {kind}): {}", files.join(", "));
+    if kind == "theme" {
+        println!("  次: theme/ に画像を置いて manifest.json の assets(use = theme)に書き、theme.surfaces / icons から指す → rasq check");
+    } else {
+        println!("  次: stickers/ に画像を置いて manifest.json の assets に書く → rasq check");
+    }
     Ok(())
 }
 
-/// アセットパックの検査(wasm のビルドは要らない)。戻りは (errors, warnings)。
+/// アセットパック / 着せ替えの検査(wasm のビルドは要らない)。戻りは (errors, warnings)。
 fn verify_packs(root: &Path, ws: &Workspace) -> Result<(usize, usize, Vec<pack::Checked>)> {
     let (mut errors, mut warnings, mut out) = (0, 0, Vec::new());
     for p in &ws.packs {

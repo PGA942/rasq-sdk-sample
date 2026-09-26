@@ -1,6 +1,8 @@
 //! `rasq help <query…>` — 同梱の文書(docs/*.md, PROTOCOL.md)と登録簿(schema/slots.json)、
 //! マニフェストのボタン属性(manifest.schema.json の actionDescriptor)を節ごとに索引して探す。
 //!
+//! 着せ替え(`manifest.theme`、docs/slots.md §2.12)のキーも同じように節にする。
+//!
 //! 探し方は rasq-client の RAi リファレンス(`NgramRaiEmbedder`)と同じ考え: 語の完全一致を
 //! 最優先にし、それ以外は文字 2-gram の Dice 係数で見出しと本文を比べる。ネット無しで動く。
 //! `--central <url>` を付けると、Central の公開 API(`GET /api/v1/plugins?q=`)でほかのプラグインの
@@ -147,7 +149,21 @@ fn slot_entries(doc: &Value) -> Vec<Entry> {
 
 /// マニフェストの `actions[]` の属性を 1 つずつ節にする(`rasq help auto` で説明が出る)。
 fn action_attribute_entries(schema: &Value) -> Vec<Entry> {
-    schema["$defs"]["actionDescriptor"]["properties"]
+    attribute_entries(&schema["$defs"]["actionDescriptor"], "manifest.actions[]")
+}
+
+/// 着せ替えの宣言(`manifest.theme`、docs/slots.md §2.12)のキーを 1 つずつ節にする(`rasq help opacity` など)。
+fn theme_attribute_entries(schema: &Value) -> Vec<Entry> {
+    let d = &schema["$defs"];
+    let mut out = attribute_entries(&d["theme"], "manifest.theme");
+    out.extend(attribute_entries(&d["themeSurface"], "manifest.theme.surfaces.<面>"));
+    out.extend(attribute_entries(&d["themeLayer"], "manifest.theme.surfaces.<面>.layers[]"));
+    out
+}
+
+/// `$defs` の 1 つ(`properties` を持つ object)の、説明のあるキーを節にする。見出しは `<prefix>.<key>`。
+fn attribute_entries(def: &Value, prefix: &str) -> Vec<Entry> {
+    def["properties"]
         .as_object()
         .into_iter()
         .flatten()
@@ -168,7 +184,7 @@ fn action_attribute_entries(schema: &Value) -> Vec<Entry> {
             }
             Some(Entry {
                 source: "schema/manifest.schema.json".into(),
-                title: format!("manifest.actions[].{k}"),
+                title: format!("{prefix}.{k}"),
                 body: b,
             })
         })
@@ -190,9 +206,9 @@ pub fn index() -> Result<Vec<Entry>> {
     }
     out.extend(split_markdown("PROTOCOL.md", embed::PROTOCOL));
     out.extend(slot_entries(&embed::schema_json("slots.json")?));
-    out.extend(action_attribute_entries(&embed::schema_json(
-        "manifest.schema.json",
-    )?));
+    let manifest = embed::schema_json("manifest.schema.json")?;
+    out.extend(action_attribute_entries(&manifest));
+    out.extend(theme_attribute_entries(&manifest));
     Ok(out)
 }
 
@@ -452,6 +468,16 @@ mod tests {
                 .any(|t| t.contains("2.11") || t.contains("viewer.overlay")),
             "{:?}",
             top("全画面 初期状態")
+        );
+        assert!(
+            top("着せ替え").iter().any(|t| t.contains("2.12")),
+            "{:?}",
+            top("着せ替え")
+        );
+        assert!(
+            top("opacity").iter().any(|t| t == "manifest.theme.surfaces.<面>.layers[].opacity"),
+            "{:?}",
+            top("opacity")
         );
     }
 
