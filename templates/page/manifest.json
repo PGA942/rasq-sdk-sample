@@ -1,0 +1,23 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "{{id}}",
+  "name": "{{display}}",
+  "version": "0.1.0",
+  "kind": "view",
+  "description": "{{display}}(rasq new page の雛形)",
+  "slots": [
+    "page"
+  ],
+  "permissions": [
+    "render",
+    "shared.session"
+  ],
+  "page": {
+    "icon": "dashboard",
+    "mode": "shared",
+    "surfaces": [
+      "page",
+      "astell"
+    ]
+  }
+}

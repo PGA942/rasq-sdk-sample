@@ -109,7 +109,7 @@ lazy = true
 
 ## 3. 雛形(`rasq new <slot> <name>`)
 
-- 雛形は **登録簿の `status: stable` なスロットごと**に 1 つ。`rasq registry templates` で一覧。planned(`page` など)は
+- 雛形は **登録簿の `status: stable` なスロットごと**に 1 つ。`rasq registry templates` で一覧。planned(`screen.header` など)は
   `--allow-planned` を付けたときだけ出せ、`rasq check` が警告を出す(validate.py と同じ扱い)
 - 雛形の中身は plugin-sample の各リポジトリの**最小化版**(manifest を返す `plugin.manifest`、そのスロットの `call` を
   1 つ、`fow.open` が要るスロットは空の FOW)。フル機能の例としては plugin-sample を README から指す
@@ -120,7 +120,7 @@ lazy = true
 - **`rasq new theme <name>`** は**着せ替え(テーマ)パック**(`kind: "theme"`、wasm 無し、[slots.md §2.12](slots.md))を同じく `packs/<name>/` に作る(`manifest.json` の `theme`(色 / アイコンの差し替え / 面ごとの背景)+ `theme/` の画像 1 枚)。rasq.toml の `[[packs]]` もアセットパックと共通で、kind は `manifest.json` が持つ。`rasq check` はアセットパックと同じ検査に加えて参照の整合(`theme.surfaces.*.layers[].asset` と `theme.icons` の `asset:<id>` が `assets` に `use: "theme"` であること)を見て、どこからも指されていない画像は警告。`rasq build` は kind theme の配布物(wasm 無し)、`rasq publish` は掲載のカテゴリを `theme` にする
 - 生成直後に `rasq check` が通る状態であること(雛形の CI: SDK 側 `rust` ジョブで全雛形を `rasq new` → `check`)
 
-雛形の対応表(第一期、登録簿の stable 9 スロット):
+雛形の対応表(第一期、登録簿の stable 10 スロット。`page` は v0.18):
 
 | slot | 雛形の骨子 | 元にする plugin-sample |
 |---|---|---|
@@ -133,6 +133,7 @@ lazy = true
 | `astell.action` | ルーム FOW → `astell.share` | astell-plugin |
 | `post.share` | 共有 FOW の項目 → `composer.open` | post-share-plugin |
 | `post.action` | `actions[].tags` 付き manifest + `fow.open` | post-action-plugin |
+| `page` | shared のカウンター(`page.open` → `shared.op incr` → `page.event var` → `page.render`、セッション無しは端末だけ) | custom-page-plugin |
 
 ## 4. コーディング支援(`rasq add`)
 

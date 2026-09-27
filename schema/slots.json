@@ -1,6 +1,6 @@
 {
   "schema": "rasq.slots/1",
-  "$comment": "スロット登録簿 (D-005)。プラグインが差し込める面を 1 か所で定義する。マニフェストの `slots` はここにある id だけを指せる(schema/validate.py が照合)。`status: planned` は仮案(RRL&プラグイン周り §17)から採った未実装の面で、id だけ先に予約する。 tiers: 権限ティア(PROTOCOL §6 V1)。サイドロード(未審査)は content だけ、media は tag だけ、action / avatar / full / page は審査済みのみ。 permissions.required はホスト(rasq-client slot_plugins.dart)が v1 で実際に見る権限(fow.* / storage.* / mute.words)だけ。操作語彙(replace_media / register_action など、CONTRACT §8)は審査で付くので optional。 v0.14: ボタン共通の auto(初期状態 = temp)/ placement(auto | manual)を manifest.actions に追加。全体のオン / オフ(switch)はホスト設定。docs/slots.md §2.11。 v0.15: astell.action も manifest.actions で宣言(1 つ = ルーム下段のボタン 1 つ、astell.open に action)。docs/slots.md §2.1。 v0.16: 着せ替え(テーマ)パック kind = theme(スロットではない。wasm 無しで manifest.theme と assets[] の use = theme の画像だけ)。docs/slots.md §2.12。 v0.17: 着せ替えのレイヤーに gradient(線形グラデーション。asset とどちらか 1 つ)と height(辺に寄せた帯)、面に onColor(文字とアイコンの色)。docs/slots.md §2.12。",
+  "$comment": "スロット登録簿 (D-005)。プラグインが差し込める面を 1 か所で定義する。マニフェストの `slots` はここにある id だけを指せる(schema/validate.py が照合)。`status: planned` は仮案(RRL&プラグイン周り §17)から採った未実装の面で、id だけ先に予約する。 tiers: 権限ティア(PROTOCOL §6 V1)。サイドロード(未審査)は content だけ、media は tag だけ、action / avatar / full / page は審査済みのみ。 permissions.required はホスト(rasq-client slot_plugins.dart)が v1 で実際に見る権限(fow.* / storage.* / mute.words)だけ。操作語彙(replace_media / register_action など、CONTRACT §8)は審査で付くので optional。 v0.14: ボタン共通の auto(初期状態 = temp)/ placement(auto | manual)を manifest.actions に追加。全体のオン / オフ(switch)はホスト設定。docs/slots.md §2.11。 v0.15: astell.action も manifest.actions で宣言(1 つ = ルーム下段のボタン 1 つ、astell.open に action)。docs/slots.md §2.1。 v0.16: 着せ替え(テーマ)パック kind = theme(スロットではない。wasm 無しで manifest.theme と assets[] の use = theme の画像だけ)。docs/slots.md §2.12。 v0.17: 着せ替えのレイヤーに gradient(線形グラデーション。asset とどちらか 1 つ)と height(辺に寄せた帯)、面に onColor(文字とアイコンの色)。docs/slots.md §2.12。 v0.18: page(ページ型プラグイン = カスタムプラグイン)を stable に。manifest.page(mode = solo | shared、surfaces = page | astell | profile)、shared のサーバー変数 / 関数(shared.set / shared.op / shared.call、権限 shared.session。Central が中継・保持、rasq-central S-048)。docs/slots.md §2.13(rasq-client D-357)。",
   "tiers": {
     "content": {
       "sideload": true,
@@ -24,7 +24,7 @@
     },
     "page": {
       "sideload": false,
-      "description": "ページ型(custom:<pluginId>)。ホストのルーティングと一緒に決める"
+      "description": "ページ型(custom:<pluginId>)。全画面のページ(ヘッダーと戻るはホスト)。shared はサーバー変数 / 関数(Central が中継、S-048)を使える。v0.18"
     }
   },
   "lifecycle": {
@@ -752,8 +752,8 @@
     },
     {
       "id": "page",
-      "status": "planned",
-      "label": "ページ型(全画面プラグイン、Misskey Play などの移植先)",
+      "status": "stable",
+      "label": "ページ型(カスタムプラグイン。単独のページ / AsTell のルーム / プロフィールのタイル、v0.18)",
       "tier": "page",
       "kinds": [
         "view"
@@ -762,16 +762,22 @@
         "surface": "screen.fullscreen",
         "route": "custom:<pluginId>",
         "constraints": [
-          "app-owned の back / escape を奪えない",
+          "app-owned の back / escape を奪えない(ヘッダーと戻るはホスト)",
           "BottomNavigation / safe area はホスト",
-          "ホストのルーティングと一緒に決める(plugin-sample/custom-page-plugin)"
+          "開く場所は manifest.page.surfaces(page = 単独のページ / astell = AsTell のルームにデプロイ(shared のみ)/ profile = RASQ アカウントのページのタイル)",
+          "shared のセッションは Central が持つ(scope = room:<roomId> / profile:<accountId> / link:<sessionId>、rasq-central S-048)"
         ]
       },
       "calls": [
         "page.open",
+        "page.event",
         "page.close"
       ],
       "hostFns": [
+        "page.render",
+        "shared.set",
+        "shared.op",
+        "shared.call",
         "fow.open",
         "fow.close",
         "storage.get",
@@ -785,6 +791,7 @@
           "render"
         ],
         "optional": [
+          "shared.session",
           "storage.safe",
           "network"
         ]
@@ -799,7 +806,8 @@
         "crashed",
         "unsupported"
       ],
-      "sample": "orgate-question/plugin-sample/custom-page-plugin"
+      "sample": "orgate-question/plugin-sample/custom-page-plugin",
+      "since": "v0.18"
     },
     {
       "id": "settings.section",

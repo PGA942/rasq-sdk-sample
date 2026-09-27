@@ -87,9 +87,10 @@ paths:
       parameters:
         - { name: pluginId, in: path, required: true, schema: { type: string } }
         - { name: version, in: query, schema: { type: string }, description: 省略時は stable 最新 }
+        - { name: session, in: query, schema: { type: string }, description: "カスタムセッションの id(ページ型の一時利用、rasq-central S-048)。そのセッションが有効で、このプラグインのもので、呼んだ人が WS に入れる人なら、購入していなくても通す" }
       responses:
         "200": { content: { application/json: { schema: { $ref: "#/components/schemas/InstallManifest" } } } }
-        "403": { description: "有料で、このアカウントが買っていない(error.code = purchase_required。配布物も同じ)" }
+        "403": { description: "有料で、このアカウントが買っていない(error.code = purchase_required。配布物も同じ)。session 付きでも入れない人なら同じ" }
   /plugins/{pluginId}/artifacts/{artifactId}:
     get:
       operationId: downloadArtifact
@@ -98,8 +99,10 @@ paths:
         - { name: pluginId, in: path, required: true, schema: { type: string } }
         - { name: artifactId, in: path, required: true, schema: { type: string } }
         - { name: version, in: query, schema: { type: string }, description: 省略時は現在版(manifest と同じ版を指定する) }
+        - { name: session, in: query, schema: { type: string }, description: "カスタムセッションの id(manifest の session と同じ規則で、未購入でも通す。S-048)" }
       responses:
         "200": { content: { application/zstd: { schema: { type: string, format: binary } } } }
+        "403": { description: "有料で未購入(error.code = purchase_required)" }
   /plugins/{pluginId}/reviews:
     get:
       operationId: reviews
@@ -190,6 +193,138 @@ paths:
                 bookmarked: { type: boolean }
       responses:
         "204": { description: ok }
+  /custom/sessions:
+    post:
+      operationId: createCustomSession
+      summary: ページ型プラグイン(shared)のセッションを作る(rasq-client D-357 / rasq-central S-048、契約 v0.18 docs/slots.md §2.13)
+      description: >-
+        プラグインが掲載されていて、その版のマニフェストが slots に page、page.mode = shared、scope に合う surfaces
+        (room: → astell、profile → profile、link → page)を持つこと(違えば 400 not_shared_page)。有料なら作る人が購入済み
+        (403 purchase_required)。
+        room:<roomId> = ルームのオーナーかモデレーター(= ホストの承認)で、ルームが開いていること。同じルーム × プラグインで
+        有効なものがあればそれを返す(200)。作ったらルームの WS に {"type":"custom","action":"deployed","session":CustomSession} を配る。
+        profile = profile:<自分>。同じプラグインで有効なものがあればそれを返す。
+        link = 新しいセッション + inviteCode(招待)。
+      security: [{ bearer: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pluginId, scope]
+              properties:
+                pluginId: { type: string }
+                version: { type: string, description: 省略時は現在版 }
+                scope: { type: string, pattern: "^(room:.+|profile|link)$", description: "room:<roomId> / profile / link" }
+      responses:
+        "200": { description: "既にある有効なセッション, content: { application/json: { schema: { $ref: \"#/components/schemas/CustomSession\" } } }" }
+        "201": { content: { application/json: { schema: { $ref: "#/components/schemas/CustomSession" } } } }
+        "400": { description: "error.code = not_shared_page(page / shared / surfaces が合わない)か bad_scope" }
+        "403": { description: "error.code = purchase_required / not_room_host(room: でオーナー・モデレーターでない)" }
+        "404": { description: プラグインかルームが無い(ルームが閉じている) }
+    get:
+      operationId: listCustomSessions
+      summary: scope の有効なセッション(新しい順)
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: scope, in: query, required: true, schema: { type: string, pattern: "^(room|profile):.+$" }, description: "room:<roomId> か profile:<accountId>" }
+      responses:
+        "200": { content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/CustomSession" } } } } }
+  /custom/sessions/{sessionId}:
+    get:
+      operationId: customSession
+      summary: セッションの中身(変数と今の参加者)
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: sessionId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session, vars, participants]
+                properties:
+                  session: { $ref: "#/components/schemas/CustomSession" }
+                  vars: { $ref: "#/components/schemas/CustomVars" }
+                  participants: { type: array, items: { $ref: "#/components/schemas/CustomParticipant" } }
+        "404": { description: 無いか閉じている }
+    delete:
+      operationId: closeCustomSession
+      summary: セッションを閉じる
+      description: >-
+        閉じられるのは作った人、room: ならルームのオーナー / モデレーター、profile: なら持ち主。セッションの WS に closed、
+        room: ならルームの WS に {"type":"custom","action":"closed","sessionId"} を配る。
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: sessionId, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: ok }
+        "403": { description: 閉じる権利が無い }
+        "404": { description: 無いか既に閉じている }
+  /custom/sessions/{sessionId}/ws:
+    get:
+      operationId: customSessionWs
+      summary: セッションの WebSocket(変数の同期とサーバー関数の中継)
+      description: >-
+        AsTell の WS と同じ認証(?token=…)。入れる人: room: = そのルームに今つながっているピア、またはオーナー / モデレーター。
+        profile: / link: = ログイン済みなら誰でも(持ち主にブロックされていたら 403)。page.maxParticipants を超えたら 409。
+        受信(クライアント → サーバー)は CustomWsClientMessage、送信は CustomWsServerMessage(JSON テキストフレーム)。
+        キーは ^[A-Za-z0-9_.:@-]{1,64}$、me. で始まるキーは @<accountId>. に書き換え、@<accountId>. のキーは本人だけが書ける。
+        値は JSON 16 KiB まで、1 セッション 256 キー・合計 1 MiB まで、call の args は 16 KiB まで、1 接続 20 通/秒まで(超えたら error)。
+        op の append は 500 要素まで(超えたら先頭から捨てる)。ホストはこれを page.event(docs/slots.md §2.13)に写す。
+      security: []
+      parameters:
+        - { name: sessionId, in: path, required: true, schema: { type: string } }
+        - { name: token, in: query, required: true, schema: { type: string }, description: RASQ のアクセストークン }
+      responses:
+        "101": { description: "Switching Protocols。最初に welcome が来る" }
+        "403": { description: 入れない(ブロック / ルームにいない) }
+        "404": { description: 無いか閉じている }
+        "409": { description: maxParticipants を超えた }
+  /custom/invites/{code}:
+    get:
+      operationId: customInvite
+      summary: "招待コード(link: のセッション)からセッションを引く"
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { content: { application/json: { schema: { $ref: "#/components/schemas/CustomSession" } } } }
+        "404": { description: 無いか閉じている }
+  /accounts/{handle}/pages:
+    get:
+      operationId: profilePages
+      summary: RASQ アカウントのプロフィールに置かれたページ型プラグイン(タイル、S-048)
+      parameters:
+        - { name: handle, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ProfilePage" } } } } }
+        "404": { description: アカウントが無い }
+  /me/pages:
+    put:
+      operationId: setProfilePages
+      summary: 自分のプロフィールに置くページ型プラグイン(並び順どおり、8 個まで。インストールの確認はクライアント側)
+      security: [{ bearer: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  maxItems: 8
+                  items:
+                    type: object
+                    required: [pluginId]
+                    properties:
+                      pluginId: { type: string }
+                      version: { type: string, description: 省略 = 現在版 }
+      responses:
+        "200": { content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ProfilePage" } } } } }
+        "400": { description: "9 個以上、掲載されていない、slots に page が無い、surfaces に profile が無い(error.code = not_profile_page)" }
 components:
   securitySchemes:
     bearer: { type: http, scheme: bearer }
@@ -222,9 +357,10 @@ components:
           description: タイルの自動スライドに出すプレビュー画像(詳細の screenshots の先頭 4 枚。無ければ空 / 省略)
         pluginType:
           type: string
-          enum: [sns, composer, post, viewer, timeline, astell, trend, theme, assets, other]
+          enum: [sns, composer, post, viewer, timeline, astell, trend, theme, assets, custom, other]
           description: >-
             プラグインの種別(ストアのタイルの色と見出し、rasq-client D-354)。現在版のマニフェストから導く:
+            slots に page があれば custom(ページ型 = カスタムプラグイン、D-357 / S-048。ほかより優先)。
             kind = sns / theme / assets はそのまま、それ以外は最初の slot の頭(composer.* → composer、post.* → post、
             viewer.* → viewer、tl* → timeline、astell.* → astell、trend.* → trend)。kind = view / mediaViewer → viewer、
             postProcessor → post、trend → trend。どれにも当たらなければ other。
@@ -238,7 +374,7 @@ components:
             bannerUrl: { type: string, format: uri, description: ページ上部のバナー画像 }
             downloadsLastMonth: { type: integer, description: 先月のダウンロード数(集計が無ければ省略) }
             downloadHistory: { type: array, items: { type: integer }, description: 直近の累積 DL 推移(古い→新しい、等間隔。折れ線用) }
-            ratingHistogram: { type: array, items: { type: integer }, minItems: 5, maxItems: 5, description: 評価の分布 [★1,★2,★3,★4,★5] }
+            ratingHistogram: { type: array, items: { type: integer }, minItems: 5, maxItems: 5, description: "評価の分布 [★1,★2,★3,★4,★5]" }
             channel: { type: string, enum: [stable, beta] }
             purchased: { type: boolean, description: 見ている RASQ アカウントが買っているか(有料のときだけ、ログイン中だけ。D-355) }
             updatedAt: { type: string, format: date-time }
@@ -328,3 +464,131 @@ components:
         notes: { type: string }
         permissionsAdded: { type: array, items: { $ref: "#/components/schemas/PermissionEntry" } }
         publishedAt: { type: string, format: date-time }
+    CustomSession:
+      type: object
+      description: ページ型プラグイン(shared)のセッション(rasq-central S-048、docs/slots.md §2.13)
+      required: [id, pluginId, version, scope, title, ownerAccountId, ownerHandle, createdAt, participantCount]
+      properties:
+        id: { type: string }
+        pluginId: { type: string }
+        version: { type: string, description: セッションを作ったときの版(参加者はこの版を使う) }
+        scope: { type: string, description: "room:<roomId> / profile:<accountId> / link:<sessionId>" }
+        title: { type: string, description: manifest の page.title(無ければ name) }
+        ownerAccountId: { type: string, format: uuid }
+        ownerHandle: { type: string }
+        inviteCode: { type: string, description: "link: のときだけ(招待リンク /custom/invites/{code})" }
+        createdAt: { type: string, format: date-time }
+        participantCount: { type: integer, description: 今 WS に入っている人数 }
+    CustomParticipant:
+      type: object
+      required: [accountId, handle, displayName]
+      properties:
+        accountId: { type: string, format: uuid }
+        handle: { type: string }
+        displayName: { type: string }
+    CustomVar:
+      type: object
+      required: [value, rev, by]
+      properties:
+        value: { description: JSON の値(16 KiB まで) }
+        rev: { type: integer, description: そのキーの版(書くたびに増える) }
+        by: { type: string, format: uuid, description: 最後に書いた人の accountId }
+    CustomVars:
+      type: object
+      description: キー → CustomVar。キーは ^[A-Za-z0-9_.:@-]{1,64}$(@<accountId>. で始まるキーはその本人だけが書ける)
+      additionalProperties: { $ref: "#/components/schemas/CustomVar" }
+    CustomWsClientMessage:
+      description: カスタムセッションの WS でクライアントが送るもの
+      oneOf:
+        - type: object
+          required: [type, key, value]
+          properties:
+            type: { const: set }
+            key: { type: string }
+            value: { description: "null で消す" }
+            ifRev: { type: integer, description: 今の rev と違えば書かずに conflict }
+        - type: object
+          required: [type, key, op, value]
+          properties:
+            type: { const: op }
+            key: { type: string }
+            op: { type: string, enum: [incr, append, remove, merge] }
+            value: {}
+        - type: object
+          required: [type, fn]
+          properties:
+            type: { const: call }
+            fn: { type: string }
+            args: { type: object }
+        - type: object
+          required: [type]
+          properties:
+            type: { const: ping }
+    CustomWsServerMessage:
+      description: カスタムセッションの WS でサーバーが送るもの(ホストが page.event に写す)
+      oneOf:
+        - type: object
+          required: [type, me, session, participants, vars]
+          properties:
+            type: { const: welcome }
+            me: { $ref: "#/components/schemas/CustomParticipant" }
+            session: { $ref: "#/components/schemas/CustomSession" }
+            participants: { type: array, items: { $ref: "#/components/schemas/CustomParticipant" } }
+            vars: { $ref: "#/components/schemas/CustomVars" }
+        - type: object
+          required: [type, key, value, rev, by]
+          properties:
+            type: { const: var }
+            key: { type: string, description: 書き換え後のキー(me. → @<accountId>.) }
+            value: { description: null = 消えた }
+            rev: { type: integer }
+            by: { type: string, format: uuid }
+        - type: object
+          required: [type, fn, args, from]
+          properties:
+            type: { const: call }
+            fn: { type: string }
+            args: { type: object }
+            from: { $ref: "#/components/schemas/CustomParticipant" }
+        - type: object
+          required: [type, participant]
+          properties:
+            type: { const: joined }
+            participant: { $ref: "#/components/schemas/CustomParticipant" }
+        - type: object
+          required: [type, accountId]
+          properties:
+            type: { const: left }
+            accountId: { type: string, format: uuid }
+        - type: object
+          required: [type, key, value, rev]
+          properties:
+            type: { const: conflict }
+            key: { type: string }
+            value: {}
+            rev: { type: integer }
+        - type: object
+          required: [type, message]
+          properties:
+            type: { const: error }
+            message: { type: string }
+        - type: object
+          required: [type, reason]
+          properties:
+            type: { const: closed }
+            reason: { type: string }
+        - type: object
+          required: [type]
+          properties:
+            type: { const: pong }
+    ProfilePage:
+      type: object
+      description: プロフィールに置かれたページ型プラグイン 1 つ(並び順どおり)
+      required: [pluginId, name, icon, mode]
+      properties:
+        pluginId: { type: string }
+        version: { type: string, description: 固定した版(省略 = 現在版) }
+        name: { type: string, description: manifest の page.title(無ければ name) }
+        icon: { type: string, description: manifest の page.icon(Material Icon の名前。無ければ既定) }
+        mode: { type: string, enum: [solo, shared] }
+        sessionId: { type: string, description: "shared のとき、持ち主の有効な profile: セッションの id(まだ無ければ省略)" }

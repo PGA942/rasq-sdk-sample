@@ -133,6 +133,15 @@ pub fn check_manifest(v: &Validator, registry: &[Slot], m: &Value, declared_slot
     if slots.contains(&"viewer.overlay") && !m["actions"].as_array().into_iter().flatten().any(|a| a["slot"] == "viewer.overlay") {
         f.warnings.push("全画面アクションバーのボタン宣言(actions[].slot = \"viewer.overlay\")がありません(ホストが name と既定アイコンで出す)".into());
     }
+    // ページ型(docs/slots.md §2.13 v0.18)。page が要ること / shared なら shared.session / astell は shared だけ、はスキーマが見る。
+    if m["page"]["mode"] == "solo" {
+        if perms.contains(&"shared.session") {
+            f.warnings.push("page.mode = solo なのに permissions に shared.session があります(solo はセッションに入らないので過剰宣言)".into());
+        }
+        if !m["page"]["maxParticipants"].is_null() {
+            f.warnings.push("page.maxParticipants は shared のときだけ意味があります".into());
+        }
+    }
     if let (Some(cv), Some(mv)) = (cargo_version, m["version"].as_str()) {
         if cv != mv {
             f.warnings.push(format!("Cargo.toml の version {cv} と manifest の version {mv} が違います"));
@@ -208,10 +217,37 @@ mod tests {
     }
 
     #[test]
+    fn page_mode_rules() {
+        let v = manifest_validator().unwrap();
+        let reg = crate::embed::registry().unwrap();
+        let base = |perms: Value, page: Value| {
+            json!({
+                "schema": "rasq.plugin-manifest/1", "id": "sample.t", "name": "t", "version": "0.1.0", "kind": "view",
+                "slots": ["page"], "permissions": perms, "page": page
+            })
+        };
+        let ok = check_manifest(&v, &reg, &base(json!(["render", "shared.session"]), json!({"mode": "shared", "surfaces": ["page", "astell"]})), Some("page"), None);
+        assert!(ok.errors.is_empty() && ok.warnings.is_empty(), "{:?} {:?}", ok.errors, ok.warnings);
+        // shared には shared.session が要る
+        let f = check_manifest(&v, &reg, &base(json!(["render"]), json!({"mode": "shared"})), Some("page"), None);
+        assert!(!f.errors.is_empty());
+        // astell は shared だけ
+        let f = check_manifest(&v, &reg, &base(json!(["render"]), json!({"mode": "solo", "surfaces": ["astell"]})), Some("page"), None);
+        assert!(!f.errors.is_empty());
+        // slots に page があれば page が要る
+        let mut m = base(json!(["render"]), json!({"mode": "solo"}));
+        m.as_object_mut().unwrap().remove("page");
+        assert!(!check_manifest(&v, &reg, &m, Some("page"), None).errors.is_empty());
+        // solo + shared.session は警告
+        let f = check_manifest(&v, &reg, &base(json!(["render", "shared.session"]), json!({"mode": "solo"})), Some("page"), None);
+        assert!(f.errors.is_empty() && f.warnings.iter().any(|w| w.contains("shared.session")), "{:?} {:?}", f.errors, f.warnings);
+    }
+
+    #[test]
     fn bundled_templates_pass_the_check() {
         let v = manifest_validator().unwrap();
         let reg = crate::embed::registry().unwrap();
-        for name in ["post.action", "viewer.overlay", "composer.media"] {
+        for name in ["post.action", "viewer.overlay", "composer.media", "page"] {
             let raw = crate::embed::TEMPLATES.get_file(format!("{name}/manifest.json")).unwrap().contents_utf8().unwrap();
             let m: Value = serde_json::from_str(&raw.replace("{{id}}", "sample.t").replace("{{display}}", "t")).unwrap();
             let f = check_manifest(&v, &reg, &m, Some(name), None);

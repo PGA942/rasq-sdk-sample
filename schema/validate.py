@@ -11,6 +11,8 @@
 - 着せ替え(kind = theme、docs/slots.md §2.12): theme.surfaces.*.layers[].asset と theme.icons の asset:<id> が
   assets[] に use = theme で載っていること(assets[].id の重複も見る)。v0.17 のグラデーションのレイヤーは参照先が無いので
   見ず、代わりに gradient.stops が colors と同じ数で昇順であることを見る
+- ページ型(slot page、v0.18、docs/slots.md §2.13): page.mode = solo なのに shared.session / maxParticipants があれば警告
+  (page が要ること、shared なら shared.session、astell は shared だけ、はスキーマが見る)
 - action-ref.schema.json の examples が自分のパターンに合うこと
 
 依存: pip install jsonschema referencing
@@ -163,6 +165,11 @@ def main() -> int:
                 rep.error(f"{label}: {problem}")
         if "composer.media" in m.get("slots", []) and not any(a.get("slot") == "composer.media" for a in m.get("actions", [])):
             rep.warn(f"{label}: 加工画面の下段バーのボタン宣言(actions[].slot = composer.media)が無い(ホストが既定の見た目で、画像にだけ出す)")
+        pg = m.get("page") or {}
+        if pg.get("mode") == "solo" and "shared.session" in m.get("permissions", []):
+            rep.warn(f"{label}: page.mode = solo なのに permissions に shared.session がある(solo はセッションに入らないので過剰宣言)")
+        if pg.get("mode") == "solo" and "maxParticipants" in pg:
+            rep.warn(f"{label}: page.maxParticipants は shared のときだけ意味がある")
         if "viewer.overlay" in m.get("slots", []) and not any(a.get("slot") == "viewer.overlay" for a in m.get("actions", [])):
             rep.warn(f"{label}: 全画面アクションバーのボタン宣言(actions[].slot = viewer.overlay)が無い(ホストが既定の見た目で出す)")
 
