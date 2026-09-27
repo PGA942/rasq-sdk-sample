@@ -57,6 +57,29 @@ paths:
         - { name: pluginId, in: path, required: true, schema: { type: string } }
       responses:
         "200": { content: { application/json: { schema: { $ref: "#/components/schemas/PluginDetail" } } } }
+  /plugins/{pluginId}/purchase:
+    post:
+      operationId: purchasePlugin
+      summary: 有料プラグインをポイントで購入(rasq-client D-355)
+      description: >-
+        ポイント = Web コンソールで Stripe から買う(付与から 2 か月で失効)。**有効期限の近い付与から**減らす。
+        1 ポイント = 1 円(`price` を切り上げた数)。すでに持っていれば減らさずに 200(`pointsSpent: 0`)。無料なら 400。
+        購入は RASQ アカウントに付く(同じアカウントならどの端末でも入れられる)。
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: pluginId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [purchased, pointsSpent, balance]
+                properties:
+                  purchased: { type: boolean }
+                  pointsSpent: { type: integer }
+                  balance: { type: integer, description: 購入後の残り(失効していない付与の合計) }
+        "409": { description: "ポイントが足りない(error.code = insufficient_points、残りは error.message)" }
   /plugins/{pluginId}/manifest:
     get:
       operationId: pluginManifest
@@ -66,6 +89,7 @@ paths:
         - { name: version, in: query, schema: { type: string }, description: 省略時は stable 最新 }
       responses:
         "200": { content: { application/json: { schema: { $ref: "#/components/schemas/InstallManifest" } } } }
+        "403": { description: "有料で、このアカウントが買っていない(error.code = purchase_required。配布物も同じ)" }
   /plugins/{pluginId}/artifacts/{artifactId}:
     get:
       operationId: downloadArtifact
@@ -216,6 +240,7 @@ components:
             downloadHistory: { type: array, items: { type: integer }, description: 直近の累積 DL 推移(古い→新しい、等間隔。折れ線用) }
             ratingHistogram: { type: array, items: { type: integer }, minItems: 5, maxItems: 5, description: 評価の分布 [★1,★2,★3,★4,★5] }
             channel: { type: string, enum: [stable, beta] }
+            purchased: { type: boolean, description: 見ている RASQ アカウントが買っているか(有料のときだけ、ログイン中だけ。D-355) }
             updatedAt: { type: string, format: date-time }
             safety: { $ref: "#/components/schemas/SafetyBlock" }
             compatibility: { $ref: "#/components/schemas/Compatibility" }
