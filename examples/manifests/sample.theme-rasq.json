@@ -1,0 +1,29 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "sample.theme-rasq",
+  "name": "RASQ",
+  "version": "0.1.0",
+  "kind": "theme",
+  "description": "投稿の上のグラデーションの帯と薄い RASQ のマーク、緑のグラデーションの FOW",
+  "assets": [
+    { "id": "mark", "path": "theme/rasq_mark_faded.png", "use": "theme", "label": "薄い RASQ のマーク" }
+  ],
+  "theme": {
+    "brightness": "both",
+    "surfaces": {
+      "postTile": {
+        "layers": [
+          { "asset": "mark", "position": "below", "fit": "contain", "alignment": "centerRight" },
+          { "gradient": { "colors": ["#1F1E33", "#001F1E33"] }, "position": "below", "alignment": "topCenter", "height": 28 }
+        ]
+      },
+      "fow": {
+        "color": "#02775C",
+        "onColor": "#FFFFFF",
+        "layers": [
+          { "gradient": { "colors": ["#02775C", "#178178"], "begin": "topCenter", "end": "bottomCenter" }, "position": "below" }
+        ]
+      }
+    }
+  }
+}

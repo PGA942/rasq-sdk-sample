@@ -9,7 +9,8 @@
 - 突き合わせ: マニフェストの slots は登録簿にあること(planned は警告)、kind がそのスロットで許されること、
   必要権限を持つこと、登録簿の hostFns は host-fn.schema.json の $defs.fns と boundary の hostFnName にあること
 - 着せ替え(kind = theme、docs/slots.md §2.12): theme.surfaces.*.layers[].asset と theme.icons の asset:<id> が
-  assets[] に use = theme で載っていること(assets[].id の重複も見る)
+  assets[] に use = theme で載っていること(assets[].id の重複も見る)。v0.17 のグラデーションのレイヤーは参照先が無いので
+  見ず、代わりに gradient.stops が colors と同じ数で昇順であることを見る
 - action-ref.schema.json の examples が自分のパターンに合うこと
 
 依存: pip install jsonschema referencing
@@ -79,7 +80,8 @@ def validate(rep: Report, reg: Registry, schema_name: str, doc, label: str) -> b
 
 
 def theme_problems(m: dict) -> list[str]:
-    """着せ替え(kind = theme)の整合。スキーマでは書けない「id の参照先がある」を見る(rasq check の pack::theme_problems と同じ規則)。"""
+    """着せ替え(kind = theme)の整合。スキーマでは書けない「id の参照先がある」「stops が colors と同じ数で昇順」を見る
+    (rasq check の pack::theme_problems と同じ規則)。"""
     out: list[str] = []
     ids: list[str] = [a["id"] for a in m.get("assets", [])]
     for dup in sorted({i for i in ids if ids.count(i) > 1}):
@@ -88,8 +90,15 @@ def theme_problems(m: dict) -> list[str]:
     t = m.get("theme") or {}
     for name, surface in (t.get("surfaces") or {}).items():
         for i, layer in enumerate(surface.get("layers", [])):
-            if layer["asset"] not in theme_ids:
-                out.append(f"theme.surfaces.{name}.layers[{i}].asset {layer['asset']!r} が assets(use = theme)にありません")
+            where = f"theme.surfaces.{name}.layers[{i}]"
+            if "asset" in layer and layer["asset"] not in theme_ids:
+                out.append(f"{where}.asset {layer['asset']!r} が assets(use = theme)にありません")
+            g = layer.get("gradient")
+            if g is not None and "stops" in g:
+                if len(g["stops"]) != len(g["colors"]):
+                    out.append(f"{where}.gradient.stops が {len(g['stops'])} 個、colors が {len(g['colors'])} 個(同じ数にする)")
+                if any(a > b for a, b in zip(g["stops"], g["stops"][1:])):
+                    out.append(f"{where}.gradient.stops が昇順ではありません: {g['stops']}")
     for icon, ref in (t.get("icons") or {}).items():
         if ref.startswith("asset:") and ref[len("asset:") :] not in theme_ids:
             out.append(f"theme.icons.{icon} の {ref!r} が assets(use = theme)にありません")

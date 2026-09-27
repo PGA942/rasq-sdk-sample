@@ -1,4 +1,4 @@
-# RASQ スロットプラグイン契約 v0.16(正典)
+# RASQ スロットプラグイン契約 v0.17(正典)
 
 > **ここが正典。** 以前は `orgate-question/plugin-sample/*/CONTRACT.md` に同じ文書が複製されていたが、v0.8 から
 > 各リポジトリの `CONTRACT.md` はこのファイルへのポインタだけになった。節番号(§2.1〜§2.9 / §3 / §4 / §5)は複製時代のまま。
@@ -382,7 +382,7 @@ TL プラグインはタブではなく、簡略カスタマイズ UI / ノー�
   error、composer.media の `auto` は `output: "filter"` だけ(replace / sticker は true でも false でも error)、`placement: "manual"` で `tags` が無ければ「検索でタグ一致しない」warning。
   スキーマ(`manifest.schema.json` v0.5)も同じ規則を持つ。
 
-### 2.12 着せ替え(テーマ)パック — `kind: "theme"`(v0.16、スロットではない)
+### 2.12 着せ替え(テーマ)パック — `kind: "theme"`(v0.16、スロットではない。v0.17 でグラデーション / 帯 / onColor)
 
 アセットパック(§2.10)と同じ **wasm を持たない配布物**(rasq-client D-335)。中身はマニフェストの `theme`(宣言)と
 画像(`assets[]`、`use: "theme"`)だけで、ホストは宣言を読むだけ(コードは動かない / 権限も無い)。
@@ -422,7 +422,7 @@ TL プラグインはタブではなく、簡略カスタマイズ UI / ノー�
 (同じものが [`../examples/manifests/sample.theme-starry.json`](../examples/manifests/sample.theme-starry.json)、画像つきの一式は
 plugin-sample の `theme-plugin`。)
 
-**`theme` のキー**([`manifest.schema.json`](../schema/manifest.schema.json) の `$defs.theme` / `themeColors` / `themeSurface` / `themeLayer`):
+**`theme` のキー**([`manifest.schema.json`](../schema/manifest.schema.json) の `$defs.theme` / `themeColors` / `themeSurface` / `themeLayer` / `themeGradient`):
 
 | キー | 形 | 意味 |
 |---|---|---|
@@ -435,20 +435,63 @@ plugin-sample の `theme-plugin`。)
   例の `#CC0B1026` = `#0B1026` の 80%。§3 の RRL の色 `#RRGGBBAA`(末尾が不透明度)とは逆なので注意)。
 - **面(surfaces)**: `app` = メインの画面の背景、`postTile` = 投稿タイル、`fow` = FOW(下から出るパネル)の背景、
   `actionButton` = アクションバーのボタン。
-- **Surface** = `{ "color"?: 色, "radius"?: 0〜48 の数, "layers"?: Layer[](最大 8)}`。`color` は画像の下に敷く塗り、`radius` は角丸。
-- **Layer** = 面に重ねる画像 1 枚。書いた順に下から描く。
+- **Surface** = `{ "color"?: 色, "onColor"?: 色, "radius"?: 0〜48 の数, "layers"?: Layer[](最大 8)}`。`color` は画像の下に敷く塗り、
+  `radius` は角丸。**`onColor`(v0.17)** = その面の上の**文字とアイコンの色**(濃い背景を敷いた面で、文字を読めるようにする)。
+- **Layer** = 面に重ねるもの 1 枚。書いた順に下から描く。**`asset`(画像)か `gradient`(グラデーション、v0.17)のどちらか 1 つ**
+  (両方 / どちらも無しは不可)。
 
 | キー | 値(既定) | 意味 |
 |---|---|---|
-| `asset` | `assets[].id`(必須) | `use: "theme"` の画像 |
+| `asset` | `assets[].id` | `use: "theme"` の画像。`gradient` とはどちらか 1 つ |
+| `gradient` | Gradient(v0.17) | 線形グラデーション(下記)。`asset` とはどちらか 1 つ |
+| `height` | 1〜400 の数(無し = 面いっぱい) | v0.17。書くと面いっぱいではなく **`alignment` の辺に寄せた高さ `height`(論理 px)の帯**になる(`topLeft` / `topCenter` / `topRight` → 上辺、`bottom*` → 下辺、`center*` → 上下の真ん中)。画像にもグラデーションにも使える |
 | `position` | `below` \| `above`(`below`) | `below` = 中身の下(背景)、`above` = 中身の上に重ねる。**`above` の層はタッチを受けない**(押せる部分を邪魔しない) |
-| `fit` | `cover` \| `contain` \| `fill` \| `fitWidth` \| `fitHeight` \| `none` \| `scaleDown`(`cover`) | 面への合わせ方(Flutter の `BoxFit`) |
+| `fit` | `cover` \| `contain` \| `fill` \| `fitWidth` \| `fitHeight` \| `none` \| `scaleDown`(`cover`) | 面への合わせ方(Flutter の `BoxFit`)。画像のときだけ |
 | `alignment` | `topLeft` \| `topCenter` \| `topRight` \| `centerLeft` \| `center` \| `centerRight` \| `bottomLeft` \| `bottomCenter` \| `bottomRight`(`center`) | 寄せ方(`Alignment`) |
-| `repeat` | `none` \| `repeat` \| `repeatX` \| `repeatY`(`none`) | 敷き詰め(`ImageRepeat`)。`fit: "none"` と組み合わせてタイル状に |
-| `opacity` | 0〜1(1) | 不透明度 |
+| `repeat` | `none` \| `repeat` \| `repeatX` \| `repeatY`(`none`) | 敷き詰め(`ImageRepeat`)。`fit: "none"` と組み合わせてタイル状に。画像のときだけ |
+| `opacity` | 0〜1(1) | 不透明度。画像にもグラデーションにも効く |
+
+- **Gradient**(v0.17、Flutter の `LinearGradient`)= `{ "colors": [色, …](2〜8 個), "stops"?: [0〜1 の数, …], "begin"?: alignment(既定 `topCenter`), "end"?: alignment(既定 `bottomCenter`) }`。
+  色は Surface と同じ `#RRGGBB` / `#AARRGGBB`。`stops` は `colors` と**同じ数で昇順**(省略 = 等間隔)。`fit` / `repeat` はグラデーションでは
+  無視される(`rasq check` は書いてあれば警告)。
+
+例(v0.17、サンプル「RASQ」= [`../examples/manifests/sample.theme-rasq.json`](../examples/manifests/sample.theme-rasq.json)): 投稿タイルの上辺に
+高さ 28 の帯(不透明の `#1F1E33` → 同じ色の不透明度 0 `#001F1E33` = 投稿の背景色に溶ける)と右寄せの薄いマーク、FOW は緑のグラデーションに白い文字。
+
+```json
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "sample.theme-rasq", "name": "RASQ", "version": "0.1.0", "kind": "theme",
+  "description": "投稿の上のグラデーションの帯と薄い RASQ のマーク、緑のグラデーションの FOW",
+  "assets": [
+    { "id": "mark", "path": "theme/rasq_mark_faded.png", "use": "theme", "label": "薄い RASQ のマーク" }
+  ],
+  "theme": {
+    "brightness": "both",
+    "surfaces": {
+      "postTile": {
+        "layers": [
+          { "asset": "mark", "position": "below", "fit": "contain", "alignment": "centerRight" },
+          { "gradient": { "colors": ["#1F1E33", "#001F1E33"] }, "position": "below", "alignment": "topCenter", "height": 28 }
+        ]
+      },
+      "fow": {
+        "color": "#02775C",
+        "onColor": "#FFFFFF",
+        "layers": [
+          { "gradient": { "colors": ["#02775C", "#178178"], "begin": "topCenter", "end": "bottomCenter" }, "position": "below" }
+        ]
+      }
+    }
+  }
+}
+```
+
+v0.17 の追加は後方互換(v0.16 の宣言はそのまま有効)。
 
 - **整合**(`rasq check` / `python3 schema/validate.py` / ホストが同じ規則で見る): `layers[].asset` と `icons` の `asset:<id>` は
-  `assets[]` に **`use: "theme"`** で載っている id であること。`theme` は `kind: "theme"` のマニフェストにだけ書ける。
+  `assets[]` に **`use: "theme"`** で載っている id であること(グラデーションのレイヤーは参照先を持たないので見ない)。
+  `gradient.stops` は `colors` と同じ数で昇順であること(スキーマでは書けないので `rasq check` / validate.py が見る)。`theme` は `kind: "theme"` のマニフェストにだけ書ける。
   `kind: "theme"` は `theme` と `assets` が必須。ただし `assets` は **0 枚でもよい**(色だけのテーマ)。
 - 画像の形式と上限はアセットパックと同じ(**PNG / JPEG / WebP / GIF**、1 枚 2 MiB・合計 16 MiB・256 枚)。
 - `slots` / `permissions` / `actions` / `roles` は書けない。土台(SNS プラグイン)にも依らない(`requires` 無し)。
@@ -457,7 +500,7 @@ plugin-sample の `theme-plugin`。)
   ([`bundle.schema.json`](../schema/bundle.schema.json))。
 - CLI: `rasq new theme <name>` → `packs/<name>/`(`manifest.json`(kind = theme、上の例に近い雛形)+ `theme/` の画像 1 枚)、
   rasq.toml に `[[packs]]`。`rasq check` はアセットパックと同じ検査(スキーマ / 形式 / 大きさ / 書き忘れ)に加えて上の整合
-  (asset の参照、色の形、面のキー)を見る。どこからも指されていない `use: "theme"` の画像は警告。`rasq build` はパックごとに
+  (asset の参照、色の形、面のキー、asset と gradient のどちらか 1 つ、stops の数と順)を見る。どこからも指されていない `use: "theme"` の画像は警告。`rasq build` はパックごとに
   配布物 1 つ(kind theme)、`rasq publish` は掲載のカテゴリを `theme` にする。
 - ホスト(rasq-client): インストールすると画像を端末に保存し、設定 → アプリの外観 → フォントやカラースキーム に並ぶ。
   有効にできるのは 1 つだけ(別のものを選ぶと前のものは外れる)。`above` の層は描くだけでタッチを通す。

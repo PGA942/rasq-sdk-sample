@@ -117,8 +117,9 @@ pub fn check(dir: &Path, entry: &PackEntry) -> Result<Checked> {
     Ok(Checked { manifest, manifest_bytes, files, errors, warnings })
 }
 
-/// 着せ替え(docs/slots.md §2.12)の整合。スキーマでは書けない「id の参照先がある」を見る(schema/validate.py の
-/// theme_problems と同じ規則)。色の形 / 面のキー / layers の数はスキーマが見る。戻りは (errors, warnings)。
+/// 着せ替え(docs/slots.md §2.12)の整合。スキーマでは書けない「id の参照先がある」と、グラデーション(v0.17)の
+/// 「stops が colors と同じ数で昇順」を見る(schema/validate.py の theme_problems と同じ規則)。色の形 / 面のキー /
+/// layers の数 / asset と gradient のどちらか 1 つ はスキーマが見る。戻りは (errors, warnings)。
 pub fn theme_problems(m: &Value) -> (Vec<String>, Vec<String>) {
     let (mut errors, mut warnings) = (Vec::new(), Vec::new());
     let theme_ids: std::collections::BTreeSet<&str> =
@@ -126,10 +127,31 @@ pub fn theme_problems(m: &Value) -> (Vec<String>, Vec<String>) {
     let mut used = std::collections::BTreeSet::new();
     for (name, surface) in m["theme"]["surfaces"].as_object().into_iter().flatten() {
         for (i, layer) in surface["layers"].as_array().into_iter().flatten().enumerate() {
-            let Some(id) = layer["asset"].as_str() else { continue };
-            used.insert(id);
-            if !theme_ids.contains(id) {
-                errors.push(format!("theme.surfaces.{name}.layers[{i}].asset {id:?} が assets(use = theme)にありません"));
+            let at = format!("theme.surfaces.{name}.layers[{i}]");
+            if let Some(id) = layer["asset"].as_str() {
+                used.insert(id);
+                if !theme_ids.contains(id) {
+                    errors.push(format!("{at}.asset {id:?} が assets(use = theme)にありません"));
+                }
+            }
+            // グラデーションは参照先を持たない。stops は colors と同じ数、昇順(同じ値の並びは可)。
+            let g = &layer["gradient"];
+            if g.is_object() {
+                if let Some(stops) = g["stops"].as_array() {
+                    let colors = g["colors"].as_array().map_or(0, Vec::len);
+                    if stops.len() != colors {
+                        errors.push(format!("{at}.gradient.stops が {} 個、colors が {colors} 個(同じ数にする)", stops.len()));
+                    }
+                    let xs: Vec<f64> = stops.iter().filter_map(Value::as_f64).collect();
+                    if xs.windows(2).any(|w| w[0] > w[1]) {
+                        errors.push(format!("{at}.gradient.stops が昇順ではありません: {xs:?}"));
+                    }
+                }
+                for k in ["fit", "repeat"] {
+                    if !layer[k].is_null() {
+                        warnings.push(format!("{at}.{k} はグラデーションでは使われません(画像のときだけ)"));
+                    }
+                }
             }
         }
     }
@@ -223,6 +245,51 @@ mod tests {
         let c = check(&dir, &entry).unwrap();
         assert!(c.errors.iter().any(|e| e.contains("theme.surfaces.postTile.layers[0].asset \"nope\"")), "{:?}", c.errors);
         assert!(c.errors.iter().any(|e| e.contains("theme.icons.favorite_border")), "{:?}", c.errors);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gradient_layers_need_no_asset_but_stops_must_match_colors() {
+        let (dir, entry) = from_template("theme");
+        // 画像を指さないグラデーションだけのレイヤー(と帯の height、面の onColor)は通る。
+        edit(&dir, |m| {
+            m["theme"]["surfaces"]["postTile"]["layers"] =
+                json!([{ "gradient": { "colors": ["#1F1E33", "#001F1E33"] }, "alignment": "topCenter", "height": 28 }]);
+            m["theme"]["surfaces"]["fow"]["onColor"] = json!("#FFFFFF");
+            m["theme"]["surfaces"]["fow"]["layers"] =
+                json!([{ "gradient": { "colors": ["#02775C", "#178178", "#FFFFFF"], "stops": [0, 0.5, 0.5], "begin": "topLeft", "end": "bottomRight" } }]);
+        });
+        let c = check(&dir, &entry).unwrap();
+        assert!(c.errors.is_empty(), "{:?}", c.errors);
+        assert!(c.warnings.is_empty(), "{:?}", c.warnings);
+        // stops の数が違う / 昇順でない = error。fit / repeat はグラデーションでは使われない = warning。
+        edit(&dir, |m| {
+            m["theme"]["surfaces"]["fow"]["layers"] = json!([
+                { "gradient": { "colors": ["#02775C", "#178178", "#FFFFFF"], "stops": [0, 1] } },
+                { "gradient": { "colors": ["#02775C", "#178178"], "stops": [0.8, 0.2] }, "fit": "cover" }
+            ]);
+        });
+        let c = check(&dir, &entry).unwrap();
+        assert!(c.errors.iter().any(|e| e.contains("layers[0].gradient.stops が 2 個、colors が 3 個")), "{:?}", c.errors);
+        assert!(c.errors.iter().any(|e| e.contains("layers[1].gradient.stops が昇順ではありません")), "{:?}", c.errors);
+        assert!(c.warnings.iter().any(|w| w.contains("layers[1].fit")), "{:?}", c.warnings);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_layer_is_either_an_asset_or_a_gradient() {
+        let (dir, entry) = from_template("theme");
+        let g = json!({ "colors": ["#000000", "#FFFFFF"] });
+        for (layer, bad) in [
+            (json!({ "asset": "background", "gradient": g }), "両方"),
+            (json!({ "position": "below" }), "どちらも無し"),
+            (json!({ "gradient": { "colors": ["#000000"] } }), "色 1 つ"),
+            (json!({ "gradient": g, "height": 401 }), "height が 400 超"),
+        ] {
+            edit(&dir, |m| m["theme"]["surfaces"]["app"]["layers"] = json!([layer]));
+            let c = check(&dir, &entry).unwrap();
+            assert!(c.errors.iter().any(|e| e.starts_with("schema:")), "{bad}: {:?}", c.errors);
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

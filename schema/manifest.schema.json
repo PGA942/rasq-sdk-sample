@@ -171,25 +171,44 @@
     "themeSurface": {
       "type": "object",
       "additionalProperties": false,
-      "description": "面 1 つの見た目: 塗り / 角丸 / 重ねる画像",
+      "description": "面 1 つの見た目: 塗り / 文字の色 / 角丸 / 重ねる画像・グラデーション",
       "properties": {
         "color": { "$ref": "#/$defs/themeColor", "description": "面の塗り(#RRGGBB か #AARRGGBB)。画像の下に敷く" },
+        "onColor": { "$ref": "#/$defs/themeColor", "description": "その面の上の文字とアイコンの色(v0.17)。濃い背景を敷いた面で文字を読めるようにする" },
         "radius": { "type": "number", "minimum": 0, "maximum": 48, "description": "角丸(論理ピクセル)" },
-        "layers": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/themeLayer" }, "description": "重ねる画像。書いた順に下から描く" }
+        "layers": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/themeLayer" }, "description": "重ねる画像 / グラデーション。書いた順に下から描く" }
       }
     },
+    "themeAlignment": { "enum": ["topLeft", "topCenter", "topRight", "centerLeft", "center", "centerRight", "bottomLeft", "bottomCenter", "bottomRight"] },
     "themeLayer": {
       "type": "object",
-      "required": ["asset"],
       "additionalProperties": false,
-      "description": "面に重ねる画像 1 枚",
+      "description": "面に重ねるもの 1 枚。asset(画像)か gradient(グラデーション、v0.17)のどちらか 1 つ",
+      "oneOf": [
+        { "required": ["asset"] },
+        { "required": ["gradient"] }
+      ],
       "properties": {
-        "asset": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$", "description": "assets[].id(use = theme)" },
+        "asset": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$", "description": "assets[].id(use = theme)。gradient とはどちらか 1 つ" },
+        "gradient": { "$ref": "#/$defs/themeGradient", "description": "線形グラデーション(v0.17)。asset とはどちらか 1 つ" },
+        "height": { "type": "number", "minimum": 1, "maximum": 400, "description": "帯の高さ(論理 px、v0.17)。書くと面いっぱいではなく alignment の辺に寄せた帯になる(top* = 上辺、bottom* = 下辺、center* = 上下の真ん中)。画像にもグラデーションにも使える" },
         "position": { "enum": ["below", "above"], "default": "below", "description": "below = 中身の下(背景)、above = 中身の上に重ねる。above は触れない(押せる部分を邪魔しない)" },
-        "fit": { "enum": ["cover", "contain", "fill", "fitWidth", "fitHeight", "none", "scaleDown"], "default": "cover", "description": "面への合わせ方(Flutter の BoxFit と同じ名前)。none = 元の大きさのまま(repeat と組み合わせてタイル状に敷く)" },
-        "alignment": { "enum": ["topLeft", "topCenter", "topRight", "centerLeft", "center", "centerRight", "bottomLeft", "bottomCenter", "bottomRight"], "default": "center", "description": "面の中での寄せ方(Flutter の Alignment と同じ名前)" },
-        "repeat": { "enum": ["none", "repeat", "repeatX", "repeatY"], "default": "none", "description": "敷き詰め(Flutter の ImageRepeat と同じ名前)。repeat = 縦横、repeatX = 横だけ、repeatY = 縦だけ" },
-        "opacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 1, "description": "不透明度(0 = 見えない、1 = そのまま)" }
+        "fit": { "enum": ["cover", "contain", "fill", "fitWidth", "fitHeight", "none", "scaleDown"], "default": "cover", "description": "面への合わせ方(Flutter の BoxFit と同じ名前)。none = 元の大きさのまま(repeat と組み合わせてタイル状に敷く)。画像のときだけ(グラデーションでは無視)" },
+        "alignment": { "$ref": "#/$defs/themeAlignment", "default": "center", "description": "面の中での寄せ方(Flutter の Alignment と同じ名前)。height を書いた帯では寄せる辺も決める" },
+        "repeat": { "enum": ["none", "repeat", "repeatX", "repeatY"], "default": "none", "description": "敷き詰め(Flutter の ImageRepeat と同じ名前)。repeat = 縦横、repeatX = 横だけ、repeatY = 縦だけ。画像のときだけ(グラデーションでは無視)" },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 1, "description": "不透明度(0 = 見えない、1 = そのまま)。画像にもグラデーションにも効く" }
+      }
+    },
+    "themeGradient": {
+      "type": "object",
+      "required": ["colors"],
+      "additionalProperties": false,
+      "description": "線形グラデーション(v0.17、Flutter の LinearGradient)。stops の数が colors と同じで昇順であることは rasq check / validate.py が見る",
+      "properties": {
+        "colors": { "type": "array", "minItems": 2, "maxItems": 8, "items": { "$ref": "#/$defs/themeColor" }, "description": "色(2〜8 個)。#RRGGBB か #AARRGGBB" },
+        "stops": { "type": "array", "minItems": 2, "maxItems": 8, "items": { "type": "number", "minimum": 0, "maximum": 1 }, "description": "各色の位置(0〜1、colors と同じ数、昇順)。省略 = 等間隔" },
+        "begin": { "$ref": "#/$defs/themeAlignment", "default": "topCenter", "description": "始まりの位置" },
+        "end": { "$ref": "#/$defs/themeAlignment", "default": "bottomCenter", "description": "終わりの位置" }
       }
     },
     "actionDescriptor": {
