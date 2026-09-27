@@ -1,15 +1,27 @@
 {
   "schema": "rasq.plugin-manifest/1",
-  "id": "sample.custom-page",
-  "name": "ページ型(サンプル、計画中)",
-  "version": "0.0.1",
+  "id": "sample.board",
+  "name": "みんなのボード",
+  "version": "0.1.0",
   "kind": "view",
-  "description": "AsTell / Misskey Play などの移植先。ホストの custom:<pluginId> ルーティングと一緒に決める",
+  "description": "投票 + 寄せ書き + カウンター。shared のページ型プラグインのサンプル(plugin-sample/custom-page-plugin、docs/slots.md §2.13)",
   "slots": [
     "page"
   ],
   "permissions": [
     "render",
+    "shared.session",
     "storage.safe"
-  ]
+  ],
+  "page": {
+    "title": "みんなのボード",
+    "icon": "dashboard",
+    "mode": "shared",
+    "surfaces": [
+      "page",
+      "astell",
+      "profile"
+    ],
+    "maxParticipants": 50
+  }
 }

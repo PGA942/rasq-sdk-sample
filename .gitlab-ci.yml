@@ -44,7 +44,7 @@ rust:
     - export RASQ=$PWD/target/debug/rasq
     - rm -rf /tmp/rasq-e2e && mkdir -p /tmp/rasq-e2e && cd /tmp/rasq-e2e
     - $RASQ init --sns ci.test.sns --namespace ci.test
-    - for s in post.transform tl trend.suggest viewer.overlay composer.media composer.text astell.action post.share post.action; do $RASQ new $s $(echo $s | tr . -); done
+    - for s in post.transform tl trend.suggest viewer.overlay composer.media composer.text astell.action post.share post.action page; do $RASQ new $s $(echo $s | tr . -); done
     # アセットパック / 着せ替え(wasm 無し、docs/slots.md §2.10 / §2.12)も同じワークスペースに
     - $RASQ new assets stickers
     - $RASQ new theme starry
@@ -52,6 +52,8 @@ rust:
     # wasm そのものを wasmi で叩く(native の cargo test では見つからない wasm だけの panic を拾う)
     - $RASQ call post-transform post.transform --args '{"posts":[{"id":"a","body":"こんにちは 世界"}]}' | tee /tmp/call.out && grep -q "こんにちは👋" /tmp/call.out
     - $RASQ call post-share post.share --args '{"token":"s","post":{"body":"本文"},"account":{},"link":"https://example.com/p/1"}' --reply 'fow.open={"opened":true}' --then share.copy --then post.share.close | tee /tmp/call2.out && grep -q "host clipboard.set" /tmp/call2.out && grep -q "host fow.close" /tmp/call2.out
+    # ページ型(v0.18、docs/slots.md §2.13): セッション無し(solo)で開いて +1 → page.render
+    - $RASQ call page page.open --args '{"token":"p1","surface":"page","context":{},"me":{"accountId":"a"},"size":{"width":400,"height":800}}' --then count.local | tee /tmp/call3.out && grep -q "host page.render" /tmp/call3.out
     - $RASQ build --raw --no-build
     - RASQ_TOKEN=ci-dummy-token $RASQ token set other:example.test:ci --from-env RASQ_TOKEN
     - $RASQ token list

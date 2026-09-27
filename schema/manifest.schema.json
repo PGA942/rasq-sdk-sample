@@ -32,6 +32,7 @@
     "actions": { "type": "array", "items": { "$ref": "#/$defs/actionDescriptor" } },
     "assets": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/packAsset" }, "description": "アセットパック(kind = \"assets\"、契約 v0.11)と着せ替え(kind = \"theme\"、v0.16)の中身。wasm を持たない配布物で、ホストは画像を読むだけ(コードは動かない)。アセットパックは 1 枚以上、着せ替えは 0 枚でもよい(色だけのテーマ)" },
     "theme": { "$ref": "#/$defs/theme" },
+    "page": { "$ref": "#/$defs/page" },
     "termsOfService": { "type": "string", "description": "Markdown。初回ログイン前に表示(同意が必要)。RASQ 本体・学習の同意とは別に記録する" },
     "verified": { "type": "boolean", "default": false },
     "official": { "type": "boolean", "default": false }
@@ -74,12 +75,48 @@
       "else": { "not": { "required": ["theme"] } }
     },
     {
+      "$comment": "ページ型(v0.18、docs/slots.md §2.13): slots に page があれば page(mode)が要る。page があるのは slots に page があるときだけ。",
+      "if": { "properties": { "slots": { "contains": { "const": "page" } } }, "required": ["slots"] },
+      "then": { "required": ["page"] },
+      "else": { "not": { "required": ["page"] } }
+    },
+    {
+      "$comment": "shared(複数人、サーバー変数 / 関数)は権限 shared.session が要る(v0.18)。",
+      "if": { "properties": { "page": { "properties": { "mode": { "const": "shared" } }, "required": ["mode"] } }, "required": ["page"] },
+      "then": { "required": ["permissions"], "properties": { "permissions": { "contains": { "const": "shared.session" } } } }
+    },
+    {
+      "$comment": "AsTell のルームにデプロイできるのは shared だけ(v0.18)。",
+      "if": { "properties": { "page": { "properties": { "surfaces": { "contains": { "const": "astell" } } }, "required": ["surfaces"] } }, "required": ["page"] },
+      "then": { "properties": { "page": { "properties": { "mode": { "const": "shared" } } } } }
+    },
+    {
       "$comment": "assets を書けるのは wasm を持たない配布物(assets / theme)だけ。プラグインに同梱するファイルは rasq.toml の [[assets]]。",
       "if": { "properties": { "kind": { "enum": ["assets", "theme"] } }, "required": ["kind"] },
       "else": { "not": { "required": ["assets"] } }
     }
   ],
   "$defs": {
+    "page": {
+      "type": "object",
+      "required": ["mode"],
+      "additionalProperties": false,
+      "description": "ページ型プラグイン(slot page、契約 v0.18、docs/slots.md §2.13、rasq-client D-357)の宣言。ホストはこれを見てページを開く場所とセッションの作り方を決める",
+      "properties": {
+        "title": { "type": "string", "minLength": 1, "maxLength": 40, "description": "ページのヘッダーとタイルに出す名前(省略 = name)。page.open / page.render の title で上書きできる" },
+        "icon": { "type": "string", "pattern": "^[a-z0-9_]+$", "description": "Material Icon の名前(タイル / サイドメニュー / AsTell のカード)" },
+        "mode": { "enum": ["solo", "shared"], "description": "solo = 1 人で完結(サーバー変数なし、訪問者それぞれの端末で動く)。shared = 複数人でセッションを共有(サーバー変数 / 関数、権限 shared.session が要る)" },
+        "surfaces": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["page", "astell", "profile"] },
+          "default": ["page"],
+          "description": "どこから開けるか。page = 単独のページ(サイドメニューの「プラグイン」やストアから)、astell = AsTell のルームにデプロイ(shared のみ)、profile = RASQ アカウントのページにタイルとして置く(solo は訪問者それぞれの端末で完結、shared は持ち主のプロフィールごとの 1 セッションを訪問者で共有)"
+        },
+        "maxParticipants": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50, "description": "shared の 1 セッションに入れる人数(既定 50、上限 200)。超えると WS が 409" }
+      }
+    },
     "network": {
       "type": "object",
       "additionalProperties": false,

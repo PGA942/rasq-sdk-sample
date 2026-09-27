@@ -31,7 +31,7 @@ nodeId        = "{instanceScope}:{key}"      // key はプラグインがツリ�
 | `k` | 明示 key(兄弟内で一意)。省略時はホストが `t#index` を補うが **差分更新の対象にはならない** |
 | `tag` | **意味タグ**(§2.2)。投稿内容に関係しないノード(Icon, Spacer, ActionBar 等)には付けない |
 | `p` | Props。`$.path` は Bind(ホスト Store/投稿オブジェクトへの参照) |
-| `on` | イベント → function.json の関数名(`tap/longPress/pointerDown/pointerMove/pointerUp/confirm/mount`) |
+| `on` | イベント → function.json の関数名(`tap/longPress/pointerDown/pointerMove/pointerUp/confirm/mount/change/submit`。`submit` は `Input` の送信、v0.18) |
 | `c` | 子ノード |
 | `role` | 検証ゲート用の構造ロール(`threadNav` / `contentBody` / `mediaItem` / `actionBar`)— 完全置き換えタイルの必須ロール保証に使う |
 
@@ -114,6 +114,10 @@ RAi の位置検索、タイムラインソート、リレーショナルTL(本�
 | `wasm.call` | `{ pluginId, fn, args }`(子プラグイン呼び出し) | 構成で許可された子のみ |
 | `store.read` | `{ kind: actionState|followState|readState, key }` | — |
 | `geometry.lookup` | `{ tag? , role?, nodeId? }` → 画面上の矩形(RAi 位置検索・アクセシビリティ共用) | `fow.system` |
+| `page.render` | `{ token, root: Node, title? }` — ページ型(slot `page`)のページの RRL を丸ごと差し替え(fire-and-forget、戻り `{}`)。契約 v0.18、[docs/slots.md §2.13](docs/slots.md) | `render`(slot `page`) |
+| `shared.set` | `{ token, key, value, ifRev? }` — shared のサーバー変数を書く(`value: null` で消す。`me.` で始まるキーは `@<accountId>.` に書き換わり、本人だけが書ける)。反映は `page.event {type: "var"}`、`ifRev` 不一致は `{type: "conflict"}` | `shared.session`(slot `page`) |
+| `shared.op` | `{ token, key, op: incr\|append\|remove\|merge, value }` — サーバー側で原子的に(`append` は 500 要素まで、超えたら先頭から捨てる) | `shared.session`(slot `page`) |
+| `shared.call` | `{ token, fn, args }` — 参加者全員(自分も)へ `page.event {type: "call", fn, args, from}` を配る(サーバー関数 = 中継。Central は中身を見ない) | `shared.session`(slot `page`) |
 
 各 fn の args / value の形は [`schema/host-fn.schema.json`](schema/host-fn.schema.json) を正とする。
 

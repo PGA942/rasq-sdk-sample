@@ -23,6 +23,23 @@ let r = host_call("storage.set", json!({"ns": "safe", "key": "greets", "value": 
 | `wasm.call` | 子プラグイン呼び出し | 構成許可 | 🔶 未配線 |
 | `store.read` | ホスト Store の読み出し | — | 🔶 未配線 |
 | `geometry.lookup` | 画面上の矩形検索 | `fow.system` | 🔶(登録簿はホスト側実装済み — `fow.open` の `anchor` から使える) |
+| `page.render` | ページ型(slot `page`)のページの RRL を丸ごと差し替える `{token, root, title?}` → [slots.md §2.13](slots.md) | `render` | ✅ v0.18 |
+| `shared.set` | shared のサーバー変数を書く `{token, key, value, ifRev?}`(`me.` → `@<accountId>.`、`null` で消す) | `shared.session` | ✅ v0.18 |
+| `shared.op` | サーバー変数を原子的に `{token, key, op: incr\|append\|remove\|merge, value}` | `shared.session` | ✅ v0.18 |
+| `shared.call` | 参加者全員(自分も)へ `page.event {type: "call", fn, args, from}` を配る `{token, fn, args}` | `shared.session` | ✅ v0.18 |
+
+## shared(ページ型のサーバー変数 / 関数、v0.18)の例
+
+```rust
+use rasq_plugin_kit::host;
+host::shared_op(&token, "counter", "incr", json!(1));            // 全員の counter に +1
+host::shared_set(&token, "me.vote", json!(2), None);              // 自分の票(サーバーが @<accountId>.vote に書き換える)
+host::shared_call(&token, "celebrate", json!({}));                // 全員(自分も)に page.event {type:"call", fn:"celebrate"}
+host::page_render(&token, root, None);                            // 受けた page.event {type:"var"} で描き直す
+```
+
+- **反映は必ず `page.event {type: "var", key, value, rev, by}` で届く**(自分の書き込みも)。手元で先に値を変えない。
+- セッションが無い(solo / 1 人で開いた / `closed` のあと)ときは `E01`。キーの規則と上限は [slots.md §2.13](slots.md)。
 
 ## storage の例(hello プラグインの `greet`)
 

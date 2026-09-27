@@ -1,0 +1,23 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "sample.memo-page",
+  "name": "ひとりメモ",
+  "version": "0.1.0",
+  "kind": "view",
+  "description": "solo のページ型プラグインの例(サーバー変数なし、端末の storage.safe だけ。docs/slots.md §2.13)",
+  "slots": [
+    "page"
+  ],
+  "permissions": [
+    "render",
+    "storage.safe"
+  ],
+  "page": {
+    "icon": "sticky_note_2",
+    "mode": "solo",
+    "surfaces": [
+      "page",
+      "profile"
+    ]
+  }
+}

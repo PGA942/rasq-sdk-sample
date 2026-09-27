@@ -1,4 +1,4 @@
-# RASQ スロットプラグイン契約 v0.17(正典)
+# RASQ スロットプラグイン契約 v0.18(正典)
 
 > **ここが正典。** 以前は `orgate-question/plugin-sample/*/CONTRACT.md` に同じ文書が複製されていたが、v0.8 から
 > 各リポジトリの `CONTRACT.md` はこのファイルへのポインタだけになった。節番号(§2.1〜§2.9 / §3 / §4 / §5)は複製時代のまま。
@@ -31,6 +31,7 @@
 ```
 
 - 形は [`../schema/manifest.schema.json`](../schema/manifest.schema.json)(v0.3)。`kind` はその enum(`sns` / `action` / `view` / `trend` / `mediaViewer` / `postProcessor`。wasm を持たない配布物の `assets`(§2.10)/ `theme`(§2.12)も)。
+  ページ型(`slots: ["page"]`、§2.13)は `kind: "view"` で、`page`(`mode` / `surfaces` …)を書く(v0.18)。
 - `slots` = [`../schema/slots.json`](../schema/slots.json) にある id(下表は `stable` のもの。`planned` の面は id だけ予約)。複数可。
   どの `kind` がどのスロットを宣言できるか、必要な権限は登録簿が持ち、`python3 schema/validate.py` が突き合わせる。
 - `permissions` = ホスト関数の権限(`fow.widget` / `storage.safe` / `network` / `mute.words` …)。
@@ -47,6 +48,7 @@
 | `trend.suggest` | 検索ホームのトレンド節(サジェスト行) | `trend.suggest` | — |
 | `post.share` | 投稿の **共有 FOW** の「プラグイン」節(v0.3、宣言だけで自動登録) | `post.share` / `post.share.close` | `composer.open` / `clipboard.set` / `url.open` / `astell.share` / `toast` |
 | `post.action` | 投稿の **アクションバー**(v0.7、手動の投稿加工ボタン。タグで希望スロットを宣言 → 既存ボタンのバンドルへ) | `post.action` | `composer.open` / `clipboard.set` / `url.open` / `astell.share` / `toast` |
+| `page` | **ページ型(カスタムプラグイン)**: 単独のページ / AsTell のルーム / プロフィールのタイル(v0.18、§2.13。`manifest.page` で `solo` / `shared`) | `page.open` / `page.event` / `page.close` | `page.render` / `shared.set` / `shared.op` / `shared.call` / `fow.open` / `storage.*` / `toast` / `url.open` |
 
 共通: `lifecycle {kind, surface?}` / FOW の `onClosed` は PROTOCOL どおり。
 
@@ -506,6 +508,105 @@ v0.17 の追加は後方互換(v0.16 の宣言はそのまま有効)。
   有効にできるのは 1 つだけ(別のものを選ぶと前のものは外れる)。`above` の層は描くだけでタッチを通す。
   ホストは配布物に wasm が 1 つでも入っていたら着せ替えとして扱わない(アセットパックと同じ)。
 
+### 2.13 `page` — ページ型プラグイン(カスタムプラグイン、v0.18)
+
+rasq-client D-357 / rasq-central S-048。**アプリに新しい画面(ページ)を足す**プラグイン。単独のページ、AsTell のルーム、
+RASQ アカウントのプロフィールページから開ける。**1 人で完結するもの(`solo`)**と、**複数人で共有するもの(`shared`、
+サーバー変数とサーバー関数を使う)**がある。wasm は**各端末で動き**、shared の状態は **Central が中継・保持**する
+(プラグインはサーバーのコードを持たない。サーバーがするのは変数の保持と下の決まった演算、呼び出しの中継だけ)。
+
+tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必須、`shared.session` / `storage.safe` / `network` が任意。
+
+```json
+{ "schema": "rasq.plugin-manifest/1", "id": "sample.board", "name": "みんなのボード", "version": "0.1.0",
+  "kind": "view", "slots": ["page"],
+  "permissions": ["render", "shared.session", "storage.safe"],
+  "page": { "title": "みんなのボード", "icon": "dashboard", "mode": "shared",
+            "surfaces": ["page", "astell", "profile"], "maxParticipants": 50 } }
+```
+
+(同じものが [`../examples/manifests/sample.custom-page.json`](../examples/manifests/sample.custom-page.json)、solo の例は
+[`../examples/manifests/sample.custom-page-solo.json`](../examples/manifests/sample.custom-page-solo.json)、実装は plugin-sample の `custom-page-plugin`。)
+
+**`page` のキー**([`manifest.schema.json`](../schema/manifest.schema.json) の `$defs.page`。`slots` に `page` があれば必須、無ければ書けない):
+
+| キー | 値(既定) | 意味 |
+|---|---|---|
+| `mode` | `solo` \| `shared`(必須) | `solo` = 1 人で完結(サーバー変数なし)。`shared` = 複数人でセッションを共有(権限 **`shared.session` が必須**) |
+| `surfaces` | `page` / `astell` / `profile` の配列(`["page"]`) | どこから開けるか(下) |
+| `title` | 文字列(`name`) | ページのヘッダーとタイルの名前。`page.open` / `page.render` の `title` で上書きできる |
+| `icon` | Material Icon の名前 | タイル / サイドメニュー / AsTell のカード |
+| `maxParticipants` | 1〜200(50) | shared の 1 セッションに入れる人数。超えると入れない(WS が 409) |
+
+- **`page`** = 単独のページ(サイドメニューの「プラグイン」やストアから)。shared なら招待リンク(`link:` のセッション)で人を呼べる。
+- **`astell`** = AsTell のルームに**デプロイ**する(**`shared` のみ**。スキーマが見る)。参加者は共有に `kind: "plugin"` の提案を出し、
+  ホスト(ルームのオーナー / モデレーター)が承認するとルームのセッション(`room:<roomId>`)ができ、全員のルームにカードが出る。
+- **`profile`** = RASQ アカウントのページにタイルとして置く(`PUT /me/pages`、8 個まで)。**solo** は訪問者それぞれの端末で完結、
+  **shared** は持ち主のプロフィールごとの 1 セッション(`profile:<accountId>`)を訪問者で共有する。
+- 有料のプラグインでも、有効なセッションに入れる人は**購入せずにそのセッションの中でだけ**使える(ホストは `?session=<id>` 付きで
+  マニフェストと配布物を取る。Central の S-048)。
+
+**ホスト → プラグイン(`call`)** — args はすべて**平ら**(`page.event` の中身も `{token, type, ...}` の一段):
+
+- `page.open {token, surface: "page"|"astell"|"profile", context: {roomId?, profileHandle?, profileAccountId?}, me: {accountId, handle, displayName}, session?: Session, size: {width, height}}`
+  → 戻り **`{root: Node, title?: string}`**(ページの RRL。表示は全画面のページで、**ヘッダーと戻るはホスト**)。
+  `session` は shared で、セッションに入っているときだけ載る(無い = 1 人で開いた。solo と同じに動けばよい):
+  ```json
+  { "id": "cs_…", "scope": "room:<roomId>", "role": "owner",
+    "participants": [ { "accountId": "…", "handle": "…", "displayName": "…" } ],
+    "vars": { "counter": { "value": 3, "rev": 7, "by": "<accountId>" } } }
+  ```
+  `role` = `owner`(セッションを作った人 / プロフィールの持ち主)か `member`。`vars` = 今のサーバー変数(`rev` = そのキーの版、`by` = 最後に書いた人)。
+- `page.event {token, type, ...}` — ページを開いている間の通知:
+
+  | `type` | 残りのフィールド | いつ |
+  |---|---|---|
+  | `var` | `key, value, rev, by` | サーバー変数が変わった(**自分の書き込みも届く**。`value: null` = 消えた)。`key` は書き換え後(`me.vote` → `@<accountId>.vote`) |
+  | `call` | `fn, args, from: {accountId, handle, displayName}` | 誰かの `shared.call`(**自分のも届く**) |
+  | `joined` | `participant: {accountId, handle, displayName}` | 参加者が入った |
+  | `left` | `accountId` | 参加者が出た |
+  | `conflict` | `key, value, rev` | `shared.set` の `ifRev` が合わなかった(書いていない。`value` / `rev` は今の値) |
+  | `closed` | `reason` | セッションが閉じられた(以後 `shared.*` は `E01`)。ページは開いたまま |
+  | `resized` | `size: {width, height}` | ページの大きさが変わった |
+
+- RRL のイベント: `on: {"tap": "<fn>"}` などは FOW と同じく `<fn>` を call する。args は **`{token, nodeId, kind, ...payload}`**
+  (payload のフィールドは**平らに展開**。例: `RadioListTile` の `change` = `{token, nodeId, kind: "change", value}`)。
+- 文字の入力は **`Input`**([`rrl.md`](rrl.md) の「入力欄 `Input`」、v0.18): `p: {hint?, value?, multiline?, maxLength?, submitLabel?, clearOnSubmit?}`、
+  `on: {submit}` → `{token, nodeId, kind: "submit", text}`(`change` → `{…, text}` は打つたび。要らなければ書かない)。打ちかけの文字はホストが持つので、
+  `page.render` で描き直しても消えない。
+- `page.close {token, reason}` — ページを離れた(戻る / 閉じる / ルームを出た)。戻り `{}`。
+
+**プラグイン → ホスト(ホスト関数)** — すべて fire-and-forget(戻り `{}`)で、`token` 必須(古いページからの反映は捨てる):
+
+| fn | args | 権限 |
+|---|---|---|
+| `page.render` | `{token, root, title?}` — ページの RRL を丸ごと差し替える | `render` |
+| `shared.set` | `{token, key, value, ifRev?}` — サーバー変数を書く(`value: null` で消す) | `shared.session` |
+| `shared.op` | `{token, key, op: "incr"\|"append"\|"remove"\|"merge", value}` — サーバー側で原子的に | `shared.session` |
+| `shared.call` | `{token, fn, args}` — 参加者全員(自分も)へ `page.event {type: "call"}` を配る(サーバー関数 = 中継) | `shared.session` |
+
+- `shared.op`: `incr` = 数値に足す(無ければ 0 から)、`append` = 配列の末尾に足す(**上限 500 要素**、超えたら先頭から捨てる)、
+  `remove` = 配列から等しい要素を 1 つ消す、`merge` = オブジェクトに浅くマージ。
+- `shared.*` は**セッションが無ければ `E01`**(solo / 1 人で開いたとき / `closed` のあと)。反映は必ず `page.event {type: "var"}` で届くので、
+  プラグインは**手元で先に値を変えず**、`var` を受けて描き直す(全員が同じ順で同じ値を見る)。
+- ほかに使えるホスト関数: `fow.open` / `fow.close`(ページの子として開く)/ `storage.*`(`storage.safe`)/ `toast` / `url.open`。
+
+**キーと上限**(サーバーが守る。外れたら書かずに `error`):
+
+- キーは `^[A-Za-z0-9_.:@-]{1,64}$`。**`me.` で始まるキーはサーバーが `@<accountId>.` に書き換える**(例: `me.vote` → `@<自分>.vote`)。
+  **`@<accountId>.` で始まるキーはその本人だけが書ける**(読むのは全員)= 1 人 1 票の投票などに使う。
+- 値は JSON で **16 KiB まで**、1 セッション **256 キー・合計 1 MiB まで**。`call` の `args` は 16 KiB まで。
+- 1 接続あたり **20 通/秒まで**(超えたぶんは `error`)。
+
+**セッション**(Central、rasq-central S-048 / [`../openapi/store.yaml`](../openapi/store.yaml) の `/custom/*`): scope は `room:<roomId>` /
+`profile:<accountId>` / `link:<sessionId>`。作るのはホスト(`POST /custom/sessions`)、中身の同期は WS `/custom/sessions/{id}/ws`
+(`welcome` / `var` / `call` / `joined` / `left` / `conflict` / `error` / `closed`)。ホストは WS の通知を上の `page.event` に写す。
+プラグインは WS も Central も直接は見ない。
+
+- CLI: `rasq new page <name>`(雛形 = shared のカウンター。セッションが無ければ端末だけで数える)。`rasq check` は上のスキーマの規則
+  (`page` が要る / shared なら `shared.session` / `astell` は shared だけ)と、solo なのに `shared.session` / `maxParticipants` がある警告を見る。
+- ストアのカードの `pluginType` は、現在版のマニフェストの `slots` に `page` があれば **`custom`**(ほかより優先)。
+
 ## 3. RRL のホスト拡張(rasq-client D-167 以降。古いホストは無視/⚠ボックス)
 
 - `Image.p.src` に **`data:image/png;base64,…`** を受ける。`p.width` / `p.height` で大きさ指定。
@@ -534,13 +635,17 @@ v0.17 の追加は後方互換(v0.16 の宣言はそのまま有効)。
 | `composer.media.overlay` | `{token, root}`(§2.2、v0.5) | スロット `composer.media` |
 | `composer.text.replace` | `{token, start, end, text}` | スロット `composer.text` |
 | `viewer.overlay.set` | `{token, root}` | スロット `viewer.overlay` |
+| `page.render` | `{token, root, title?}`(§2.13、v0.18) | スロット `page` + `render` |
+| `shared.set` | `{token, key, value, ifRev?}`(§2.13) | スロット `page` + `shared.session` |
+| `shared.op` | `{token, key, op: incr\|append\|remove\|merge, value}`(§2.13) | スロット `page` + `shared.session` |
+| `shared.call` | `{token, fn, args}`(§2.13) | スロット `page` + `shared.session` |
 
 `token` はホストが `call` で渡した値をそのまま返す(古い呼び出しに対する反映を捨てるため)。
 
 ## 5. ホスト側(rasq-client)の読み込み
 
 - 「WASMプラグイン試験 (dev)」→ `.wasm` を読み込み → **スロットに登録**。登録はパスを設定に残し、次回起動でも読み直す。
-- 登録されたプラグインはワーカー isolate で常駐し、各スロットの場所(AsTell の下段ボタン / 添付タイルの … / コンポーザー / ビューワー / TL / トレンド)から `call` される。
+- 登録されたプラグインはワーカー isolate で常駐し、各スロットの場所(AsTell の下段ボタン / 添付タイルの … / コンポーザー / ビューワー / TL / トレンド / ページ)から `call` される。
 - 権限外のホスト関数は `E01`。スロットに宣言の無い `call` は来ない。
 - **FOW の着き方(v0.2)**: プラグインの `fow.open` は、呼び出し元の面の**子**として開く(コンポーザー → MFM ピッカーと同じ
   インライン FOW、AsTell ルーム FOW → その下、メディアエディター → 下付き)。親が閉じれば連動して閉じる。

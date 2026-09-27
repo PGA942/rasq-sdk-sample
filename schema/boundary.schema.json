@@ -45,8 +45,8 @@
       "properties": {
         "type": { "const": "event" },
         "nodeId": { "type": "string" },
-        "kind": { "type": "string", "enum": ["tap", "longPress", "pointerDown", "pointerMove", "pointerUp", "confirm", "change", "drag"] },
-        "payload": { "type": "object", "description": "change: {value}(settings.set など)。drag: {phase: start|update|end, x, y, dx, dy, snap?}(plugin-sample §3)" }
+        "kind": { "type": "string", "enum": ["tap", "longPress", "pointerDown", "pointerMove", "pointerUp", "confirm", "change", "drag", "submit"] },
+        "payload": { "type": "object", "description": "change: {value}(settings.set など。Input は {text})。submit: {text}(Input の送信、v0.18)。drag: {phase: start|update|end, x, y, dx, dy, snap?}(plugin-sample §3)" }
       },
       "required": ["nodeId", "kind"]
     },
@@ -72,7 +72,8 @@
       "enum": [
         "fow.open", "fow.close", "alert", "storage.get", "storage.set", "storage.delete", "net.fetch", "ml.infer", "gpu.compute", "wasm.call", "store.read", "geometry.lookup",
         "toast", "sound.play", "clipboard.set", "url.open", "mute.add", "composer.open", "astell.share",
-        "composer.media.replace", "composer.media.preview", "composer.media.overlay", "composer.text.replace", "viewer.overlay.set"
+        "composer.media.replace", "composer.media.preview", "composer.media.overlay", "composer.text.replace", "viewer.overlay.set",
+        "page.render", "shared.set", "shared.op", "shared.call"
       ]
     }
   }

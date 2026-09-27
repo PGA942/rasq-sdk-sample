@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rasq.io/schema/host-fn-0.2.json",
   "title": "Host function calls (rasq.hostfn/1, v0.2)",
-  "description": "Args/result contract for each host function (PROTOCOL.md §4). Over the wasm ABI the request is {schema:'rasq.hostfn/1', callId, fn, args} and the response is {callId, ok, value|error} — same envelope as boundary hostFn/hostFnResult. v1 is synchronous from the plugin's point of view. v0.2: plugin-sample/CONTRACT.md §4 のアプリ向けホスト関数(fire-and-forget、戻り {})を足した。fn の一覧は boundary.schema.json の hostFnName と同じ(validate.py が照合)。",
+  "description": "Args/result contract for each host function (PROTOCOL.md §4). Over the wasm ABI the request is {schema:'rasq.hostfn/1', callId, fn, args} and the response is {callId, ok, value|error} — same envelope as boundary hostFn/hostFnResult. v1 is synchronous from the plugin's point of view. v0.2: plugin-sample/CONTRACT.md §4 のアプリ向けホスト関数(fire-and-forget、戻り {})を足した。fn の一覧は boundary.schema.json の hostFnName と同じ(validate.py が照合)。 v0.18 (docs/slots.md §2.13、rasq-client D-357): ページ型の page.render と、shared のサーバー変数 / 関数 shared.set / shared.op / shared.call(Central が中継・保持、rasq-central S-048)。",
   "type": "object",
   "required": [
     "schema",
@@ -305,6 +305,48 @@
         },
         "value": {},
         "permission": "slot viewer.overlay"
+      },
+      "page.render": {
+        "args": {
+          "token": "string",
+          "root": "rrl-node.schema.json",
+          "title": "string?"
+        },
+        "value": {},
+        "permission": "render(slot page)",
+        "notes": "fire-and-forget。ページの RRL を丸ごと差し替える(ヘッダーと戻るはホスト)"
+      },
+      "shared.set": {
+        "args": {
+          "token": "string",
+          "key": "string — ^[A-Za-z0-9_.:@-]{1,64}$。me. で始まるキーはサーバーが @<accountId>. に書き換える。@<accountId>. で始まるキーはその本人だけが書ける(読むのは全員)",
+          "value": "any(JSON 16 KiB まで。null で消す)",
+          "ifRev": "integer? — 今の rev と違えば書かずに page.event {type: conflict, key, value, rev}"
+        },
+        "value": {},
+        "permission": "shared.session(slot page)",
+        "notes": "fire-and-forget。反映は page.event {type: var}(自分の書き込みも届く)。セッションが無ければ E01。1 セッション 256 キー・合計 1 MiB まで"
+      },
+      "shared.op": {
+        "args": {
+          "token": "string",
+          "key": "string — shared.set と同じ規則",
+          "op": "incr|append|remove|merge",
+          "value": "any — incr = 足す数(無ければ 0 から)、append = 配列の末尾に足す要素(上限 500 要素、超えたら先頭から捨てる)、remove = 配列から等しい要素を 1 つ消す、merge = オブジェクトに浅くマージ"
+        },
+        "value": {},
+        "permission": "shared.session(slot page)",
+        "notes": "fire-and-forget。サーバー側で原子的に適用し、結果を page.event {type: var} で全員に配る。セッションが無ければ E01"
+      },
+      "shared.call": {
+        "args": {
+          "token": "string",
+          "fn": "string",
+          "args": "object(16 KiB まで)"
+        },
+        "value": {},
+        "permission": "shared.session(slot page)",
+        "notes": "fire-and-forget。参加者全員(自分も)へ page.event {type: call, fn, args, from} を配る(サーバー関数 = 中継)。セッションが無ければ E01。1 接続 20 通/秒まで"
       }
     }
   }

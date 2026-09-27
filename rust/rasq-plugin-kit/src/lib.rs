@@ -443,6 +443,31 @@ pub mod host {
     pub fn viewer_overlay_set(token: &str, root: Value) -> Value {
         host_call("viewer.overlay.set", json!({"token": token, "root": root}))
     }
+    /// `page.render {token, root, title?}`(slot page、v0.18): ページの RRL を丸ごと差し替える。
+    pub fn page_render(token: &str, root: Value, title: Option<&str>) -> Value {
+        let mut a = json!({"token": token, "root": root});
+        if let Some(t) = title {
+            a["title"] = json!(t);
+        }
+        host_call("page.render", a)
+    }
+    /// `shared.set {token, key, value, ifRev?}`(v0.18、権限 shared.session): サーバー変数を書く(`Value::Null` で消す)。
+    /// `me.` で始まるキーはサーバーが `@<accountId>.` に書き換える。反映は `page.event {type: "var"}` で届く。
+    pub fn shared_set(token: &str, key: &str, value: Value, if_rev: Option<u64>) -> Value {
+        let mut a = json!({"token": token, "key": key, "value": value});
+        if let Some(r) = if_rev {
+            a["ifRev"] = json!(r);
+        }
+        host_call("shared.set", a)
+    }
+    /// `shared.op {token, key, op, value}`(v0.18): `incr` / `append` / `remove` / `merge` をサーバー側で原子的に。
+    pub fn shared_op(token: &str, key: &str, op: &str, value: Value) -> Value {
+        host_call("shared.op", json!({"token": token, "key": key, "op": op, "value": value}))
+    }
+    /// `shared.call {token, fn, args}`(v0.18): 参加者全員(自分も)へ `page.event {type: "call", fn, args, from}` を配る。
+    pub fn shared_call(token: &str, fn_name: &str, args: Value) -> Value {
+        host_call("shared.call", json!({"token": token, "fn": fn_name, "args": args}))
+    }
 }
 
 // ---------------------------------------------------------------------------
