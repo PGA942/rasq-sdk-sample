@@ -196,6 +196,14 @@ components:
           maxItems: 4
           items: { type: string, format: uri }
           description: タイルの自動スライドに出すプレビュー画像(詳細の screenshots の先頭 4 枚。無ければ空 / 省略)
+        pluginType:
+          type: string
+          enum: [sns, composer, post, viewer, timeline, astell, trend, theme, assets, other]
+          description: >-
+            プラグインの種別(ストアのタイルの色と見出し、rasq-client D-354)。現在版のマニフェストから導く:
+            kind = sns / theme / assets はそのまま、それ以外は最初の slot の頭(composer.* → composer、post.* → post、
+            viewer.* → viewer、tl* → timeline、astell.* → astell、trend.* → trend)。kind = view / mediaViewer → viewer、
+            postProcessor → post、trend → trend。どれにも当たらなければ other。
     PluginDetail:
       allOf:
         - $ref: "#/components/schemas/PluginCard"
