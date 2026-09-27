@@ -190,6 +190,12 @@ components:
         sizeMb: { type: number }
         hasAds: { type: boolean }
         price: { type: number, description: 0 = 無料 }
+        developerName: { type: string, description: 開発者の表示名(ストアホームのタイル。rasq-client D-353) }
+        previews:
+          type: array
+          maxItems: 4
+          items: { type: string, format: uri }
+          description: タイルの自動スライドに出すプレビュー画像(詳細の screenshots の先頭 4 枚。無ければ空 / 省略)
     PluginDetail:
       allOf:
         - $ref: "#/components/schemas/PluginCard"
