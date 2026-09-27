@@ -32,7 +32,8 @@
         "tap": { "type": "string" }, "longPress": { "type": "string" },
         "pointerDown": { "type": "string" }, "pointerMove": { "type": "string" }, "pointerUp": { "type": "string" },
         "confirm": { "type": "string" }, "mount": { "type": "string" },
-        "change": { "type": "string", "description": "値つき変更 (Switch/Radio/Slider 系設定タイル、payload.value)。D-031" }
+        "change": { "type": "string", "description": "値つき変更 (Switch/Radio/Slider 系設定タイル、payload.value。Input は打つたびに payload.text)。D-031" },
+        "submit": { "type": "string", "description": "Input の送信(送信ボタン / 送信キー、payload.text)。契約 v0.18、docs/rrl.md「Input」" }
       }
     },
     "c": { "type": "array", "items": { "$ref": "#" } }

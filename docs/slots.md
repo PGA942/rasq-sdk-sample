@@ -571,9 +571,9 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
 
 - RRL のイベント: `on: {"tap": "<fn>"}` などは FOW と同じく `<fn>` を call する。args は **`{token, nodeId, kind, ...payload}`**
   (payload のフィールドは**平らに展開**。例: `RadioListTile` の `change` = `{token, nodeId, kind: "change", value}`)。
-- 文字の入力は **`Input`**(`p: {hint?, value?, maxLength?}`、`on: {change, confirm}` → `{token, nodeId, kind, value}`。`change` は打つたび、
-  `confirm` は送信キー)。`p.value` は
-  プラグインが `change` で受けた下書きをそのまま返す(`page.render` で描き直しても打った文字が消えない。送ったあとは `""`)。
+- 文字の入力は **`Input`**([`rrl.md`](rrl.md) の「入力欄 `Input`」、v0.18): `p: {hint?, value?, multiline?, maxLength?, submitLabel?, clearOnSubmit?}`、
+  `on: {submit}` → `{token, nodeId, kind: "submit", text}`(`change` → `{…, text}` は打つたび。要らなければ書かない)。打ちかけの文字はホストが持つので、
+  `page.render` で描き直しても消えない。
 - `page.close {token, reason}` — ページを離れた(戻る / 閉じる / ルームを出た)。戻り `{}`。
 
 **プラグイン → ホスト(ホスト関数)** — すべて fire-and-forget(戻り `{}`)で、`token` 必須(古いページからの反映は捨てる):

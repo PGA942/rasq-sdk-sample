@@ -16,7 +16,7 @@
 - `k` — 兄弟内で一意な key。**patch の target になるのは明示 key を持つノードだけ**。
   nodeId は `{instanceScope}:{key}`(イベントやジオメトリでもこの形)
 - `p` — Props。`"$.path"` はホスト Store への Bind(`$.post.author.displayName` など)
-- `on` — イベント → 自分の関数名(`tap` / `longPress` / `pointer*` / `confirm` / `change`)。
+- `on` — イベント → 自分の関数名(`tap` / `longPress` / `pointer*` / `confirm` / `change` / `submit`)。
   発火するとホストから `call(fn, {nodeId, kind, …})` が来る
 - `tag` — **意味タグ**(`main_text` / `pic` / `quote` / `user_name` …)。投稿内容を構成する
   ノードにだけ付ける(RAi・関連TL・ソートが読む。PROTOCOL §2.2)
@@ -44,6 +44,34 @@
 });
 Ok(json!({ "patch": true }))
 ```
+
+## 入力欄 `Input`(v0.18、rasq-client D-357)
+
+1 行(または複数行)の文字入力。送信ボタン付きで、ページ型プラグイン([slots.md §2.13](slots.md))の寄せ書きなどに使う。
+
+```json
+{ "t": "Input", "k": "gbInput",
+  "p": { "hint": "ひとこと(80 文字まで)", "maxLength": 80, "submitLabel": "書く" },
+  "on": { "submit": "gb.send" } }
+```
+
+| props | 値(既定) | 意味 |
+|---|---|---|
+| `hint` | 文字列 | 空のときの薄い案内 |
+| `value` | 文字列 | 初めに入っている文字(省略 = 空) |
+| `multiline` | bool(`false`) | 複数行 |
+| `maxLength` | 整数 | 打てる文字数の上限 |
+| `submitLabel` | 文字列(送信アイコン) | 送信ボタンの文字 |
+| `clearOnSubmit` | bool(`true`) | 送ったら欄を空にする |
+
+| on | payload | いつ |
+|---|---|---|
+| `change` | `{text}` | 打つたび(要らなければ書かない。書くと 1 文字ごとに call が来る) |
+| `submit` | `{text}` | 送信ボタン / 送信キー |
+
+- 打っている文字は**ホストが持つ**。描き直し(`page.render` / patch)で同じ `k` の `Input` が来ても、打ちかけの文字は消えない
+  (`clearOnSubmit` が送ったあとに空にする)。プラグインは `submit` の `text` を使えばよく、下書きを持たなくてよい。
+- payload はイベントの args に**平らに**載る(ページ型なら `{token, nodeId, kind: "submit", text}`)。
 
 ## 本文(RSL)
 

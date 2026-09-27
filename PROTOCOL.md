@@ -31,7 +31,7 @@ nodeId        = "{instanceScope}:{key}"      // key はプラグインがツリ�
 | `k` | 明示 key(兄弟内で一意)。省略時はホストが `t#index` を補うが **差分更新の対象にはならない** |
 | `tag` | **意味タグ**(§2.2)。投稿内容に関係しないノード(Icon, Spacer, ActionBar 等)には付けない |
 | `p` | Props。`$.path` は Bind(ホスト Store/投稿オブジェクトへの参照) |
-| `on` | イベント → function.json の関数名(`tap/longPress/pointerDown/pointerMove/pointerUp/confirm/mount`) |
+| `on` | イベント → function.json の関数名(`tap/longPress/pointerDown/pointerMove/pointerUp/confirm/mount/change/submit`。`submit` は `Input` の送信、v0.18) |
 | `c` | 子ノード |
 | `role` | 検証ゲート用の構造ロール(`threadNav` / `contentBody` / `mediaItem` / `actionBar`)— 完全置き換えタイルの必須ロール保証に使う |
 
