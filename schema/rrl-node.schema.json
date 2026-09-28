@@ -11,7 +11,7 @@
       "enum": [
         "Text", "Icon", "Image", "Row", "Column", "Stack", "Grid", "Scroll", "Canvas", "Spacer",
         "Input", "Avatar", "Badge", "RichText", "MediaGrid", "ActionButton", "Timestamp", "Button",
-        "ListTile", "SwitchListTile", "RadioListTile", "ValueListTile", "WarningListTile", "DestructiveListTile", "SectionHeader", "SliderListTile", "RangeSliderListTile",
+        "ListTile", "SwitchListTile", "RadioListTile", "ValueListTile", "WarningListTile", "DestructiveListTile", "SectionHeader", "Notice", "SliderListTile", "RangeSliderListTile",
         "PostTile", "ActionBar", "TrendHeader", "UserRow", "UserTileLarge", "PollWidget", "NotificationTile", "PluginTile", "VCCard",
         "CollapsedPost", "HeaderedListView", "SortableList", "SegmentedControl", "Tabs",
         "If", "ForEach", "Call", "Bind", "Slot", "Stream"

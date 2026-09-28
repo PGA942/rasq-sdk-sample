@@ -37,7 +37,7 @@ nodeId        = "{instanceScope}:{key}"      // key はプラグインがツリ�
 
 ### 2.1 ノード型(D-002)
 - **L1 Primitive**: `Text` `Icon` `Image` `Row` `Column` `Stack` `Grid` `Scroll` `Canvas` `Spacer`
-- **L2 Standard Component**(ホスト実装・Props のみ): atomic `Input` `Avatar` `Badge` `RichText` `MediaGrid` `ActionButton` `Timestamp` `Button` `ListTile` `SwitchListTile` `RadioListTile` `ValueListTile` `WarningListTile` `DestructiveListTile` `SectionHeader` / composite `PostTile` `ActionBar` `TrendHeader` `UserRow` `UserTileLarge` `PollWidget` `NotificationTile` `PluginTile` `VCCard` `CollapsedPost` `HeaderedListView` `SortableList` `SegmentedControl` `Tabs`
+- **L2 Standard Component**(ホスト実装・Props のみ): atomic `Input` `Avatar` `Badge` `RichText` `MediaGrid` `ActionButton` `Timestamp` `Button` `ListTile` `SwitchListTile` `RadioListTile` `ValueListTile` `WarningListTile` `DestructiveListTile` `SectionHeader` `Notice` / composite `PostTile` `ActionBar` `TrendHeader` `UserRow` `UserTileLarge` `PollWidget` `NotificationTile` `PluginTile` `VCCard` `CollapsedPost` `HeaderedListView` `SortableList` `SegmentedControl` `Tabs`
 - **L3 Control**: `If` `ForEach` `Call` `Bind` `Slot` `Stream`
 - **L4 Host-owned Surface** はノードとして現れない(ホスト関数 `fow.open` 等で要求)。`AdSlot` はレンダラー挿入地点(プラグインからは見えない)。
 
