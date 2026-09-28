@@ -24,7 +24,7 @@
     },
     "root": {
       "$ref": "./rrl-node.schema.json",
-      "description": "ページ本体。設定タイルは ListTile / SwitchListTile / RadioListTile / ValueListTile / WarningListTile / DestructiveListTile / SectionHeader / SliderListTile / RangeSliderListTile。"
+      "description": "ページ本体。設定タイルは ListTile / SwitchListTile / RadioListTile / ValueListTile / WarningListTile / DestructiveListTile / SectionHeader / SliderListTile / RangeSliderListTile、注意書きは Notice(`kind` = info(水色 ℹ️)| warning(赤 ⚠️)、`text`、任意の `title`)。どのノードも `detail`(ホストの開発者モードのとき、タイルの subtitle / Text の text をこれで置き換える。Notice は本文の下に足す)と `dev: true`(開発者モードのときだけ出す)を持てる。"
     }
   }
 }
