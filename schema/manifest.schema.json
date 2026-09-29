@@ -91,6 +91,11 @@
       "then": { "properties": { "page": { "properties": { "mode": { "const": "shared" } } } } }
     },
     {
+      "$comment": "Swing として配れるのは solo だけ(v0.19、docs/slots.md §2.13)。",
+      "if": { "properties": { "page": { "properties": { "surfaces": { "contains": { "const": "swing" } } }, "required": ["surfaces"] } }, "required": ["page"] },
+      "then": { "properties": { "page": { "properties": { "mode": { "const": "solo" } } } } }
+    },
+    {
       "$comment": "assets を書けるのは wasm を持たない配布物(assets / theme)だけ。プラグインに同梱するファイルは rasq.toml の [[assets]]。",
       "if": { "properties": { "kind": { "enum": ["assets", "theme"] } }, "required": ["kind"] },
       "else": { "not": { "required": ["assets"] } }
@@ -110,9 +115,9 @@
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": { "enum": ["page", "astell", "profile"] },
+          "items": { "enum": ["page", "astell", "profile", "swing"] },
           "default": ["page"],
-          "description": "どこから開けるか。page = 単独のページ(サイドメニューの「プラグイン」やストアから)、astell = AsTell のルームにデプロイ(shared のみ)、profile = RASQ アカウントのページにタイルとして置く(solo は訪問者それぞれの端末で完結、shared は持ち主のプロフィールごとの 1 セッションを訪問者で共有)"
+          "description": "どこから開けるか。page = 単独のページ(サイドメニューの「プラグイン」やストアから)、astell = AsTell のルームにデプロイ(shared のみ)、profile = RASQ アカウントのページにタイルとして置く(solo は訪問者それぞれの端末で完結、shared は持ち主のプロフィールごとの 1 セッションを訪問者で共有)、swing = RASQ の Swing として配れる(solo のみ、全画面、v0.19)"
         },
         "maxParticipants": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50, "description": "shared の 1 セッションに入れる人数(既定 50、上限 200)。超えると WS が 409" }
       }

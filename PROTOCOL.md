@@ -115,6 +115,7 @@ RAi の位置検索、タイムラインソート、リレーショナルTL(本�
 | `store.read` | `{ kind: actionState|followState|readState, key }` | — |
 | `geometry.lookup` | `{ tag? , role?, nodeId? }` → 画面上の矩形(RAi 位置検索・アクセシビリティ共用) | `fow.system` |
 | `page.render` | `{ token, root: Node, title? }` — ページ型(slot `page`)のページの RRL を丸ごと差し替え(fire-and-forget、戻り `{}`)。契約 v0.18、[docs/slots.md §2.13](docs/slots.md) | `render`(slot `page`) |
+| `page.end` | `{ token }` — プラグインが自分で終わる。surface `swing`(Swing として配ったページ)では見終えたことにして次へ進む(fire-and-forget、戻り `{}`)。契約 v0.19、[docs/slots.md §2.13](docs/slots.md) | `render`(slot `page`) |
 | `shared.set` | `{ token, key, value, ifRev? }` — shared のサーバー変数を書く(`value: null` で消す。`me.` で始まるキーは `@<accountId>.` に書き換わり、本人だけが書ける)。反映は `page.event {type: "var"}`、`ifRev` 不一致は `{type: "conflict"}` | `shared.session`(slot `page`) |
 | `shared.op` | `{ token, key, op: incr\|append\|remove\|merge, value }` — サーバー側で原子的に(`append` は 500 要素まで、超えたら先頭から捨てる) | `shared.session`(slot `page`) |
 | `shared.call` | `{ token, fn, args }` — 参加者全員(自分も)へ `page.event {type: "call", fn, args, from}` を配る(サーバー関数 = 中継。Central は中身を見ない) | `shared.session`(slot `page`) |

@@ -1,4 +1,4 @@
-# RASQ スロットプラグイン契約 v0.18(正典)
+# RASQ スロットプラグイン契約 v0.19(正典)
 
 > **ここが正典。** 以前は `orgate-question/plugin-sample/*/CONTRACT.md` に同じ文書が複製されていたが、v0.8 から
 > 各リポジトリの `CONTRACT.md` はこのファイルへのポインタだけになった。節番号(§2.1〜§2.9 / §3 / §4 / §5)は複製時代のまま。
@@ -533,7 +533,7 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
 | キー | 値(既定) | 意味 |
 |---|---|---|
 | `mode` | `solo` \| `shared`(必須) | `solo` = 1 人で完結(サーバー変数なし)。`shared` = 複数人でセッションを共有(権限 **`shared.session` が必須**) |
-| `surfaces` | `page` / `astell` / `profile` の配列(`["page"]`) | どこから開けるか(下) |
+| `surfaces` | `page` / `astell` / `profile` / `swing` の配列(`["page"]`) | どこから開けるか(下) |
 | `title` | 文字列(`name`) | ページのヘッダーとタイルの名前。`page.open` / `page.render` の `title` で上書きできる |
 | `icon` | Material Icon の名前 | タイル / サイドメニュー / AsTell のカード |
 | `maxParticipants` | 1〜200(50) | shared の 1 セッションに入れる人数。超えると入れない(WS が 409) |
@@ -543,12 +543,19 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
   ホスト(ルームのオーナー / モデレーター)が承認するとルームのセッション(`room:<roomId>`)ができ、全員のルームにカードが出る。
 - **`profile`** = RASQ アカウントのページにタイルとして置く(`PUT /me/pages`、8 個まで)。**solo** は訪問者それぞれの端末で完結、
   **shared** は持ち主のプロフィールごとの 1 セッション(`profile:<accountId>`)を訪問者で共有する。
+- **`swing`**(v0.19、rasq-central S-056 / rasq-client D-377)= RASQ の **Swing**(フォロワーと RASQ リストの人へ流れて消える配信)として配る。
+  **`solo` のみ**(スキーマが見る)。
+  - 見る人の端末で**全画面**に開く。見る人がプラグインを入れていなければ、ストアへ案内する。
+  - 開いている間は、スワイプで次の Swing へは移れない。見る人が「全画面から縮小」を押すと、ホストはページをぼかして止め(`page.event {type: "paused"}`)、スワイプで移れるようにする。
+  - 縮小したページを押すと全画面に戻る(`{type: "resumed"}`)。
+  - プラグインが **`page.end`** を呼ぶか、見る人が次へ進む / 閉じると、その Swing は**見終えた**ことになり、その人には二度と出ない。
+  - `page.open` の `context` に `swingId` と、作った人が入れた `data`(JSON 16 KiB まで)と、`author: {accountId, handle, displayName}` が載る。
 - 有料のプラグインでも、有効なセッションに入れる人は**購入せずにそのセッションの中でだけ**使える(ホストは `?session=<id>` 付きで
   マニフェストと配布物を取る。Central の S-048)。
 
 **ホスト → プラグイン(`call`)** — args はすべて**平ら**(`page.event` の中身も `{token, type, ...}` の一段):
 
-- `page.open {token, surface: "page"|"astell"|"profile", context: {roomId?, profileHandle?, profileAccountId?}, me: {accountId, handle, displayName}, session?: Session, size: {width, height}}`
+- `page.open {token, surface: "page"|"astell"|"profile"|"swing", context: {roomId?, profileHandle?, profileAccountId?, swingId?, data?, author?}, me: {accountId, handle, displayName}, session?: Session, size: {width, height}}`
   → 戻り **`{root: Node, title?: string}`**(ページの RRL。表示は全画面のページで、**ヘッダーと戻るはホスト**)。
   `session` は shared で、セッションに入っているときだけ載る(無い = 1 人で開いた。solo と同じに動けばよい):
   ```json
@@ -568,6 +575,8 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
   | `conflict` | `key, value, rev` | `shared.set` の `ifRev` が合わなかった(書いていない。`value` / `rev` は今の値) |
   | `closed` | `reason` | セッションが閉じられた(以後 `shared.*` は `E01`)。ページは開いたまま |
   | `resized` | `size: {width, height}` | ページの大きさが変わった |
+  | `paused` | — | (v0.19、surface `swing`)見る人が「全画面から縮小」を押した。ホストはページをぼかして入力を止めている。動き(音・時間・アニメーション)を止める |
+  | `resumed` | — | (v0.19、surface `swing`)全画面に戻った |
 
 - RRL のイベント: `on: {"tap": "<fn>"}` などは FOW と同じく `<fn>` を call する。args は **`{token, nodeId, kind, ...payload}`**
   (payload のフィールドは**平らに展開**。例: `RadioListTile` の `change` = `{token, nodeId, kind: "change", value}`)。
@@ -581,6 +590,7 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
 | fn | args | 権限 |
 |---|---|---|
 | `page.render` | `{token, root, title?}` — ページの RRL を丸ごと差し替える | `render` |
+| `page.end` | `{token}` — (v0.19)プラグインが自分で終わる。surface `swing` では、その Swing を見終えたことにして次へ進む(ほかの surface では何もしない) | `render` |
 | `shared.set` | `{token, key, value, ifRev?}` — サーバー変数を書く(`value: null` で消す) | `shared.session` |
 | `shared.op` | `{token, key, op: "incr"\|"append"\|"remove"\|"merge", value}` — サーバー側で原子的に | `shared.session` |
 | `shared.call` | `{token, fn, args}` — 参加者全員(自分も)へ `page.event {type: "call"}` を配る(サーバー関数 = 中継) | `shared.session` |

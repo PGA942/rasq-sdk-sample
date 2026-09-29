@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rasq.io/schema/host-fn-0.2.json",
   "title": "Host function calls (rasq.hostfn/1, v0.2)",
-  "description": "Args/result contract for each host function (PROTOCOL.md §4). Over the wasm ABI the request is {schema:'rasq.hostfn/1', callId, fn, args} and the response is {callId, ok, value|error} — same envelope as boundary hostFn/hostFnResult. v1 is synchronous from the plugin's point of view. v0.2: plugin-sample/CONTRACT.md §4 のアプリ向けホスト関数(fire-and-forget、戻り {})を足した。fn の一覧は boundary.schema.json の hostFnName と同じ(validate.py が照合)。 v0.18 (docs/slots.md §2.13、rasq-client D-357): ページ型の page.render と、shared のサーバー変数 / 関数 shared.set / shared.op / shared.call(Central が中継・保持、rasq-central S-048)。",
+  "description": "Args/result contract for each host function (PROTOCOL.md §4). Over the wasm ABI the request is {schema:'rasq.hostfn/1', callId, fn, args} and the response is {callId, ok, value|error} — same envelope as boundary hostFn/hostFnResult. v1 is synchronous from the plugin's point of view. v0.2: plugin-sample/CONTRACT.md §4 のアプリ向けホスト関数(fire-and-forget、戻り {})を足した。fn の一覧は boundary.schema.json の hostFnName と同じ(validate.py が照合)。 v0.18 (docs/slots.md §2.13、rasq-client D-357): ページ型の page.render と、shared のサーバー変数 / 関数 shared.set / shared.op / shared.call(Central が中継・保持、rasq-central S-048)。 v0.19 (docs/slots.md §2.13、rasq-client D-377): page.end(プラグインが自分で終わる。Swing では見終えたことにする)。",
   "type": "object",
   "required": [
     "schema",
@@ -315,6 +315,14 @@
         "value": {},
         "permission": "render(slot page)",
         "notes": "fire-and-forget。ページの RRL を丸ごと差し替える(ヘッダーと戻るはホスト)"
+      },
+      "page.end": {
+        "args": {
+          "token": "string"
+        },
+        "value": {},
+        "permission": "render(slot page)",
+        "notes": "fire-and-forget。v0.19: プラグインが自分で終わる。surface swing では、その Swing を見終えたことにして次へ進む(ほかの surface では何もしない)"
       },
       "shared.set": {
         "args": {
