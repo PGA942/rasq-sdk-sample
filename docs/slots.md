@@ -550,6 +550,9 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
   - 縮小したページを押すと全画面に戻る(`{type: "resumed"}`)。
   - プラグインが **`page.end`** を呼ぶか、見る人が次へ進む / 閉じると、その Swing は**見終えた**ことになり、その人には二度と出ない。
   - `page.open` の `context` に `swingId` と、作った人が入れた `data`(JSON 16 KiB まで)と、`author: {accountId, handle, displayName}` が載る。
+  - **未審査のまま配れる**(rasq-central S-057 / rasq-client D-379): 作った人が `.rasqpkg` / `.wasm` を上げる。
+    - 見る人は同意してから、**制限モード + GPU** で一時的に動かす(`network` / `storage.unsafe` / interstitial・system の FOW / `url.open` などは閉、`gpu.compute` は可、fuel は半分)。
+    - 入れ物は**子プラグインを持たない 1 つだけ**(`requires` も 2 つめのプラグインも不可)。スロットは `page` だけで、surface `swing` の solo。
 - 有料のプラグインでも、有効なセッションに入れる人は**購入せずにそのセッションの中でだけ**使える(ホストは `?session=<id>` 付きで
   マニフェストと配布物を取る。Central の S-048)。
 
