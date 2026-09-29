@@ -24,6 +24,7 @@ let r = host_call("storage.set", json!({"ns": "safe", "key": "greets", "value": 
 | `store.read` | ホスト Store の読み出し | — | 🔶 未配線 |
 | `geometry.lookup` | 画面上の矩形検索 | `fow.system` | 🔶(登録簿はホスト側実装済み — `fow.open` の `anchor` から使える) |
 | `page.render` | ページ型(slot `page`)のページの RRL を丸ごと差し替える `{token, root, title?}` → [slots.md §2.13](slots.md) | `render` | ✅ v0.18 |
+| `page.end` | プラグインが自分で終わる `{token}`(surface `swing` では見終えたことにして次へ)→ [slots.md §2.13](slots.md) | `render` | ✅ v0.19 |
 | `shared.set` | shared のサーバー変数を書く `{token, key, value, ifRev?}`(`me.` → `@<accountId>.`、`null` で消す) | `shared.session` | ✅ v0.18 |
 | `shared.op` | サーバー変数を原子的に `{token, key, op: incr\|append\|remove\|merge, value}` | `shared.session` | ✅ v0.18 |
 | `shared.call` | 参加者全員(自分も)へ `page.event {type: "call", fn, args, from}` を配る `{token, fn, args}` | `shared.session` | ✅ v0.18 |
