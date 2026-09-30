@@ -1428,6 +1428,7 @@ mod tests {
         BYTES.get_or_init(|| {
             if std::fs::metadata(WASM_PATH).is_err() {
                 let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+                // nosemgrep: rasq-command-spawn — テストだけ。cargo は cargo test が渡す $CARGO(無ければ "cargo")、引数と作業ディレクトリは固定で、外の文字列は入らない
                 let status = std::process::Command::new(cargo)
                     .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/.."))
                     .args(["build", "--release", "--target", "wasm32-unknown-unknown", "-p", "misskey-wasm-sample"])
