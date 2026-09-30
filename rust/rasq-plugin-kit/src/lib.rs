@@ -387,6 +387,22 @@ pub mod host {
     pub fn storage_set(key: &str, value: Value) {
         host_call("storage.set", json!({"ns": "safe", "key": key, "value": value}));
     }
+    /// `storage.delete {ns: "safe", key}`: 保存した値を消す。
+    pub fn storage_delete(key: &str) {
+        host_call("storage.delete", json!({"ns": "safe", "key": key}));
+    }
+    /// `net.fetch {method, url, headers?, body?}`(権限 `network`、宣言したホストだけ): ホスト代理の HTTP。
+    /// 戻り = `host_call` の答えそのまま(成功なら `value.status` / `value.bodyText`、失敗なら `error.code` = `B01` / `B03` / `E01`)。
+    pub fn net_fetch(method: &str, url: &str, headers: Option<Value>, body: Option<&str>) -> Value {
+        let mut a = json!({"method": method, "url": url});
+        if let Some(h) = headers {
+            a["headers"] = h;
+        }
+        if let Some(b) = body {
+            a["body"] = json!(b);
+        }
+        host_call("net.fetch", a)
+    }
     pub fn clipboard_set(text: &str) -> Value {
         host_call("clipboard.set", json!({"text": text}))
     }
@@ -450,6 +466,10 @@ pub mod host {
             a["title"] = json!(t);
         }
         host_call("page.render", a)
+    }
+    /// `page.end {token}`(slot page、v0.19): プラグインが自分で終わる。surface `swing` では見終えたことにして次へ進む。
+    pub fn page_end(token: &str) -> Value {
+        host_call("page.end", json!({"token": token}))
     }
     /// `shared.set {token, key, value, ifRev?}`(v0.18、権限 shared.session): サーバー変数を書く(`Value::Null` で消す)。
     /// `me.` で始まるキーはサーバーが `@<accountId>.` に書き換える。反映は `page.event {type: "var"}` で届く。

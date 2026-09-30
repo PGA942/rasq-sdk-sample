@@ -30,7 +30,7 @@
   "permissions": ["fow.widget", "storage.safe"] }
 ```
 
-- 形は [`../schema/manifest.schema.json`](../schema/manifest.schema.json)(v0.3)。`kind` はその enum(`sns` / `action` / `view` / `trend` / `mediaViewer` / `postProcessor`。wasm を持たない配布物の `assets`(§2.10)/ `theme`(§2.12)も)。
+- 形は [`../schema/manifest.schema.json`](../schema/manifest.schema.json)(v0.5)。`kind` はその enum(`sns` / `action` / `view` / `trend` / `mediaViewer` / `postProcessor`。wasm を持たない配布物の `assets`(§2.10)/ `theme`(§2.12)も)。
   ページ型(`slots: ["page"]`、§2.13)は `kind: "view"` で、`page`(`mode` / `surfaces` …)を書く(v0.18)。
 - `slots` = [`../schema/slots.json`](../schema/slots.json) にある id(下表は `stable` のもの。`planned` の面は id だけ予約)。複数可。
   どの `kind` がどのスロットを宣言できるか、必要な権限は登録簿が持ち、`python3 schema/validate.py` が突き合わせる。

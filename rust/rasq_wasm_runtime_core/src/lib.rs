@@ -1422,10 +1422,29 @@ mod tests {
         "/../target/wasm32-unknown-unknown/release/misskey_wasm_sample.wasm"
     );
 
+    /// テストの相手 = misskey-wasm-sample の wasm。まだ無ければ一度だけ作る(きれいな checkout で `cargo test` しても落ちない)。
+    fn fixture() -> &'static [u8] {
+        static BYTES: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+        BYTES.get_or_init(|| {
+            if std::fs::metadata(WASM_PATH).is_err() {
+                let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+                // nosemgrep: rasq-command-spawn — テストだけ。cargo は cargo test が渡す $CARGO(無ければ "cargo")、引数と作業ディレクトリは固定で、外の文字列は入らない
+                let status = std::process::Command::new(cargo)
+                    .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/.."))
+                    .args(["build", "--release", "--target", "wasm32-unknown-unknown", "-p", "misskey-wasm-sample"])
+                    .status()
+                    .expect("run cargo to build misskey-wasm-sample");
+                assert!(
+                    status.success(),
+                    "building misskey-wasm-sample failed (is the wasm32-unknown-unknown target installed? `rustup target add wasm32-unknown-unknown`)"
+                );
+            }
+            std::fs::read(WASM_PATH).expect("misskey_wasm_sample.wasm")
+        })
+    }
+
     fn load() -> RasqWasmInstance {
-        let bytes = std::fs::read(WASM_PATH)
-            .expect("build misskey-wasm-sample first: cargo build --release --target wasm32-unknown-unknown -p misskey-wasm-sample");
-        RasqWasmInstance::load_plain(&bytes).expect("instantiate")
+        RasqWasmInstance::load_plain(fixture()).expect("instantiate")
     }
 
     /// Test host_fn handler: storage.set/get over a process-global map, plus
@@ -1483,7 +1502,7 @@ mod tests {
 
     #[test]
     fn host_fn_round_trip_via_storage() {
-        let bytes = std::fs::read(WASM_PATH).expect("build misskey-wasm-sample first");
+        let bytes = fixture().to_vec();
         let mut instance =
             RasqWasmInstance::load(&bytes, Some(test_host_fn), 0).expect("instantiate");
         let json = instance
@@ -1495,7 +1514,7 @@ mod tests {
 
     #[test]
     fn timeline_rebuilds_the_tree_from_net_fetch() {
-        let bytes = std::fs::read(WASM_PATH).expect("build misskey-wasm-sample first");
+        let bytes = fixture().to_vec();
         let mut instance =
             RasqWasmInstance::load(&bytes, Some(test_host_fn), 0).expect("instantiate");
 
@@ -1556,7 +1575,7 @@ mod tests {
             stream.write_all(response.as_bytes()).unwrap();
         });
 
-        let bytes = std::fs::read(WASM_PATH).expect("build misskey-wasm-sample first");
+        let bytes = fixture().to_vec();
         // No callback at all: net.fetch must be answered natively.
         let mut instance = RasqWasmInstance::load_plain(&bytes).expect("instantiate");
         instance.set_native_fetch(true);
@@ -1605,7 +1624,7 @@ mod tests {
     fn native_fetch_is_closed_until_hosts_are_declared() {
         // 埋込側がホストを渡し忘れた = 全開、ではなく全閉 (fail-closed)。
         // 接続先が無いので TCP は開かない(listener を立てないことで確かめる)。
-        let bytes = std::fs::read(WASM_PATH).expect("build misskey-wasm-sample first");
+        let bytes = fixture().to_vec();
         let mut instance = RasqWasmInstance::load_plain(&bytes).expect("instantiate");
         instance.set_native_fetch(true);
         let result = instance
@@ -1617,7 +1636,7 @@ mod tests {
 
     #[test]
     fn native_fetch_rejects_a_host_outside_the_declaration() {
-        let bytes = std::fs::read(WASM_PATH).expect("build misskey-wasm-sample first");
+        let bytes = fixture().to_vec();
         let mut instance = RasqWasmInstance::load_plain(&bytes).expect("instantiate");
         instance.set_native_fetch(true);
         instance.set_fetch_hosts(&["misskey.io", "*.example.net"]);
@@ -2029,7 +2048,7 @@ mod tests {
         // manifest を見て絞る想定の値)に収まること。既定の 6 G ではなく
         // **絞ったほう**で測るのが肝心 — 緩い既定でしか通らないなら、
         // 「軽い種別は絞ってよい」という推奨が嘘になる。
-        let bytes = std::fs::read(WASM_PATH).expect("build misskey-wasm-sample first");
+        let bytes = fixture().to_vec();
         let mut instance =
             RasqWasmInstance::load(&bytes, Some(test_host_fn), 0).expect("instantiate");
         instance.fuel_per_call = FUEL_BUDGET_STANDARD;

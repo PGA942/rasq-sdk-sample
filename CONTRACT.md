@@ -1,6 +1,6 @@
 # RASQ Plugin Contract — Draft v0.3 (第一期 / Host ⇄ SNS plugin)
 
-最終更新: 2026-08-22 / 根拠: `packages/rasq_plugin_api`(Dart 実装)・`packages/sns_misskey`(参照実装)・決定台帳 D-001〜D-015
+最終更新: 2026-09-30(rasq-client の PLUGIN_CONTRACT.md にだけあった D-306 / D-308 のサイドロードの節を取り込み、正典をここに一本化)/ 根拠: `packages/rasq_plugin_api`(Dart 実装)・`packages/sns_misskey`(参照実装)・決定台帳 D-001〜D-015
 
 この文書は **ホスト(RASQ クライアント)が SNS プラグインに期待する振る舞い**を、言語非依存の形でまとめたものです。
 第一期は Dart 直書きアダプタ(`sns_misskey`)がこの契約を満たして動いており、M3 で WASM プラグインが同じ契約を境界(Snapshot/Patch/Call)越しに満たします。
@@ -43,7 +43,7 @@
   "official": true
 }
 ```
-JSON Schema: `rasq-sdk-sample/schema/manifest.schema.json`(v0.3)。`call("plugin.manifest")` の答えは先頭に `"schema": "rasq.plugin-manifest/1"` を付ける。
+JSON Schema: `rasq-sdk-sample/schema/manifest.schema.json`(v0.5)。`call("plugin.manifest")` の答えは先頭に `"schema": "rasq.plugin-manifest/1"` を付ける。
 スロットの一覧と各スロットの契約(ティア / 置き場所 / call / ホスト関数 / 権限 / ライフサイクル)は **`schema/slots.json`**(D-005、`schema/slot-registry.schema.json` の形)。
 `python3 schema/validate.py` がマニフェストと登録簿を突き合わせる。
 
@@ -159,6 +159,27 @@ AccountId = { kind, instance, handle }   key = "kind:instance:handle"
 `render` `replace_tile` `transform_content` `tag_media` `replace_media` `register_action` `decorate_avatar` `fow.widget` `fow.interstitial` `fow.system` `network` `gpu_ml` `storage.safe` `storage.unsafe` `auto_hook`
 
 PostTile スロット×権限(原典一致): avatar=`decorate_avatar`(審査済みのみ) / content=`transform_content`(sideload は GPU/Net 不可) / media=sideload は `tag_media` のみ、審査済みは `replace_media` / action=`register_action`(審査済み) / 完全置き換え=`replace_tile`(審査済み+審査制約)。interstitial の GPU/ML は審査済みのみ。ストアは審査済みのみ掲載。メディアビューワープラグインは全画面遷移時のみ RRL 描画。
+
+`gpu.compute`(D-081)はランタイムの中で wgpu に短絡され host_fn の権限検査を通らないので、**ランタイムの門は既定で閉**(`E01` permission denied)。ホストはインスタンスごとに `RasqWasmPlugin.fromBytes(gpuCompute: env.gpuComputeEnabled)` で開ける(D-306): `gpuComputeEnabled` = 審査済み(ストアの `store:` 登録 / SNS プラグインは `verified`)または**自分の署名のサイドロード**(`SideloadTrust.full`)**かつ** `gpu_ml` の宣言。
+
+**サイドロードの段 (D-306、ユーザー決定 2026-09-24)**: サイドロードは**自分の署名がある場合だけフル機能**、それ以外は**制限モード**。自分の署名 = `.rasqpkg` の隣の `<pkg>.sig.json`(`rasq build` の出力)が配布物と合い、鍵の指紋がこのアカウントが Central に登録した開発者鍵(`GET /me/dev-keys`)のどれかと同じこと。署名なし / 他人の鍵 / 素の `.wasm` は制限モード。アプリに同梱しているアセット(`asset:`、中身が同梱のものと同じ)はアプリと同じ信頼でフル。見守られている子の端末 (D-307) は開発者鍵が無いものとして扱う(= サイドロードは全部制限モード)。
+
+**制限モード (D-308)**: 表は `sideload_trust.dart` の `sideloadCapabilityTable` の 1 か所。マニフェストの宣言を**さらに絞る**だけで、宣言に無いものを足すことはない。
+
+| 能力 | フル(審査済み / 自分の署名 / 同梱) | 制限 |
+|---|---|---|
+| `gpu.compute`(`gpu_ml`) | 宣言どおり | 閉(`E01`) |
+| `net.fetch`(`network`) | `network.hosts` / `instance` どおり | **全部閉**(`E01`。ネイティブ経路も閉) |
+| `storage.unsafe` | 宣言どおり | 閉(`E01`)。`storage.safe` は使える |
+| FOW | `fow.widget` / `fow.interstitial` / `fow.system` を宣言どおり | `fow.widget` だけ(ほかは未宣言と同じ `E01`) |
+| 副作用のあるホスト関数 | スロットどおり | `composer.open` / `astell.share` / `mute.add` / `url.open` は閉(`E01`)。`clipboard.set` / `toast` は使える |
+| fuel の予算 | 通常(`fuelBudgetFor`) | 半分 |
+| `auto`(temp) | 審査済みだけ読む | 読まない(もとから) |
+| `replace_tile` / `transform_content` / `post.transform` | 宣言どおり | 宣言どおり(描画だけ) |
+
+dev の wasm 試験画面は、**debug ビルドだけ**全権限(「デバッグビルド: 全権限」)。release では読み込んだものに同じ段を当てる(署名した `.rasqpkg` = フル、素の `.wasm` = 制限)。Web 版の Worker にも同じ門が効く(fuel は Web には無い)。
+
+Web 版はまだ `gpu.compute` を持たず常に `E01`(→ `ml.infer` へ縮退)。引数の上限と 10 秒の壁時計は rasq-sdk-sample `docs/host-functions.md`。
 
 ---
 
