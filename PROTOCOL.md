@@ -1,4 +1,7 @@
-# RASQ Boundary Protocol — Draft v0.1 (M3 / Host ⇄ WASM plugin)
+# RASQ Boundary Protocol(Host ⇄ WASM plugin、wire `rasq.boundary/1`)
+
+> 版の見方: この文書は**スロット契約 v0.19 まで**の内容を含む(版の正典は [`docs/slots.md`](docs/slots.md) の表題)。
+> 以前の表題「Draft v0.1」は最初の版の名残で、中身は v0.19 まで追従している。
 
 最終更新: 2026-08-22 / 根拠: 決定台帳 D-001(実行境界)・D-002(4層)・D-012(FOW)・D-017〜D-020、Qwen壁打ち「転送プロトコル v0」
 対になる文書: [`CONTRACT.md`](CONTRACT.md)(操作レベルの契約) / スキーマ: [`schema/rrl-node.schema.json`](schema/rrl-node.schema.json), [`schema/boundary.schema.json`](schema/boundary.schema.json)

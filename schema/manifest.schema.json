@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://rasq.io/schema/plugin-manifest-0.3.json",
-  "title": "RASQ PluginManifest (function.json subset, v0.5.0 / rasq.plugin-manifest/1)",
+  "$id": "https://rasq.io/schema/plugin-manifest-0.5.json",
+  "title": "RASQ PluginManifest (function.json subset, v0.5 / rasq.plugin-manifest/1)",
   "description": "プラグインのマニフェスト。SNS プラグインは function.json(examples/misskey.function.json)、スロットプラグインは call(\"plugin.manifest\") の答え(plugin-sample/CONTRACT.md §1)。v0.3 (D-005/D-006): schema / slots / roles / actions[].tags を正式化。slots の id は schema/slots.json の登録簿にあること。",
   "type": "object",
   "required": ["id", "name", "version", "kind"],

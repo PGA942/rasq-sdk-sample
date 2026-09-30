@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rasq.io/schema/boundary-0.2.json",
-  "title": "RASQ boundary messages (JSON wire rasq.boundary/1, v0.2 — D-007 IDL)",
+  "title": "RASQ boundary messages (JSON wire rasq.boundary/1, v0.2 — D-007 IDL) — $id の版は wire の形の版。ホスト関数の名前はスロット契約 v0.19 まで",
   "description": "PROTOCOL.md §3 のメッセージの形。v0.2: patch / lifecycle の surface(FOW ドキュメント、D-072/D-073)、event の change / drag(plugin-sample §3)、hostFn の fn をアプリ向けホスト関数まで列挙(host-fn.schema.json と同じ一覧)。ワイヤの schema 文字列は rasq.boundary/1 のまま。",
   "type": "object",
   "required": ["schema", "scope", "type"],

@@ -21,7 +21,7 @@ Misskey アダプタ(`packages/sns_misskey`)で検証したものを、ここで
   RRL 画面 / storage / patch / FOW + surface patch / sns.* canned を 1 つずつ最小の形で
 - [`rust/misskey-wasm-sample`](rust/misskey-wasm-sample) — フル参考実装(実 Misskey を net.fetch で叩く)
 
-- [`CONTRACT.md`](CONTRACT.md) — Host ⇄ SNS plugin 契約 draft v0.2(`rasq-client/docs/PLUGIN_CONTRACT.md` と同内容)
+- [`CONTRACT.md`](CONTRACT.md) — Host ⇄ SNS plugin 契約 v0.3(**正典はここ**。`rasq-client/docs/PLUGIN_CONTRACT.md` はここへのポインタ)
 - [`PROTOCOL.md`](PROTOCOL.md) — 境界プロトコル draft v0.1(Snapshot / Patch / Call / Lifecycle / ホスト関数 wasm ABI / RSL スパン / RRL ノードと意味タグ / 検証ゲート / ml.infer 配置解決)
 - [`schema/rrl-node.schema.json`](schema/rrl-node.schema.json) / [`schema/boundary.schema.json`](schema/boundary.schema.json) — RRL ノードと境界メッセージの JSON Schema
 - [`schema/rsl-span.schema.json`](schema/rsl-span.schema.json) — 本文(RSL)スパンのワイヤ。MFM 装飾は `transform` スパン
