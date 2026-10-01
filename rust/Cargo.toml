@@ -8,6 +8,7 @@ members = [
     "mixi2-wasm",
     "rasq-cli",
     "rasq-plugin-kit",
+    "rasq-review-pieces",
     "rasq_wasm_runtime_core",
     "relational-wasm",
 ]
