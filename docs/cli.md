@@ -36,6 +36,7 @@
                       rasq call <name> <fn>             ビルド済みの wasm を wasmi で叩く(ホスト関数の答えを差し込める)
    5 ビルド           rasq build [--release]            dist/<id>-<version>.rasqpkg (+ .sig.json)
    (5')公開           rasq publish --central <url>      Central 管理 API への 3 要求(--dry-run で JSON)
+   (5'')審査の申込み    rasq fee / rasq submit / rasq submissions   開発者の API(審査料、§7.1・REVIEW_FEE.md)
    -                 rasq registry [slots|templates]   同梱の slots.json を表示
    -                 rasq help <言葉…> [--central url]  同梱の文書 / 登録簿から探す(+ Central の掲載)
 ```
@@ -363,6 +364,27 @@ rasq publish --central http://100.91.218.56:8080 [--channel stable|beta] [--note
 
 手元の Central(`http://100.91.218.56:8080`、管理トークン)で `net.example.later` / `net.example.bylen` を投入して、掲載 → 版 →
 配布物(sha512 一致、ストア署名付き)まで通ることを確認済み。
+
+### 7.1 審査の申込みと審査料(`rasq fee` / `rasq submit` / `rasq submissions`、実装済み)
+
+`rasq publish` は管理 API(審査担当の口)。**開発者が自分で審査に出す**ときは開発者の API(Central `POST /api/v1/dev/plugins/publish`、
+トークンは Web コンソールの「CLI 用のトークン」)で、出すと**審査の申込み**ができる(審査料。規約案 C 第4条の2、[REVIEW_FEE.md](REVIEW_FEE.md))。
+
+```
+rasq fee <PKG|DIR>… [--json] [--files] [--orgate <URL>]
+rasq submit [PKG] --central <URL> [--channel stable|beta] [--notes-file NOTES.md] [--resubmission-of <申込み id>] [--token-env RASQ_DEV_TOKEN]
+rasq submissions --central <URL> [--json] [--token-env RASQ_DEV_TOKEN]
+```
+
+- **`rasq fee`** … 配布物のピース数と額を、Central と**同じ方法**(クレート `rasq-review-pieces`、計測方法 `xlmr-unigram-v1`)で数える。
+  ファイルごとのピース数・バイト数、合計、額と式を出す。ネットは使わない(`--orgate` のときだけ、ORGATE の公開の
+  `GET /api/v1/payments/config` の `reviewFee.basis` で額を出す)。ディレクトリは中の `.rasqpkg` を、無ければ展開した中身を数える。
+- **`rasq submit`** … `.rasqpkg`(省略時は `dist/` の 1 つ。`<pkg>.sig.json` があれば `x-rasq-signature` で署名も)を出す。出す前に手元で
+  数えた額を見せ、応答の申込み(状態・審査料・ピース数・式・支払いの画面)を出す。審査料が要れば、支払いの画面で払うまで審査は始まらない。
+  **差戻しの修正として出す**ときは `--resubmission-of <差し戻された申込みの id>`(差戻しの通知から 30 日以内の最初の 1 回は審査料なし。
+  同じ開発者・同じプラグインで、審査料を払った差戻しだけ。条件に合わなければ `400` と理由)。付けなければ、期限内でも通常の(有料の)申込み。
+- **`rasq submissions`** … 自分の申込み: 状態・審査料・**着手の目安**(受付から 30 日)・**結果通知の目安**(着手から 30 日)・遅延の連絡・
+  無料の再提出の期限(`--resubmission-of` に渡す id)。目安を過ぎていれば、取り消して全額の返金を受けられる(取り消しは Web コンソールの申込みの画面)。
 
 ## 8. ホスト側に要る変更(第一期の CLI が前提にするもの / しないもの)
 

@@ -1,6 +1,7 @@
 //! `rasq` — RASQ プラグイン作者向け CLI(docs/cli.md、D-244)。
 //!
 //! 第一期(①〜⑤): `init` / `new` / `check` / `test` / `call` / `build [--raw]` / `registry` / `token` / `dev` / `key` / `inspect` / `publish`。
+//! 審査料と申込み(docs/REVIEW_FEE.md): `fee` / `submit` / `submissions`。
 
 mod credentials;
 mod source;
@@ -10,6 +11,7 @@ mod key;
 mod pack;
 mod pkg;
 mod publish;
+mod review;
 mod schema;
 mod wasm;
 mod workspace;
@@ -141,6 +143,49 @@ enum Cmd {
         #[arg(long)]
         with_source: bool,
     },
+    /// 審査料のピース数と額を、Central と同じ方法(xlmr-unigram-v1、docs/REVIEW_FEE.md)で数える。ネットは使わない
+    Fee {
+        /// .rasqpkg、.rasqpkg のあるディレクトリ(dist/ など)、または展開した中身のディレクトリ
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// JSON で出す
+        #[arg(long)]
+        json: bool,
+        /// ファイルの一覧を省略せずに出す
+        #[arg(long)]
+        files: bool,
+        /// この ORGATE の公開の設定(GET /api/v1/payments/config)から式の定数を読む(既定は同梱の既定の式)
+        #[arg(long, value_name = "URL")]
+        orgate: Option<String>,
+    },
+    /// 開発者の API で版を審査に出す(= 審査の申込み。POST /api/v1/dev/plugins/publish)。トークンは Web コンソールの「CLI 用のトークン」
+    Submit {
+        /// 出す .rasqpkg(既定: dist/ にある 1 つ。<pkg>.sig.json があれば署名も送る)
+        pkg: Option<PathBuf>,
+        /// Central の URL
+        #[arg(long)]
+        central: String,
+        #[arg(long, default_value = "stable", value_parser = ["stable", "beta"])]
+        channel: String,
+        /// リリースノート(Markdown)のファイル
+        #[arg(long, value_name = "FILE")]
+        notes_file: Option<PathBuf>,
+        /// 差戻しの修正として出す: 差し戻された申込みの id(差戻しの通知から 30 日以内の最初の 1 回は審査料なし)。付けなければ通常の(有料の)申込み
+        #[arg(long, value_name = "SUBMISSION_ID")]
+        resubmission_of: Option<String>,
+        /// トークンを読む環境変数(無ければ credentials.toml の [central."<host>"])
+        #[arg(long, default_value = "RASQ_DEV_TOKEN", value_name = "VAR")]
+        token_env: String,
+    },
+    /// 自分の審査の申込み(状態・審査料・着手と結果通知の目安・遅延の連絡・無料の再提出の期限)
+    Submissions {
+        #[arg(long)]
+        central: String,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value = "RASQ_DEV_TOKEN", value_name = "VAR")]
+        token_env: String,
+    },
     /// .rasqpkg の中身を目次(bundle.json)と突き合わせ、.sig.json があれば署名も確かめる
     Inspect {
         pkg: PathBuf,
@@ -249,6 +294,9 @@ fn run() -> Result<()> {
         Cmd::Build { raw, no_build, no_sign, with_source } => build(raw, no_build, no_sign, with_source),
         Cmd::Key { cmd } => key_cmd(cmd),
         Cmd::Inspect { pkg, extract } => inspect(&pkg, extract.as_deref()),
+        Cmd::Fee { paths, json, files, orgate } => review::fee_cmd(&paths, json, files, orgate.as_deref()),
+        Cmd::Submit { pkg, central, channel, notes_file, resubmission_of, token_env } => review::submit_cmd(&central, pkg, &channel, notes_file, resubmission_of, &token_env),
+        Cmd::Submissions { central, json, token_env } => review::submissions_cmd(&central, &token_env, json),
         Cmd::Publish { central, channel, notes_file, dry_run, skip_listing, no_make_current, no_build, token_env, with_source } => publish_cmd(central, channel, notes_file, dry_run, skip_listing, !no_make_current, no_build, &token_env, with_source),
         Cmd::Help { query, count, full, central, plugin } => help::run(&query, count, full, central.as_deref(), plugin.as_deref()),
         Cmd::Registry { what } => registry(what),

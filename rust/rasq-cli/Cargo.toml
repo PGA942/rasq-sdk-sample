@@ -30,3 +30,5 @@ tar = "0.4"
 zstd = "0.13"
 # publish(Central 管理 API)。rustls なのでシステムの OpenSSL は要らない。
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
+# 審査料のピース数(docs/REVIEW_FEE.md)。rasq-central も同じクレート(の写し)で数える。
+rasq-review-pieces = { path = "../rasq-review-pieces" }

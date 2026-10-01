@@ -1,0 +1,60 @@
+{
+  "_note": "tool/reference_pieces.py --vocab assets/xlmr-unigram-vocab.json.zst で作った期待値(計測方法 xlmr-unigram-v1)。fee は既定の式(ORGATE の既定の定数)の額",
+  "method": "xlmr-unigram-v1",
+  "pieces": {
+    "mixed_text.txt": 1711,
+    "rust_source.rs.txt": 3486,
+    "random.bin": 14982,
+    "wasm_head.bin": 62543
+  },
+  "packages": {
+    "sample.rasqpkg": {
+      "pieces": 64359,
+      "files": {
+        "bundle.json": 63,
+        "manifest.json": 42,
+        "assets/mixed_text.txt": 1711,
+        "assets/wasm_head.bin": 62543
+      },
+      "amountJpy": 150
+    }
+  },
+  "fee": [
+    {
+      "pieces": 0,
+      "amountJpy": 150
+    },
+    {
+      "pieces": 130000,
+      "amountJpy": 150
+    },
+    {
+      "pieces": 1876000,
+      "amountJpy": 150
+    },
+    {
+      "pieces": 4650000,
+      "amountJpy": 300
+    },
+    {
+      "pieces": 9300000,
+      "amountJpy": 690
+    },
+    {
+      "pieces": 18600000,
+      "amountJpy": 1610
+    },
+    {
+      "pieces": 46500000,
+      "amountJpy": 4860
+    },
+    {
+      "pieces": 93000000,
+      "amountJpy": 11250
+    },
+    {
+      "pieces": 10000000000000,
+      "amountJpy": 1000000
+    }
+  ]
+}

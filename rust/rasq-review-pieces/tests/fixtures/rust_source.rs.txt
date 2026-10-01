@@ -1,0 +1,262 @@
+//! `.rasqpkg`(zstd 圧縮 tar)の受け付け時の確かめ (S-035)。
+//!
+//! 開発者がコンソールから出した配布物を、**保存する前に**開けて、id / 版 / マニフェストを読み、中身が目次どおりかを見る
+//! (`rasq inspect` / クライアントの `RasqPackage.open` と同じ決まりの、サーバー側の最小限)。動作の審査は rasq-judge と審査員がする。
+//!
+//! - 先頭が `bundle.json`(`schema: rasq.bundle/1`)。`root {id, version, kind, manifest}`。
+//! - パスは相対で `..` を含まない。通常ファイルだけ。重複なし。展開後の合計とファイル数に上限(展開爆弾の対策)。
+//! - `SHA512SUMS` の全行が中身と一致。
+
+use std::collections::HashMap;
+use std::io::Read;
+
+use serde_json::Value;
+use sha2::{Digest, Sha512};
+
+/// 展開後の合計の上限。
+pub const MAX_UNPACKED: u64 = 256 * 1024 * 1024;
+/// ファイル数の上限。
+pub const MAX_ENTRIES: usize = 2000;
+
+#[derive(Debug)]
+pub struct Inspected {
+    pub id: String,
+    pub version: String,
+    pub kind: String,
+    pub manifest: Value,
+    pub files: usize,
+    pub unpacked_bytes: u64,
+    /// 目次の `root.safety`(rasq.toml の `[listing.safety]`、権限ごとの理由など)。無ければ None。
+    pub safety: Option<Value>,
+    /// 中のファイル(パスの順)と大きさ。審査コンソールが見せる。
+    pub entries: Vec<(String, u64)>,
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+pub fn inspect(pkg: &[u8]) -> Result<Inspected, String> {
+    let decoder =
+        zstd::stream::read::Decoder::new(pkg).map_err(|_| "not a .rasqpkg (zstd)".to_string())?;
+    // 上限 + 1 まで読んで、超えたら断る。
+    let mut archive = tar::Archive::new(decoder.take(MAX_UNPACKED + 1));
+    let mut files: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut first: Option<String> = None;
+    let mut total: u64 = 0;
+    for entry in archive.entries().map_err(|e| format!("tar: {e}"))? {
+        let mut entry = entry.map_err(|e| format!("tar: {e}"))?;
+        let path = entry
+            .path()
+            .map_err(|e| format!("tar path: {e}"))?
+            .to_string_lossy()
+            .into_owned();
+        if !entry.header().entry_type().is_file() {
+            return Err(format!("not a regular file: {path}"));
+        }
+        if path.is_empty()
+            || path.starts_with('/')
+            || path.contains('\\')
+            || path.split('/').any(|s| s == ".." || s.is_empty())
+        {
+            return Err(format!("bad path in package: {path}"));
+        }
+        if files.len() >= MAX_ENTRIES {
+            return Err("too many files in package".into());
+        }
+        let mut bytes = Vec::new();
+        entry
+            .read_to_end(&mut bytes)
+            .map_err(|e| format!("tar read: {e}"))?;
+        total += bytes.len() as u64;
+        if total > MAX_UNPACKED {
+            return Err("package is too large when unpacked".into());
+        }
+        first.get_or_insert_with(|| path.clone());
+        if files.insert(path.clone(), bytes).is_some() {
+            return Err(format!("duplicate path in package: {path}"));
+        }
+    }
+    if first.as_deref() != Some("bundle.json") {
+        return Err("bundle.json must be the first entry".into());
+    }
+    let bundle: Value =
+        serde_json::from_slice(&files["bundle.json"]).map_err(|e| format!("bundle.json: {e}"))?;
+    if bundle["schema"].as_str() != Some("rasq.bundle/1") {
+        return Err("bundle.json: schema is not rasq.bundle/1".into());
+    }
+    let root = &bundle["root"];
+    let field = |k: &str| {
+        root[k]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| format!("bundle.json: root.{k} is missing"))
+    };
+    let (id, version, kind, manifest_path) = (
+        field("id")?,
+        field("version")?,
+        field("kind")?,
+        field("manifest")?,
+    );
+    let manifest: Value = serde_json::from_slice(
+        files
+            .get(&manifest_path)
+            .ok_or_else(|| format!("{manifest_path}: listed but missing"))?,
+    )
+    .map_err(|e| format!("{manifest_path}: {e}"))?;
+    if !manifest.is_object() {
+        return Err(format!("{manifest_path}: not a JSON object"));
+    }
+    for (k, want) in [("id", &id), ("version", &version)] {
+        if let Some(got) = manifest[k].as_str()
+            && got != want
+        {
+            return Err(format!(
+                "manifest.{k} {got:?} does not match bundle.json {want:?}"
+            ));
+        }
+    }
+    // SHA512SUMS: `<hex>  <path>` の全行が、中身と一致すること。
+    let sums = std::str::from_utf8(files.get("SHA512SUMS").ok_or("SHA512SUMS is missing")?)
+        .map_err(|_| "SHA512SUMS is not utf-8".to_string())?;
+    for line in sums.lines().filter(|l| !l.trim().is_empty()) {
+        let (want, path) = line
+            .split_once("  ")
+            .ok_or_else(|| format!("SHA512SUMS: bad line: {line}"))?;
+        let data = files
+            .get(path.trim())
+            .ok_or_else(|| format!("{path}: in SHA512SUMS but missing"))?;
+        if hex(&Sha512::digest(data)) != want.trim().to_ascii_lowercase() {
+            return Err(format!("{path}: SHA-512 does not match SHA512SUMS"));
+        }
+    }
+    let mut entries: Vec<(String, u64)> = files
+        .iter()
+        .map(|(k, v)| (k.clone(), v.len() as u64))
+        .collect();
+    entries.sort();
+    // 形が違うものは載せない(掲載に書くのは object の permissions / externalHosts / dataHandling だけ)。
+    let safety = bundle["root"]["safety"].as_object().map(|o| {
+        let mut out = serde_json::Map::new();
+        for k in ["permissions", "externalHosts", "dataHandling"] {
+            if let Some(v) = o.get(k) {
+                out.insert(k.to_string(), v.clone());
+            }
+        }
+        Value::Object(out)
+    });
+    Ok(Inspected {
+        entries,
+        id,
+        version,
+        kind,
+        manifest,
+        files: files.len(),
+        unpacked_bytes: total,
+        safety,
+    })
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    /// テスト用の最小の配布物。
+    pub(crate) fn make(id: &str, version: &str, tamper: bool) -> Vec<u8> {
+        let manifest = serde_json::json!({"id": id, "version": version, "name": "テスト", "permissions": ["net.fetch"]}).to_string();
+        let bundle = serde_json::json!({"schema": "rasq.bundle/1", "root": {"id": id, "version": version, "kind": "slot", "manifest": "manifest.json"}}).to_string();
+        let sum_of = if tamper {
+            "x".to_string()
+        } else {
+            manifest.clone()
+        };
+        let sums = format!(
+            "{}  manifest.json\n",
+            hex(&Sha512::digest(sum_of.as_bytes()))
+        );
+        let mut tarball = tar::Builder::new(Vec::new());
+        for (name, data) in [
+            ("bundle.json", bundle.as_bytes()),
+            ("manifest.json", manifest.as_bytes()),
+            ("SHA512SUMS", sums.as_bytes()),
+        ] {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(data.len() as u64);
+            h.set_mode(0o644);
+            h.set_cksum();
+            tarball.append_data(&mut h, name, data).unwrap();
+        }
+        zstd::encode_all(&tarball.into_inner().unwrap()[..], 3).unwrap()
+    }
+
+    /// 目次の root.safety を持つ最小の配布物。
+    fn make_with_safety(safety: serde_json::Value) -> Vec<u8> {
+        let manifest = serde_json::json!({"id": "x.y", "version": "1.0.0", "name": "t", "permissions": ["storage.safe"]}).to_string();
+        let bundle = serde_json::json!({"schema": "rasq.bundle/1", "root": {"id": "x.y", "version": "1.0.0", "kind": "action", "manifest": "manifest.json", "safety": safety}}).to_string();
+        let sums = format!(
+            "{}  manifest.json\n",
+            hex(&Sha512::digest(manifest.as_bytes()))
+        );
+        let mut tarball = tar::Builder::new(Vec::new());
+        for (name, data) in [
+            ("bundle.json", bundle.as_bytes()),
+            ("manifest.json", manifest.as_bytes()),
+            ("SHA512SUMS", sums.as_bytes()),
+        ] {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(data.len() as u64);
+            h.set_mode(0o644);
+            h.set_cksum();
+            tarball.append_data(&mut h, name, data).unwrap();
+        }
+        zstd::encode_all(&tarball.into_inner().unwrap()[..], 3).unwrap()
+    }
+
+    #[test]
+    fn safety_in_the_table_of_contents_is_read_and_trimmed() {
+        let pkg = make_with_safety(serde_json::json!({
+            "permissions": [{"permission": "storage.safe", "reason": "保存する"}],
+            "externalHosts": [],
+            "dataHandling": "端末の中だけ",
+            "somethingElse": "掲載には書かない",
+        }));
+        let s = inspect(&pkg).unwrap().safety.unwrap();
+        assert_eq!(s["permissions"][0]["reason"], "保存する");
+        assert_eq!(s["dataHandling"], "端末の中だけ");
+        assert!(s.get("somethingElse").is_none());
+        // 無い / object でないなら None(前の版の申告を消さない)。
+        assert!(
+            inspect(&make("x.y", "1.0.0", false))
+                .unwrap()
+                .safety
+                .is_none()
+        );
+        assert!(
+            inspect(&make_with_safety(serde_json::json!("not an object")))
+                .unwrap()
+                .safety
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn reads_a_package_and_checks_the_sums() {
+        let ok = inspect(&make("dev.test.sample", "0.1.0", false)).unwrap();
+        assert_eq!(
+            (
+                ok.id.as_str(),
+                ok.version.as_str(),
+                ok.kind.as_str(),
+                ok.files
+            ),
+            ("dev.test.sample", "0.1.0", "slot", 3)
+        );
+        assert_eq!(ok.manifest["permissions"][0], "net.fetch");
+        assert!(
+            inspect(&make("dev.test.sample", "0.1.0", true))
+                .unwrap_err()
+                .contains("SHA-512")
+        );
+        assert!(inspect(b"not zstd").is_err());
+    }
+}

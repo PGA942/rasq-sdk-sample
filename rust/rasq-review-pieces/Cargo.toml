@@ -1,0 +1,21 @@
+[package]
+name = "rasq-review-pieces"
+version = "1.0.0"
+edition = "2021"
+publish = false
+# コードは MIT。埋め込みの語彙(assets/)は sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2(Apache-2.0)の
+# tokenizer.json から作ったもの(もとは XLM-RoBERTa の SentencePiece、MIT)。README.md を見ること。
+license = "MIT AND Apache-2.0"
+description = "RASQ の審査料のピース数(docs/REVIEW_FEE.md、xlmr-unigram-v1)。rasq-central と `rasq fee` が同じものを使う"
+
+# rasq-central は `crates/rasq-review-pieces/` にこのディレクトリをそのまま写して path で使う(CI が diff -r で確かめる)。
+# 依存の版は Central と SDK の両方の Cargo.lock で解けるよう、広めに書く。
+[dependencies]
+rustc-hash = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tar = { version = "0.4", default-features = false }
+zstd = "0.13"
+
+[dev-dependencies]
+sha2 = "0.10"
