@@ -10,8 +10,14 @@ info:
   description: >-
     プラグインストア(M4)のページ関数/構成取得関数/インストール関数/レビュー関数。
     認証は RASQ アカウントの Bearer(閲覧は匿名可、レビュー投稿・ブックマークは要認証)。
+    サーバーは 2 台に分かれている(rasq-central ARCHITECTURE_SPLIT)。掲載・構成・配布物・レビュー・ブックマーク・カスタムセッションは
+    RASQ Central、**お金(ポイントの残高・購入・支払いの設定)は ORGATE-Server**(第 4 段階、rasq-client D-401 / ORGATE O-004 /
+    Central S-065)。ORGATE の口の操作には `servers` を個別に付けた。トークンはどちらも ORGATE が出すアクセストークン。
+    **公開テストでは有料の機能が止まっている**(ORGATE `ORGATE_PAID_FEATURES=off` が既定): ポイント・購入・有料プラグインの
+    構成 / 配布物は `403 paid_features_disabled`。アプリは `GET /payments/config` の `paidFeatures` で UI を出し分ける。
 servers:
-  - url: https://store.orgate.example/api/v1
+  - url: https://central.rasq.example/api/v1
+    description: RASQ Central(ストアの掲載・配布)
 paths:
   /home:
     get:
@@ -58,11 +64,14 @@ paths:
       responses:
         "200": { content: { application/json: { schema: { $ref: "#/components/schemas/PluginDetail" } } } }
   /plugins/{pluginId}/purchase:
+    servers: [{ url: https://orgate.rasq.example/api/v1, description: ORGATE-Server }]
     post:
       operationId: purchasePlugin
-      summary: 有料プラグインをポイントで購入(rasq-client D-355)
+      summary: 有料プラグインをポイントで購入(rasq-client D-355。**ORGATE-Server**、D-401)
       description: >-
-        ポイント = Web コンソールで Stripe から買う(付与から 2 か月で失効)。**有効期限の近い付与から**減らす。
+        **ORGATE-Server の口**(第 4 段階、D-401 / O-004。Central の同じ経路は 404 になった)。購入の記録は ORGATE が持ち、
+        Central の `GET /plugins/{id}` の `purchased` は Central が ORGATE に聞いて付ける。
+        ポイント = Web コンソールで Stripe から買う(付与から 1 か月で失効)。**有効期限の近い付与から**減らす。
         1 ポイント = 1 円(`price` を切り上げた数)。すでに持っていれば減らさずに 200(`pointsSpent: 0`)。無料なら 400。
         購入は RASQ アカウントに付く(同じアカウントならどの端末でも入れられる)。
       security: [{ bearer: [] }]
@@ -79,6 +88,9 @@ paths:
                   purchased: { type: boolean }
                   pointsSpent: { type: integer }
                   balance: { type: integer, description: 購入後の残り(失効していない付与の合計) }
+        "400": { description: 無料のプラグイン }
+        "403": { description: "公開テストで有料の機能が止まっている(error.code = paid_features_disabled)/ 利用規約の承諾がまだ(error.code = terms_required)" }
+        "404": { description: 掲載されていない }
         "409": { description: "ポイントが足りない(error.code = insufficient_points、残りは error.message)" }
   /plugins/{pluginId}/manifest:
     get:
@@ -90,7 +102,7 @@ paths:
         - { name: session, in: query, schema: { type: string }, description: "カスタムセッションの id(ページ型の一時利用、rasq-central S-048)。そのセッションが有効で、このプラグインのもので、呼んだ人が WS に入れる人なら、購入していなくても通す" }
       responses:
         "200": { content: { application/json: { schema: { $ref: "#/components/schemas/InstallManifest" } } } }
-        "403": { description: "有料で、このアカウントが買っていない(error.code = purchase_required。配布物も同じ)。session 付きでも入れない人なら同じ" }
+        "403": { description: "有料で、このアカウントが買っていない(error.code = purchase_required。配布物も同じ)。session 付きでも入れない人なら同じ。公開テストで有料の機能が止まっている(ORGATE の paidFeatures = false)ときの有料プラグインは error.code = paid_features_disabled" }
   /plugins/{pluginId}/artifacts/{artifactId}:
     get:
       operationId: downloadArtifact
@@ -102,7 +114,7 @@ paths:
         - { name: session, in: query, schema: { type: string }, description: "カスタムセッションの id(manifest の session と同じ規則で、未購入でも通す。S-048)" }
       responses:
         "200": { content: { application/zstd: { schema: { type: string, format: binary } } } }
-        "403": { description: "有料で未購入(error.code = purchase_required)" }
+        "403": { description: "有料で未購入(error.code = purchase_required)/ 公開テストで有料の機能が止まっている(error.code = paid_features_disabled)" }
   /plugins/{pluginId}/reviews:
     get:
       operationId: reviews
@@ -193,6 +205,27 @@ paths:
                 bookmarked: { type: boolean }
       responses:
         "204": { description: ok }
+  /me/points:
+    servers: [{ url: https://orgate.rasq.example/api/v1, description: ORGATE-Server }]
+    get:
+      operationId: myPoints
+      summary: ポイントの残高・付与・購入の履歴(要認証。**ORGATE-Server**、rasq-client D-355 → D-401)
+      description: >-
+        ORGATE-Server の口(第 4 段階。Central の同じ経路は 404 になった)。残高 = 失効していない付与の残りの合計。
+      security: [{ bearer: [] }]
+      responses:
+        "200": { content: { application/json: { schema: { $ref: "#/components/schemas/Points" } } } }
+        "403": { description: "公開テストで有料の機能が止まっている(error.code = paid_features_disabled)" }
+  /payments/config:
+    servers: [{ url: https://orgate.rasq.example/api/v1, description: ORGATE-Server }]
+    get:
+      operationId: paymentsConfig
+      summary: 支払いの設定(認証なし。**ORGATE-Server**、rasq-client D-401 / ORGATE O-004)
+      description: >-
+        有料の機能が使えるか(`paidFeatures`、ORGATE `ORGATE_PAID_FEATURES`。公開テストは false が既定)、Stripe の構成、
+        ポイントのパック、開発者の審査料。アプリは読めない(ORGATE につながない / 落ちている)ときも有料の機能は止まっている扱いにする。
+      responses:
+        "200": { content: { application/json: { schema: { $ref: "#/components/schemas/PaymentsConfig" } } } }
   /custom/sessions:
     post:
       operationId: createCustomSession
@@ -376,7 +409,7 @@ components:
             downloadHistory: { type: array, items: { type: integer }, description: 直近の累積 DL 推移(古い→新しい、等間隔。折れ線用) }
             ratingHistogram: { type: array, items: { type: integer }, minItems: 5, maxItems: 5, description: "評価の分布 [★1,★2,★3,★4,★5]" }
             channel: { type: string, enum: [stable, beta] }
-            purchased: { type: boolean, description: 見ている RASQ アカウントが買っているか(有料のときだけ、ログイン中だけ。D-355) }
+            purchased: { type: boolean, description: 見ている RASQ アカウントが買っているか(有料のときだけ、ログイン中だけ。D-355。購入の記録は ORGATE にあり、Central が聞いて付ける、D-401) }
             updatedAt: { type: string, format: date-time }
             safety: { $ref: "#/components/schemas/SafetyBlock" }
             compatibility: { $ref: "#/components/schemas/Compatibility" }
@@ -581,6 +614,66 @@ components:
           required: [type]
           properties:
             type: { const: pong }
+    Points:
+      type: object
+      description: ポイントの残高と付与(ORGATE `GET /me/points`)。1 ポイント = 1 円、付与から 1 か月で失効
+      required: [balance, grants]
+      properties:
+        balance: { type: integer, description: 失効していない付与の残りの合計 }
+        grants:
+          type: array
+          items:
+            type: object
+            required: [amount, remaining, source, createdAt, expiresAt, expired]
+            properties:
+              amount: { type: integer }
+              remaining: { type: integer }
+              source: { type: string, description: "付与の出どころ(stripe / dummy / admin など)" }
+              createdAt: { type: string, format: date-time }
+              expiresAt: { type: string, format: date-time }
+              expired: { type: boolean }
+        purchases:
+          type: array
+          items:
+            type: object
+            required: [pluginId, pointsSpent, createdAt]
+            properties:
+              pluginId: { type: string }
+              pluginName: { type: string }
+              pointsSpent: { type: integer }
+              createdAt: { type: string, format: date-time }
+    PaymentsConfig:
+      type: object
+      description: 支払いの設定(ORGATE `GET /payments/config`)
+      required: [paidFeatures, stripeMode, points, reviewFee]
+      properties:
+        paidFeatures: { type: boolean, description: "ポイント・ポイントの購入・有料プラグインが使えるか(ORGATE_PAID_FEATURES。公開テストは false)" }
+        stripeMode: { type: string, enum: ["off", dummy, live] }
+        points:
+          type: object
+          required: [available, packs, expiresAfterMonths]
+          properties:
+            available: { type: boolean, description: ポイントを買える(paidFeatures かつ stripeMode が off でない) }
+            packs:
+              type: array
+              items:
+                type: object
+                required: [id, points, amountJpy]
+                properties:
+                  id: { type: string, description: "例 p500" }
+                  points: { type: integer }
+                  amountJpy: { type: integer }
+            expiresAfterMonths: { type: integer, description: 付与から失効までの月数(1) }
+        reviewFee:
+          type: object
+          description: プラグイン開発者の審査料(公開テストでも Stripe を使うのはこれだけ)。stripeMode が off でなく金額が 0 より大きいとき enabled
+          required: [enabled, amountJpy, taxIncluded, currency, provisional]
+          properties:
+            enabled: { type: boolean }
+            amountJpy: { type: integer, description: "既定 3000(ORGATE_REVIEW_FEE_JPY)" }
+            taxIncluded: { type: boolean }
+            currency: { type: string, const: jpy }
+            provisional: { type: boolean, description: 金額が仮(未確定)か }
     ProfilePage:
       type: object
       description: プロフィールに置かれたページ型プラグイン 1 つ(並び順どおり)
