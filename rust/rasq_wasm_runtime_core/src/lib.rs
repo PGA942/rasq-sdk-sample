@@ -142,6 +142,41 @@ const FETCH_IO_TIMEOUT_MS: u64 = 10_000;
 /// 画像/動画サムネの実寸より十分大きく、TL の JSON なら桁が違う。
 const MAX_FETCH_BODY_BYTES: u64 = 32 * 1024 * 1024;
 
+/// 1 回のゲスト呼び出し(`call` / `snapshot` / `patch`)の壁時計の予算(ミリ秒)。セキュリティ確認 2026-10-02 #22。
+///
+/// [`DEFAULT_FETCH_TIMEOUT_MS`] は通信 **1 回** の上限で、燃料は通信を待つ間は減らない。だから遅い(許可された)ホストへの
+/// 通信を繰り返すと、1 回の呼び出しが「通信の回数 × 15 秒」だけ呼び出しスレッドを占有できた。いまは呼び出しの入り口
+/// ([`RasqWasmInstance::refuel`])で締め切りを決め、ホスト関数(ネイティブ `net.fetch` / 埋込側の callback)の
+/// 入り口ごとに残り時間を確かめ、通信の上限には**残り時間**を渡す。締め切りを過ぎたらトラップ(E02)。
+/// 埋込側は `rasq_wasm_set_call_timeout_ms` で変えられる。
+const DEFAULT_CALL_WALL_MS: u64 = 30_000;
+
+/// 1 回のゲスト呼び出しで出せるネイティブ `net.fetch` の数。素直なプラグインは 1 呼び出しで数回。
+const MAX_NATIVE_FETCHES_PER_CALL: u32 = 64;
+
+/// 1 回のゲスト呼び出しで読むネイティブ `net.fetch` の本文の合計(バイト)。1 回ぶんの [`MAX_FETCH_BODY_BYTES`] とは別に。
+const MAX_FETCH_BYTES_PER_CALL: u64 = 64 * 1024 * 1024;
+
+/// 1 回のゲスト呼び出しの予算を使い切った(ホスト関数の入り口で止めた)。トラップとして返し、E02 にする。
+#[derive(Debug)]
+enum CallBudgetExceeded {
+    WallClock(u64),
+    Fetches,
+    FetchBytes,
+}
+
+impl std::fmt::Display for CallBudgetExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CallBudgetExceeded::WallClock(ms) => write!(f, "plugin exceeded its wall-clock budget ({ms} ms per call, including network waits)"),
+            CallBudgetExceeded::Fetches => write!(f, "plugin exceeded its network budget ({MAX_NATIVE_FETCHES_PER_CALL} fetches per call)"),
+            CallBudgetExceeded::FetchBytes => write!(f, "plugin exceeded its network budget ({MAX_FETCH_BYTES_PER_CALL} response bytes per call)"),
+        }
+    }
+}
+
+impl wasmi::errors::HostError for CallBudgetExceeded {}
+
 /// 1 インスタンスが控える通信の形の上限。素直なプラグインは API の口の数(数十)で
 /// 収まる。超えたら数えるのをやめ、超えたこと自体を 1 度だけ報告する — 形を毎回
 /// 少し変えて再審査を浪費させる(または埋もれさせる)プラグインを作れるため。
@@ -164,6 +199,13 @@ struct HostState {
     native_fetch: bool,
     /// 壁時計の上限。ネイティブ `net.fetch` 一回ぶんの全体タイムアウト。
     fetch_timeout_ms: u64,
+    /// 1 回のゲスト呼び出しの壁時計の予算([`DEFAULT_CALL_WALL_MS`])。
+    call_wall_ms: u64,
+    /// いまの呼び出しの締め切り(`refuel` で決める)。
+    call_deadline: Option<std::time::Instant>,
+    /// いまの呼び出しで出したネイティブ `net.fetch` の数と、読んだ本文の合計。
+    call_fetches: u32,
+    call_fetch_bytes: u64,
     /// ネイティブ `net.fetch` が繋いでよいホスト(マニフェストの `network.hosts` と、
     /// 埋込側が今のセッションに与えたインスタンスのホスト)。小文字。
     /// **空 = どこにも繋げない**(fail-closed): 埋込側が設定を忘れた時点で
@@ -198,6 +240,8 @@ enum RasqWasmError {
     Wasmi(wasmi::Error),
     MissingExport(&'static str),
     Utf8,
+    /// 1 回の呼び出しの壁時計 / 通信の予算を使い切った(遅い通信の繰り返しなど、#22)。E02。
+    CallBudget(String),
     /// 燃料切れ = プラグインが暴走した(無限ループ・爆発的な再帰)。
     /// 埋込側が「暴走」と「クラッシュ」を切り分けられるよう、一般の
     /// トラップとは別の口にしてある — 前者はプラグインの無効化/再審査、
@@ -213,6 +257,9 @@ impl From<wasmi::Error> for RasqWasmError {
         // 枯渇系だけは先に掬い出す。wasmi は燃料切れも成長拒否もトラップ
         // として返してくるので、ここで分類しないと埋込側からは
         // 「プラグインが落ちた」と見分けがつかない。
+        if let Some(b) = e.downcast_ref::<CallBudgetExceeded>() {
+            return RasqWasmError::CallBudget(b.to_string());
+        }
         match e.as_trap_code() {
             Some(TrapCode::OutOfFuel) => return RasqWasmError::FuelExhausted,
             Some(TrapCode::GrowthOperationLimited) => return RasqWasmError::MemoryLimit,
@@ -264,6 +311,10 @@ impl RasqWasmInstance {
                 user_data,
                 native_fetch: false,
                 fetch_timeout_ms: DEFAULT_FETCH_TIMEOUT_MS,
+                call_wall_ms: DEFAULT_CALL_WALL_MS,
+                call_deadline: None,
+                call_fetches: 0,
+                call_fetch_bytes: 0,
                 fetch_hosts: Vec::new(),
                 fetch_shapes_seen: Default::default(),
                 fetch_shapes_new: Vec::new(),
@@ -303,6 +354,11 @@ impl RasqWasmInstance {
     /// 予算はあくまで「1 呼び出しあたり」で、呼び出しをまたいで繰り越さない。
     fn refuel(&mut self) -> Result<(), RasqWasmError> {
         self.store.set_fuel(self.fuel_per_call)?;
+        // 壁時計の予算も呼び出しごと(燃料は通信を待つ間は減らないので、別に締め切りを持つ、#22)。
+        let st = self.store.data_mut();
+        st.call_deadline = Some(std::time::Instant::now() + Duration::from_millis(st.call_wall_ms.max(1)));
+        st.call_fetches = 0;
+        st.call_fetch_bytes = 0;
         Ok(())
     }
 
@@ -426,6 +482,9 @@ fn host_fn_impl(mut caller: Caller<'_, HostState>, ptr: u32, len: u32) -> Result
     };
     let request = read_guest(&memory, &caller, ptr, len).map_err(|e| wasmi::Error::new(format!("host_fn: bad request buffer: {e}")))?;
 
+    // 呼び出しの締め切りを過ぎていたら、ホストの仕事(通信・埋込側の callback)を始めずに止める (#22)。
+    let remaining = remaining_call_time(caller.data())?;
+
     // 通信の形の控え: ネイティブ経路でも埋込側の経路でも、要求はここを通る。
     if let Ok(req) = serde_json::from_slice::<serde_json::Value>(&request) {
         if req["fn"] == "net.fetch" {
@@ -451,9 +510,23 @@ fn host_fn_impl(mut caller: Caller<'_, HostState>, ptr: u32, len: u32) -> Result
     if caller.data().native_fetch {
         if let Ok(req) = serde_json::from_slice::<serde_json::Value>(&request) {
             if req["fn"] == "net.fetch" {
-                let timeout_ms = caller.data().fetch_timeout_ms;
-                let hosts = caller.data().fetch_hosts.clone();
-                let response = native_fetch_response(&req, timeout_ms, &hosts);
+                let st = caller.data_mut();
+                if st.call_fetches >= MAX_NATIVE_FETCHES_PER_CALL {
+                    return Err(wasmi::Error::host(CallBudgetExceeded::Fetches));
+                }
+                st.call_fetches += 1;
+                // 1 回の上限と、呼び出しの残り時間の短いほう。
+                let timeout_ms = st.fetch_timeout_ms.min(remaining.as_millis().max(1) as u64);
+                let body_budget = MAX_FETCH_BYTES_PER_CALL.saturating_sub(st.call_fetch_bytes);
+                let hosts = st.fetch_hosts.clone();
+                let (response, body_bytes) = native_fetch_with_budget(&req, timeout_ms, &hosts, body_budget);
+                let st = caller.data_mut();
+                st.call_fetch_bytes = st.call_fetch_bytes.saturating_add(body_bytes);
+                if st.call_fetch_bytes > MAX_FETCH_BYTES_PER_CALL {
+                    return Err(wasmi::Error::host(CallBudgetExceeded::FetchBytes));
+                }
+                // 待っているあいだに締め切りを過ぎたら、ゲストへ返さずに止める。
+                remaining_call_time(caller.data())?;
                 return write_response(&mut caller, memory, response.to_string().as_bytes());
             }
         }
@@ -490,7 +563,25 @@ fn host_fn_impl(mut caller: Caller<'_, HostState>, ptr: u32, len: u32) -> Result
         }
     };
 
+    // 埋込側の callback が締め切りを越えて待たせたら、ゲストへ返さずに止める(callback 自体の打ち切りは埋込側の仕事)。
+    remaining_call_time(caller.data())?;
     write_response(&mut caller, memory, response.as_bytes())
+}
+
+/// いまの呼び出しの残り時間。締め切りを過ぎていたらトラップ([`CallBudgetExceeded::WallClock`])。
+/// 締め切りが無い(呼び出しの外、ロード時の start など)ときは予算いっぱい。
+fn remaining_call_time(st: &HostState) -> Result<Duration, wasmi::Error> {
+    match st.call_deadline {
+        None => Ok(Duration::from_millis(st.call_wall_ms.max(1))),
+        Some(deadline) => {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                Err(wasmi::Error::host(CallBudgetExceeded::WallClock(st.call_wall_ms)))
+            } else {
+                Ok(left)
+            }
+        }
+    }
 }
 
 /// Allocates inside the plugin (via its `alloc`), writes [bytes] and returns
@@ -1020,7 +1111,14 @@ fn host_permitted(host: &str, patterns: &[String]) -> bool {
 
 /// Serves one `net.fetch` request with blocking ureq (host-fn schema:
 /// args {method, url, headers?, body?} → value {status, headers, bodyText}).
-fn native_fetch_response(req: &serde_json::Value, timeout_ms: u64, hosts: &[String]) -> serde_json::Value {
+/// ネイティブ `net.fetch` を 1 回。`body_budget` = この呼び出しでまだ読んでよい本文のバイト数。戻りの 2 つ目は読んだ本文のバイト数。
+fn native_fetch_with_budget(req: &serde_json::Value, timeout_ms: u64, hosts: &[String], body_budget: u64) -> (serde_json::Value, u64) {
+    let mut read = 0u64;
+    let v = native_fetch_response(req, timeout_ms, hosts, body_budget, &mut read);
+    (v, read)
+}
+
+fn native_fetch_response(req: &serde_json::Value, timeout_ms: u64, hosts: &[String], body_budget: u64, read: &mut u64) -> serde_json::Value {
     let call_id = req["callId"].clone();
     let args = &req["args"];
     let method = args["method"].as_str().unwrap_or("GET").to_uppercase();
@@ -1093,9 +1191,16 @@ fn native_fetch_response(req: &serde_json::Value, timeout_ms: u64, hosts: &[Stri
     // 本文はゲストではなくホストの RAM に載るので、ゲストのメモリ上限とは
     // 別に絞る。`take` で読み取り自体を打ち切り、+1 バイト読めたら超過。
     let mut body = Vec::new();
-    let mut reader = std::io::Read::take(http_response.into_reader(), MAX_FETCH_BODY_BYTES + 1);
-    if let Err(e) = std::io::Read::read_to_end(&mut reader, &mut body) {
+    // 1 回の上限と、呼び出しの残りの予算の小さいほう(+1 バイト読めたら超過)。
+    let limit = MAX_FETCH_BODY_BYTES.min(body_budget);
+    let mut reader = std::io::Read::take(http_response.into_reader(), limit + 1);
+    let res = std::io::Read::read_to_end(&mut reader, &mut body);
+    *read = body.len() as u64;
+    if let Err(e) = res {
         return serde_json::json!({"callId": call_id, "ok": false, "error": {"code": "B03", "message": format!("read body failed: {e}")}});
+    }
+    if body.len() as u64 > limit && limit < MAX_FETCH_BODY_BYTES {
+        return serde_json::json!({"callId": call_id, "ok": false, "error": {"code": "E02", "message": format!("network budget exhausted ({MAX_FETCH_BYTES_PER_CALL} response bytes per call)")}});
     }
     if body.len() as u64 > MAX_FETCH_BODY_BYTES {
         return serde_json::json!({"callId": call_id, "ok": false, "error": {"code": "B03", "message": format!("response body exceeds {MAX_FETCH_BODY_BYTES} bytes")}});
@@ -1129,6 +1234,7 @@ fn serde_error_json(e: &RasqWasmError) -> String {
         RasqWasmError::Wasmi(err) => ("C02", err.to_string()),
         RasqWasmError::MissingExport(name) => ("C02", format!("missing export: {name}")),
         RasqWasmError::Utf8 => ("C02", "wasm returned non-utf8 bytes".to_string()),
+        RasqWasmError::CallBudget(m) => ("E02", m.clone()),
         RasqWasmError::FuelExhausted => (
             "E02",
             format!(
@@ -1347,6 +1453,20 @@ pub extern "C" fn rasq_wasm_set_fetch_timeout_ms(instance: *mut RasqWasmInstance
     }
     let instance = unsafe { &mut *instance };
     instance.store.data_mut().fetch_timeout_ms = timeout_ms;
+}
+
+/// Overrides the wall-clock budget of one guest invocation (`call` /
+/// `snapshot` / `patch`, default [`DEFAULT_CALL_WALL_MS`] ms). Every host call
+/// (runtime-native `net.fetch` or the embedder callback) checks the remaining
+/// time first, and a native fetch never waits longer than what is left — so
+/// repeated slow fetches cannot hold the calling thread past this budget (E02).
+#[no_mangle]
+pub extern "C" fn rasq_wasm_set_call_timeout_ms(instance: *mut RasqWasmInstance, timeout_ms: u64) {
+    if instance.is_null() {
+        return;
+    }
+    let instance = unsafe { &mut *instance };
+    instance.store.data_mut().call_wall_ms = timeout_ms;
 }
 
 /// Copies a NUL-terminated string into this crate's allocator. Host-function
@@ -1948,6 +2068,95 @@ mod tests {
     // そのまま食わせられる(`wat` feature が既定で入っている)ので、
     // フィクスチャを別途ビルドする必要はない。ABI は PROTOCOL §4.1 の
     // 最小形 — `memory` / `alloc` / `dealloc` / `call` だけ。
+
+    /// `call` の中で `net.fetch` を `n` 回くり返すゲスト(要求の JSON は 4096 番地、応答は 8192 番地に置かせる)。
+    fn fetch_loop_wat(port: u16, n: u32) -> String {
+        let req = format!(r#"{{"fn":"net.fetch","callId":"c","args":{{"method":"GET","url":"http://127.0.0.1:{port}/slow"}}}}"#);
+        format!(
+            r#"(module
+              (import "rasq" "host_fn" (func $host (param i32 i32) (result i64)))
+              (memory (export "memory") 1)
+              (data (i32.const 4096) "{data}")
+              (func (export "alloc") (param i32) (result i32) (i32.const 8192))
+              (func (export "dealloc") (param i32 i32))
+              (func (export "call") (param i32 i32 i32 i32 i32 i32) (result i64)
+                (local $i i32)
+                (loop $again
+                  (drop (call $host (i32.const 4096) (i32.const {len})))
+                  (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                  (br_if $again (i32.lt_u (local.get $i) (i32.const {n}))))
+                (i64.const 0)))"#,
+            data = req.replace('"', "\\\""),
+            len = req.len(),
+        )
+    }
+
+    /// 1 回ごとに `delay` 待ってから 200 を返す HTTP サーバー(テストの間だけ)。
+    fn slow_server(delay: Duration) -> u16 {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                std::thread::spawn(move || {
+                    let mut buf = [0u8; 4096];
+                    let _ = stream.read(&mut buf);
+                    std::thread::sleep(delay);
+                    let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+                });
+            }
+        });
+        port
+    }
+
+    #[test]
+    fn repeated_slow_fetches_stop_at_the_call_wall_clock_budget() {
+        // 1 回 300 ms の通信を 50 回(以前は燃料がほとんど減らず 15 秒占有できた)。呼び出しの予算 1 秒で E02。
+        let port = slow_server(Duration::from_millis(300));
+        let mut instance = RasqWasmInstance::load_plain(fetch_loop_wat(port, 50).as_bytes()).expect("instantiate");
+        instance.set_native_fetch(true);
+        instance.set_fetch_hosts(&["127.0.0.1"]);
+        rasq_wasm_set_call_timeout_ms(&mut instance, 1_000);
+        let started = std::time::Instant::now();
+        let err = instance.call("loop", "{}", "call-wall").expect_err("the budget must stop the guest");
+        let elapsed = started.elapsed();
+        assert!(matches!(err, RasqWasmError::CallBudget(_)), "{err:?}");
+        assert!(elapsed < Duration::from_secs(3), "took {elapsed:?}");
+        assert!(serde_error_json(&err).contains(r#""code":"E02""#));
+        // 1 回の通信も残り時間より長くは待たない(5 秒かかる相手でも 1 秒で戻る)。
+        let port = slow_server(Duration::from_secs(5));
+        let mut instance = RasqWasmInstance::load_plain(fetch_loop_wat(port, 1).as_bytes()).expect("instantiate");
+        instance.set_native_fetch(true);
+        instance.set_fetch_hosts(&["127.0.0.1"]);
+        rasq_wasm_set_call_timeout_ms(&mut instance, 1_000);
+        let started = std::time::Instant::now();
+        let _ = instance.call("loop", "{}", "call-wall-1");
+        assert!(started.elapsed() < Duration::from_secs(3), "took {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn host_calls_per_call_are_bounded_and_ordinary_fetches_still_work() {
+        let port = slow_server(Duration::from_millis(0));
+        // ふつうの数の通信は通る(予算は呼び出しごとに積み直す)。
+        let mut instance = RasqWasmInstance::load_plain(fetch_loop_wat(port, 3).as_bytes()).expect("instantiate");
+        instance.set_native_fetch(true);
+        instance.set_fetch_hosts(&["127.0.0.1"]);
+        for i in 0..3 {
+            instance.call("loop", "{}", &format!("call-ok-{i}")).expect("ordinary fetches pass");
+        }
+        // 1 回の呼び出しで MAX_NATIVE_FETCHES_PER_CALL を超えたら E02。
+        let mut instance =
+            RasqWasmInstance::load_plain(fetch_loop_wat(port, MAX_NATIVE_FETCHES_PER_CALL + 5).as_bytes()).expect("instantiate");
+        instance.set_native_fetch(true);
+        instance.set_fetch_hosts(&["127.0.0.1"]);
+        let err = instance.call("loop", "{}", "call-many").expect_err("too many fetches");
+        assert!(matches!(&err, RasqWasmError::CallBudget(m) if m.contains("fetches")), "{err:?}");
+        // ネイティブの通信が閉じていれば(ホストを宣言していない)、従来どおり E01 で返し、予算には数えない。
+        let mut instance = RasqWasmInstance::load_plain(fetch_loop_wat(port, 3).as_bytes()).expect("instantiate");
+        instance.set_native_fetch(true);
+        instance.call("loop", "{}", "call-closed").expect("E01 is returned to the guest, not a trap");
+    }
 
     /// `call` の中で永久に回るだけのゲスト。サンドボックスは破らないが、
     /// 燃料が無ければ呼び出しスレッドは二度と返ってこない。

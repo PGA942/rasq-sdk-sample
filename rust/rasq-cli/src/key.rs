@@ -52,14 +52,8 @@ pub fn init(force: bool) -> Result<DevKey> {
     getrandom::getrandom(&mut seed).map_err(|e| anyhow!("乱数を取れません: {e}"))?;
     let sk = SigningKey::from_bytes(&seed);
     let k = DevKey { alg: "ed25519".into(), secret: B64.encode(seed), public: B64.encode(sk.verifying_key().as_bytes()), created_at: crate::credentials::now() };
-    std::fs::create_dir_all(p.parent().unwrap())?;
-    std::fs::write(&p, toml::to_string_pretty(&k)?)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(p.parent().unwrap(), std::fs::Permissions::from_mode(0o700))?;
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600))?;
-    }
+    // シードは 0600 で作った一時ファイルに書いて置き換える(既定の権限で書いてから chmod しない、#5)。
+    crate::private_file::write(&p, toml::to_string_pretty(&k)?.as_bytes())?;
     Ok(k)
 }
 
@@ -97,6 +91,41 @@ pub fn verify(sig_json: &Value, digest: &[u8; 64]) -> Result<String> {
     Ok(pk_b64.to_string())
 }
 
+/// 鍵の操作の承認(Central `src/store/devkeys.rs` と同じ形、セキュリティ確認 2026-10-02 #18)。
+/// 署名する文は `rasq.devkeys.v1|<action>|<対象の鍵の指紋>|<期限 (unix 秒)>`。トークンは
+/// `{action, fingerprint, exp, publicKey, signature}` の JSON を URL-safe base64(パディング無し)にしたもの。
+pub fn approve(sk: &SigningKey, action: &str, target: &str, ttl: u64) -> Result<String> {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let fingerprint = match action {
+        "add" => {
+            let raw = B64.decode(target.trim()).context("公開鍵が base64 ではありません")?;
+            let pk: [u8; 32] = raw.try_into().map_err(|_| anyhow!("公開鍵が 32 バイトではありません"))?;
+            VerifyingKey::from_bytes(&pk).map_err(|_| anyhow!("ed25519 の公開鍵ではありません"))?;
+            fingerprint(target.trim())
+        }
+        "revoke" => {
+            let t = target.trim().to_ascii_lowercase();
+            if t.len() != 16 || !t.bytes().all(|b| b.is_ascii_hexdigit()) {
+                bail!("指紋は 16 桁の 16 進です(コンソールの鍵の一覧に出ています)");
+            }
+            t
+        }
+        other => bail!("action は add か revoke です: {other}"),
+    };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
+    let exp = now + ttl.clamp(60, 3600);
+    let msg = format!("rasq.devkeys.v1|{action}|{fingerprint}|{exp}");
+    let sig = sk.sign(msg.as_bytes());
+    let doc = json!({
+        "action": action,
+        "fingerprint": fingerprint,
+        "exp": exp,
+        "publicKey": B64.encode(sk.verifying_key().as_bytes()),
+        "signature": B64.encode(sig.to_bytes()),
+    });
+    Ok(URL_SAFE_NO_PAD.encode(doc.to_string()))
+}
+
 pub fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
@@ -105,4 +134,28 @@ pub fn sig_path(pkg: &Path) -> PathBuf {
     let mut s = pkg.as_os_str().to_owned();
     s.push(".sig.json");
     PathBuf::from(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    #[test]
+    fn approvals_sign_the_central_message() {
+        // Central(src/store/devkeys.rs)が確かめる文と同じものに署名する。
+        let sk = SigningKey::from_bytes(&[9u8; 32]);
+        let newkey = B64.encode(SigningKey::from_bytes(&[3u8; 32]).verifying_key().as_bytes());
+        let t = approve(&sk, "add", &newkey, 600).unwrap();
+        let v: Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(&t).unwrap()).unwrap();
+        assert_eq!(v["action"], "add");
+        assert_eq!(v["fingerprint"], fingerprint(&newkey));
+        let msg = format!("rasq.devkeys.v1|add|{}|{}", fingerprint(&newkey), v["exp"]);
+        let sig: [u8; 64] = B64.decode(v["signature"].as_str().unwrap()).unwrap().try_into().unwrap();
+        sk.verifying_key().verify(msg.as_bytes(), &Signature::from_bytes(&sig)).unwrap();
+        assert!(approve(&sk, "revoke", "nothex", 600).is_err());
+        assert!(approve(&sk, "add", "AAAA", 600).is_err());
+        assert!(approve(&sk, "rotate", "0123456789abcdef", 600).is_err());
+        assert!(approve(&sk, "revoke", "0123456789ABCDEF", 600).is_ok());
+    }
 }
