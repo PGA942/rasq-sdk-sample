@@ -21,6 +21,11 @@
 //!
 //! 速さ: 語彙の木(文字の辺を `FxHashMap` に)を最初に使うときに 1 度だけ作る(約 0.3 秒・数十 MB)。数えるのは 1 文字あたり数回の
 //! 表引き(リリースビルドで 20 MB の wasm が 0.3 秒ほど)。
+//!
+//! 作業メモリ(セキュリティ確認 2026-10-02 #21): 数えるのは**流しながら**。Viterbi は「いちばん長いピース(16 文字)」ぶんの窓だけを
+//! 持ち([`PieceStream`])、ファイルは 64 KiB ずつ読んで UTF-8 を解く(途中で切れた文字は次の塊へ持ち越す)。語の長さにも
+//! ファイルの大きさにもよらず、作業メモリは一定(語彙の木を除いて数 KiB)。数は、全体を一度に読む数え方と**同じ**
+//! (テストが、参照の数え方・いろいろな区切り方と突き合わせる)。配布物の展開は [Limits] で上限を置く。
 
 use std::io::Read;
 use std::sync::OnceLock;
@@ -131,41 +136,157 @@ impl PieceCounter {
         self.max_len
     }
 
-    /// バイト列 1 つ(ファイル 1 つ)のピース数。
+    /// バイト列 1 つ(ファイル 1 つ)のピース数。作業メモリは一定([PieceStream])。
     pub fn count_bytes(&self, data: &[u8]) -> u64 {
-        let text = String::from_utf8_lossy(data);
-        let mut buf: Vec<char> = Vec::new();
-        let mut best: Vec<f64> = Vec::new();
-        let mut count: Vec<u64> = Vec::new();
-        let mut total = 0u64;
-        for word in text.split(is_space).filter(|w| !w.is_empty()) {
-            buf.clear();
-            buf.push('\u{2581}');
-            buf.extend(word.chars());
-            total += self.count_word(&buf, &mut best, &mut count);
-        }
-        total
+        let mut st = PieceStream::new(self);
+        st.feed(data);
+        st.finish()
     }
 
-    /// `'▁' + 語` の Viterbi(score の和が最大の切り方の、ピースの数)。
-    fn count_word(&self, s: &[char], best: &mut Vec<f64>, count: &mut Vec<u64>) -> u64 {
-        let n = s.len();
-        best.clear();
-        best.resize(n + 1, f64::NEG_INFINITY);
-        count.clear();
-        count.resize(n + 1, 0);
-        best[0] = 0.0;
-        for i in 0..n {
-            let base = best[i];
-            if base == f64::NEG_INFINITY {
-                continue;
+    /// 流しながら数える(ファイルを塊ごとに [PieceStream::feed] して [PieceStream::finish])。
+    pub fn stream(&self) -> PieceStream<'_> {
+        PieceStream::new(self)
+    }
+}
+
+/// 流しながら数える状態(ファイル 1 つ)。バイト列を何回に分けて渡しても、全体を一度に
+/// `String::from_utf8_lossy` してから語に分けて数えたのと同じ数になる。
+///
+/// - UTF-8: 塊の終わりで切れた文字(最大 3 バイト)は次の塊へ持ち越す。壊れたところは U+FFFD(`from_utf8_lossy` と同じ区切り)。
+/// - Viterbi: 位置 i から伸ばせるのは長さ `max_len` まで。だから `best` / `count` は `max_len + 1` 個の輪、文字は先読みの
+///   `max_len` 個だけ持てばよい。処理の順(始まりが前、同じなら短いピース)と比べ方(`>`)は全体を持つ数え方と同じなので、同点の扱いも同じ。
+pub struct PieceStream<'a> {
+    counter: &'a PieceCounter,
+    /// UTF-8 の持ち越し(途中で切れた文字)。
+    pending: Vec<u8>,
+    /// 合計。
+    total: u64,
+    /// 語の中か。
+    in_word: bool,
+    /// まだ始まりとして処理していない文字(先読み、`'▁'` を含む)。
+    window: std::collections::VecDeque<char>,
+    /// 次に処理する始まりの位置(語の中、`'▁'` = 0)。
+    pos: usize,
+    /// 位置 p の best / count は `p % ring` 番目。
+    best: Vec<f64>,
+    count: Vec<u64>,
+}
+
+impl<'a> PieceStream<'a> {
+    fn new(counter: &'a PieceCounter) -> Self {
+        let ring = counter.max_len + 1;
+        Self {
+            counter,
+            pending: Vec::with_capacity(4),
+            total: 0,
+            in_word: false,
+            window: std::collections::VecDeque::with_capacity(ring),
+            pos: 0,
+            best: vec![f64::NEG_INFINITY; ring],
+            count: vec![0; ring],
+        }
+    }
+
+    /// バイト列の続きを渡す。
+    pub fn feed(&mut self, mut data: &[u8]) {
+        // 持ち越しの文字を 1 バイトずつ完成させる(壊れていると分かった時点で、全体を一度に解くのと同じ区切りになる)。
+        while !self.pending.is_empty() {
+            let Some((&b, rest)) = data.split_first() else {
+                return;
+            };
+            data = rest;
+            self.pending.push(b);
+            match std::str::from_utf8(&self.pending) {
+                Ok(s) => {
+                    let c = s.chars().next().unwrap_or('\u{FFFD}');
+                    self.pending.clear();
+                    self.push(c);
+                }
+                Err(e) => match e.error_len() {
+                    None => {} // まだ途中
+                    Some(n) => {
+                        // 壊れた列 = U+FFFD 1 つ。続きのバイト(最大 3)は、あらためて解く。
+                        let again = self.pending.split_off(n);
+                        self.pending.clear();
+                        self.push('\u{FFFD}');
+                        self.feed_complete(&again);
+                    }
+                },
             }
+        }
+        self.feed_complete(data);
+    }
+
+    /// 持ち越しの無い状態から、塊を流す(終わりで切れた文字は持ち越す)。
+    fn feed_complete(&mut self, mut input: &[u8]) {
+        debug_assert!(self.pending.is_empty());
+        loop {
+            match std::str::from_utf8(input) {
+                Ok(s) => {
+                    self.chars(s);
+                    return;
+                }
+                Err(e) => {
+                    let valid = e.valid_up_to();
+                    // valid_up_to までは正しい UTF-8。
+                    self.chars(std::str::from_utf8(&input[..valid]).unwrap_or_default());
+                    match e.error_len() {
+                        Some(n) => {
+                            self.push('\u{FFFD}');
+                            input = &input[valid + n..];
+                        }
+                        None => {
+                            self.pending.extend_from_slice(&input[valid..]);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn chars(&mut self, s: &str) {
+        for c in s.chars() {
+            self.push(c);
+        }
+    }
+
+    fn push(&mut self, c: char) {
+        if is_space(c) {
+            if self.in_word {
+                self.end_word();
+            }
+            return;
+        }
+        if !self.in_word {
+            self.in_word = true;
+            self.pos = 0;
+            self.best.iter_mut().for_each(|b| *b = f64::NEG_INFINITY);
+            self.count.iter_mut().for_each(|n| *n = 0);
+            self.best[0] = 0.0;
+            self.window.clear();
+            self.window.push_back('\u{2581}');
+        }
+        self.window.push_back(c);
+        // 先読みが max_len 文字そろったら、先頭の位置から伸ばせる(語がもっと続いても、伸ばせるのは max_len まで)。
+        while self.window.len() > self.counter.max_len {
+            self.step(self.counter.max_len);
+        }
+    }
+
+    /// 先頭の位置から、長さ `avail` まで伸ばす(全体を持つ数え方の `for l in 1..=max_len.min(n - i)` と同じ)。
+    fn step(&mut self, avail: usize) {
+        let ring = self.best.len();
+        let i = self.pos;
+        let base = self.best[i % ring];
+        if base != f64::NEG_INFINITY {
+            let c = self.counter;
             let mut node = 0u32;
-            for l in 1..=self.max_len.min(n - i) {
-                let score = match self.edges.get(&key(node, s[i + l - 1])) {
+            for l in 1..=c.max_len.min(avail) {
+                let score = match c.edges.get(&key(node, self.window[l - 1])) {
                     Some(&child) => {
                         node = child;
-                        let sc = self.scores[child as usize];
+                        let sc = c.scores[child as usize];
                         if sc.is_nan() {
                             if l != 1 {
                                 continue;
@@ -179,40 +300,148 @@ impl PieceCounter {
                         if l == 1 {
                             // 語彙に無い 1 文字。これより長いピースも無い。
                             let cand = base + UNK_SCORE;
-                            if cand > best[i + 1] {
-                                best[i + 1] = cand;
-                                count[i + 1] = count[i] + 1;
+                            let j = (i + 1) % ring;
+                            if cand > self.best[j] {
+                                self.best[j] = cand;
+                                self.count[j] = self.count[i % ring] + 1;
                             }
                         }
                         break;
                     }
                 };
                 let cand = base + score;
-                if cand > best[i + l] {
-                    best[i + l] = cand;
-                    count[i + l] = count[i] + 1;
+                let j = (i + l) % ring;
+                if cand > self.best[j] {
+                    self.best[j] = cand;
+                    self.count[j] = self.count[i % ring] + 1;
                 }
             }
         }
-        count[n]
+        // 位置 i はもう要らない。その場所は位置 i + ring(= i + max_len + 1)に使う。
+        self.best[i % ring] = f64::NEG_INFINITY;
+        self.count[i % ring] = 0;
+        self.window.pop_front();
+        self.pos += 1;
+    }
+
+    fn end_word(&mut self) {
+        while !self.window.is_empty() {
+            let avail = self.window.len();
+            self.step(avail);
+        }
+        // pos = n(`'▁'` + 語の文字数)。
+        let ring = self.best.len();
+        self.total += self.count[self.pos % ring];
+        self.in_word = false;
+    }
+
+    /// 終わり。途中で切れた文字が残っていれば U+FFFD 1 つ(`from_utf8_lossy` と同じ)。ピース数を返す。
+    pub fn finish(mut self) -> u64 {
+        if !self.pending.is_empty() {
+            self.pending.clear();
+            self.push('\u{FFFD}');
+        }
+        if self.in_word {
+            self.end_word();
+        }
+        self.total
     }
 }
 
-/// 配布物を開くときの上限(zstd 爆弾の対策。rasq-central の版を出す口と同じ値)。
+/// 配布物を開くときの上限(zstd 爆弾の対策。合計とファイル数は rasq-central の版を出す口と同じ値)。
+///
+/// 数えるときの作業メモリは上限にかかわらず一定([PieceStream])。上限は「解く量(時間)」の上限。
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
     /// 展開後の合計(バイト)。
     pub max_unpacked: u64,
     /// ファイルの数。
     pub max_entries: usize,
+    /// ファイル 1 つの展開後の大きさ(バイト)。
+    pub max_file: u64,
+    /// 圧縮率の上限(展開後 ÷ 配布物)。展開後が [Limits::ratio_floor] を超えたときだけ見る(小さい配布物は見ない)。
+    pub max_ratio: u64,
+    /// 圧縮率を見始める展開後の大きさ(バイト)。
+    pub ratio_floor: u64,
 }
 
 impl Limits {
-    /// Central と同じ: 展開後 256 MiB、2000 ファイル。
+    /// Central と同じ: 展開後 256 MiB、2000 ファイル。ファイル 1 つは 256 MiB まで(合計と同じ)、
+    /// 展開後が 64 MiB を超えて 1000 倍より縮んでいる配布物は zstd 爆弾として断る(ふつうの配布物は数倍〜数十倍)。
     pub const DEFAULT: Limits = Limits {
         max_unpacked: 256 * 1024 * 1024,
         max_entries: 2000,
+        max_file: 256 * 1024 * 1024,
+        max_ratio: 1000,
+        ratio_floor: 64 * 1024 * 1024,
     };
+
+    /// 展開後の量が上限・圧縮率の内か。
+    fn check(&self, unpacked: u64, package_bytes: u64) -> Result<(), String> {
+        if unpacked > self.max_unpacked {
+            return Err(format!(
+                "package expands beyond {} bytes",
+                self.max_unpacked
+            ));
+        }
+        if unpacked > self.ratio_floor && unpacked / package_bytes.max(1) > self.max_ratio {
+            return Err(format!(
+                "package expands more than {}x (looks like a zstd bomb)",
+                self.max_ratio
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// 塊の大きさ(流しながら数えるときの読み込み)。
+const CHUNK: usize = 64 * 1024;
+
+/// 配布物の中の通常ファイルを、tar の順に 1 つずつ `on_file(path, reader)` に渡す。上限は [Limits]。
+fn each_file(
+    pkg: &[u8],
+    limits: Limits,
+    mut on_file: impl FnMut(String, &mut dyn Read) -> Result<u64, String>,
+) -> Result<u64, String> {
+    let decoder =
+        zstd::stream::read::Decoder::new(pkg).map_err(|_| "not a .rasqpkg (zstd)".to_string())?;
+    let mut archive = tar::Archive::new(decoder.take(limits.max_unpacked + 1));
+    let mut files = 0usize;
+    let mut unpacked = 0u64;
+    for entry in archive.entries().map_err(|e| format!("tar: {e}"))? {
+        let mut entry = entry.map_err(|e| format!("tar: {e}"))?;
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+        if files >= limits.max_entries {
+            return Err("too many files in package".into());
+        }
+        files += 1;
+        let path = entry
+            .path()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        // 見出しの大きさで先に断る(読む前に)。
+        let declared = entry.header().size().unwrap_or(0);
+        if declared > limits.max_file {
+            return Err(format!(
+                "{path}: a file is larger than {} bytes",
+                limits.max_file
+            ));
+        }
+        limits.check(unpacked.saturating_add(declared), pkg.len() as u64)?;
+        let mut reader = (&mut entry).take(limits.max_file + 1);
+        let n = on_file(path.clone(), &mut reader)?;
+        if n > limits.max_file {
+            return Err(format!(
+                "{path}: a file is larger than {} bytes",
+                limits.max_file
+            ));
+        }
+        unpacked += n;
+        limits.check(unpacked, pkg.len() as u64)?;
+    }
+    Ok(unpacked)
 }
 
 /// 配布物の中のファイル 1 つ。
@@ -222,30 +451,18 @@ pub struct PackageFile {
     pub bytes: Vec<u8>,
 }
 
-/// 配布物(`.rasqpkg` = zstd の tar)を解いて、中の通常ファイルを tar の順に返す。
+/// 配布物(`.rasqpkg` = zstd の tar)を解いて、中の通常ファイルを tar の順に返す(中身をメモリに持つ。数えるだけなら
+/// [count_package] が流しながら数える)。
 pub fn package_files(pkg: &[u8], limits: Limits) -> Result<Vec<PackageFile>, String> {
-    let decoder =
-        zstd::stream::read::Decoder::new(pkg).map_err(|_| "not a .rasqpkg (zstd)".to_string())?;
-    let mut archive = tar::Archive::new(decoder.take(limits.max_unpacked + 1));
     let mut out = Vec::new();
-    for entry in archive.entries().map_err(|e| format!("tar: {e}"))? {
-        let mut entry = entry.map_err(|e| format!("tar: {e}"))?;
-        if !entry.header().entry_type().is_file() {
-            continue;
-        }
-        if out.len() >= limits.max_entries {
-            return Err("too many files in package".into());
-        }
-        let path = entry
-            .path()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
+    each_file(pkg, limits, |path, r| {
         let mut bytes = Vec::new();
-        entry
-            .read_to_end(&mut bytes)
+        r.read_to_end(&mut bytes)
             .map_err(|e| format!("tar read: {e}"))?;
+        let n = bytes.len() as u64;
         out.push(PackageFile { path, bytes });
-    }
+        Ok(n)
+    })?;
     Ok(out)
 }
 
@@ -293,12 +510,42 @@ pub fn count_files<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> 
     }
 }
 
-/// 配布物を開いて数える(Central が申込みのときに使うのと同じ)。
+/// 配布物を開いて数える(Central が申込みのときに使うのと同じ)。ファイルは塊ごとに流して数えるので、作業メモリは一定。
+/// 上限([Limits::DEFAULT])を超える配布物は Err(Central は申込みの前に 400 で断る)。
 pub fn count_package(pkg: &[u8]) -> Result<PackageCount, String> {
-    let files = package_files(pkg, Limits::DEFAULT)?;
-    let mut count = count_files(files.iter().map(|f| (f.path.as_str(), f.bytes.as_slice())));
-    count.package_bytes = pkg.len() as u64;
-    Ok(count)
+    count_package_with(pkg, Limits::DEFAULT)
+}
+
+/// 上限を指定して数える。
+pub fn count_package_with(pkg: &[u8], limits: Limits) -> Result<PackageCount, String> {
+    let c = PieceCounter::embedded();
+    let mut files = Vec::new();
+    let mut buf = vec![0u8; CHUNK];
+    let unpacked = each_file(pkg, limits, |path, r| {
+        let mut st = c.stream();
+        let mut n = 0u64;
+        loop {
+            let got = r.read(&mut buf).map_err(|e| format!("tar read: {e}"))?;
+            if got == 0 {
+                break;
+            }
+            n += got as u64;
+            st.feed(&buf[..got]);
+        }
+        files.push(FileCount {
+            path,
+            bytes: n,
+            pieces: st.finish(),
+        });
+        Ok(n)
+    })?;
+    Ok(PackageCount {
+        method: METHOD,
+        package_bytes: pkg.len() as u64,
+        unpacked_bytes: unpacked,
+        pieces: files.iter().map(|f| f.pieces).sum(),
+        files,
+    })
 }
 
 /// 審査料の式の写し(正は ORGATE-Server `src/payments/fee.rs`。定数は ORGATE の `ORGATE_REVIEW_FEE_*` で変えられ、
@@ -526,6 +773,204 @@ mod tests {
             .filter(|v| !special.contains(&v[0].as_str().unwrap()))
             .count();
         assert_eq!(n, PieceCounter::embedded().len());
+    }
+
+    /// 参照の数え方(流さない、全体を一度に持つ = 変える前の実装)。流す数え方がこれと同じ数を出すことを確かめる。
+    fn reference_count(c: &PieceCounter, data: &[u8]) -> u64 {
+        let text = String::from_utf8_lossy(data);
+        let mut total = 0u64;
+        for word in text.split(is_space).filter(|w| !w.is_empty()) {
+            let s: Vec<char> = std::iter::once('\u{2581}').chain(word.chars()).collect();
+            let n = s.len();
+            let mut best = vec![f64::NEG_INFINITY; n + 1];
+            let mut count = vec![0u64; n + 1];
+            best[0] = 0.0;
+            for i in 0..n {
+                let base = best[i];
+                if base == f64::NEG_INFINITY {
+                    continue;
+                }
+                let mut node = 0u32;
+                for l in 1..=c.max_len.min(n - i) {
+                    let score = match c.edges.get(&key(node, s[i + l - 1])) {
+                        Some(&child) => {
+                            node = child;
+                            let sc = c.scores[child as usize];
+                            if sc.is_nan() {
+                                if l != 1 {
+                                    continue;
+                                }
+                                UNK_SCORE
+                            } else {
+                                sc
+                            }
+                        }
+                        None => {
+                            if l == 1 && base + UNK_SCORE > best[i + 1] {
+                                best[i + 1] = base + UNK_SCORE;
+                                count[i + 1] = count[i] + 1;
+                            }
+                            break;
+                        }
+                    };
+                    if base + score > best[i + l] {
+                        best[i + l] = base + score;
+                        count[i + l] = count[i] + 1;
+                    }
+                }
+            }
+            total += count[n];
+        }
+        total
+    }
+
+    /// 決まった乱数(テストを毎回同じにする)。
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            self.0 >> 33
+        }
+    }
+
+    fn stream_in_chunks(c: &PieceCounter, data: &[u8], rng: &mut Lcg, max_chunk: u64) -> u64 {
+        let mut st = c.stream();
+        let mut rest = data;
+        while !rest.is_empty() {
+            let n = ((rng.next() % max_chunk) as usize + 1).min(rest.len());
+            st.feed(&rest[..n]);
+            rest = &rest[n..];
+        }
+        st.finish()
+    }
+
+    #[test]
+    fn streaming_counts_match_the_whole_buffer_count_at_any_chunk_boundary() {
+        // ふつうの配布物の数は変わらない: 期待値のファイル・壊れた UTF-8・長い語を、いろいろな区切りで流しても同じ数。
+        let c = PieceCounter::embedded();
+        let mut rng = Lcg(42);
+        let mut inputs: Vec<Vec<u8>> = expected()["pieces"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|f| std::fs::read(format!("{FIXTURES}/{f}")).unwrap())
+            .collect();
+        inputs.push(
+            "日本語の文章と English words、絵文字🎉も。"
+                .repeat(50)
+                .into_bytes(),
+        );
+        inputs.push(b"\xe3\x81\xe3\x81\x82\xf0\x9f\x8e\xff\xfe abc\xc3".to_vec());
+        inputs.push("x".repeat(10_000).into_bytes());
+        let mut noisy = Vec::new();
+        for _ in 0..20_000 {
+            noisy.push(match rng.next() % 6 {
+                0 => b' ',
+                1 => 0xe3,
+                2 => 0x81,
+                3 => (rng.next() % 256) as u8,
+                _ => b'a' + (rng.next() % 26) as u8,
+            });
+        }
+        inputs.push(noisy);
+        for data in &inputs {
+            let want = reference_count(c, data);
+            assert_eq!(c.count_bytes(data), want);
+            for max_chunk in [1, 2, 3, 5, 17, 4096] {
+                assert_eq!(
+                    stream_in_chunks(c, data, &mut rng, max_chunk),
+                    want,
+                    "chunk {max_chunk}"
+                );
+            }
+        }
+        // 小さな語彙の境目の場合も。
+        let vocab: Vec<(String, f64)> = [
+            ("▁ab", -1.0),
+            ("▁a", -2.0),
+            ("b", -2.0),
+            ("▁", -3.0),
+            ("bb", -1.5),
+        ]
+        .iter()
+        .map(|(p, s)| (p.to_string(), *s))
+        .collect();
+        let small = PieceCounter::new(&vocab);
+        for data in [
+            &b"abbbbbbbab ab a\xffbb"[..],
+            b"bbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            b"  a  ",
+        ] {
+            let want = reference_count(&small, data);
+            for max_chunk in [1, 2, 3] {
+                assert_eq!(stream_in_chunks(&small, data, &mut rng, max_chunk), want);
+            }
+        }
+    }
+
+    #[test]
+    fn a_very_long_word_is_counted_in_constant_memory() {
+        // 空白の無い長い語(以前は 1 文字あたり約 20 バイトの作業領域を確保した)。窓は max_len 文字、輪は max_len + 1 のまま。
+        let c = PieceCounter::embedded();
+        let mut st = c.stream();
+        let chunk = "あいうえおabc".repeat(10_000);
+        for _ in 0..40 {
+            st.feed(chunk.as_bytes());
+            assert!(st.window.len() <= c.max_len());
+            assert!(st.window.capacity() <= 4 * (c.max_len() + 1));
+            assert_eq!(st.best.len(), c.max_len() + 1);
+            assert!(st.pending.len() <= 3);
+        }
+        let n = st.finish();
+        assert!(n > 0);
+        // 同じ語を一度に数えたのと同じ。
+        let whole = chunk.repeat(40);
+        assert_eq!(n, reference_count(c, whole.as_bytes()));
+    }
+
+    #[test]
+    fn package_limits_reject_bombs_and_oversize_files() {
+        // 64 MiB を超えて 1000 倍より縮む配布物(zstd 爆弾)は、数える前に断る。
+        let zeros = vec![b'a'; 80 * 1024 * 1024];
+        let bomb = tar_zst(&[("bundle.wasm", tar::EntryType::Regular, &zeros)]);
+        assert!(bomb.len() < 80 * 1024);
+        let e = count_package(&bomb).unwrap_err();
+        assert!(e.contains("zstd bomb"), "{e}");
+        // ファイル 1 つの上限・合計の上限(小さくした上限で)。
+        let pkg = tar_zst(&[
+            ("a.txt", tar::EntryType::Regular, b"hello world"),
+            ("b.txt", tar::EntryType::Regular, b"hello again"),
+        ]);
+        let small = Limits {
+            max_file: 8,
+            ..Limits::DEFAULT
+        };
+        assert!(count_package_with(&pkg, small)
+            .unwrap_err()
+            .contains("larger than"));
+        let total = Limits {
+            max_unpacked: 16,
+            ..Limits::DEFAULT
+        };
+        assert!(count_package_with(&pkg, total).is_err());
+        let few = Limits {
+            max_entries: 1,
+            ..Limits::DEFAULT
+        };
+        assert!(count_package_with(&pkg, few)
+            .unwrap_err()
+            .contains("too many files"));
+        // 上限の内なら、流して数えた数 = ファイルを全部読んで数えた数。
+        let c = count_package(&pkg).unwrap();
+        let files = package_files(&pkg, Limits::DEFAULT).unwrap();
+        let whole = count_files(files.iter().map(|f| (f.path.as_str(), f.bytes.as_slice())));
+        assert_eq!(
+            (c.pieces, c.unpacked_bytes),
+            (whole.pieces, whole.unpacked_bytes)
+        );
     }
 
     /// 速さを測る: `RASQ_PIECES_BENCH=<ファイル …> cargo test --release -- --ignored pieces_bench --nocapture`。

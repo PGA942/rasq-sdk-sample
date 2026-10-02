@@ -131,6 +131,17 @@ external void rasq_wasm_set_fetch_timeout_ms(
   int timeout_ms,
 );
 
+/// Overrides the wall-clock budget of one guest invocation (call / snapshot /
+/// patch), in milliseconds (default 30000). Every host call checks the
+/// remaining time first and a runtime-native net.fetch never waits longer than
+/// what is left, so repeated slow fetches cannot hold the calling thread past
+/// this budget (E02).
+@ffi.Native<ffi.Void Function(ffi.Pointer<RasqWasmInstance>, ffi.Uint64)>()
+external void rasq_wasm_set_call_timeout_ms(
+  ffi.Pointer<RasqWasmInstance> instance,
+  int timeout_ms,
+);
+
 /// Frees an instance created by rasq_wasm_instantiate.
 @ffi.Native<ffi.Void Function(ffi.Pointer<RasqWasmInstance>)>()
 external void rasq_wasm_destroy(ffi.Pointer<RasqWasmInstance> instance);

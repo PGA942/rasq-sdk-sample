@@ -10,6 +10,7 @@ mod help;
 mod key;
 mod pack;
 mod pkg;
+mod private_file;
 mod publish;
 mod review;
 mod schema;
@@ -241,6 +242,17 @@ enum KeyCmd {
     },
     /// 公開鍵(base64)と指紋
     Show,
+    /// Central のコンソールで鍵を足す / 失効するときの承認を出す(署名の保護。この鍵が登録済みであること)
+    Approve {
+        /// add(新しい鍵を足す)/ revoke(鍵を失効する)
+        #[arg(value_parser = ["add", "revoke"])]
+        action: String,
+        /// add なら新しい公開鍵(base64)、revoke なら失効する鍵の指紋
+        target: String,
+        /// 承認の有効時間(秒、最大 3600)
+        #[arg(long, default_value_t = 600)]
+        ttl: u64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -860,6 +872,12 @@ fn key_cmd(cmd: KeyCmd) -> Result<()> {
             Some((k, _)) => println!("{}\n  alg = {}\n  public = {}\n  指紋 = {}\n  created = {}", key::path()?.display(), k.alg, k.public, key::fingerprint(&k.public), k.created_at),
             None => bail!("鍵がありません(rasq key init)"),
         },
+        KeyCmd::Approve { action, target, ttl } => {
+            let Some((k, sk)) = key::load()? else { bail!("鍵がありません(rasq key init)") };
+            let approval = key::approve(&sk, &action, &target, ttl)?;
+            eprintln!("承認(鍵 {} で署名、{ttl} 秒有効)。コンソールの「承認」に貼ります:", key::fingerprint(&k.public));
+            println!("{approval}");
+        }
     }
     Ok(())
 }

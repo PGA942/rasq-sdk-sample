@@ -96,6 +96,13 @@ FFI_PLUGIN_EXPORT char *rasq_wasm_take_fetch_shapes(RasqWasmInstance *instance);
 // while a host function blocks.
 FFI_PLUGIN_EXPORT void rasq_wasm_set_fetch_timeout_ms(RasqWasmInstance *instance, uint64_t timeout_ms);
 
+// Overrides the wall-clock budget of one guest invocation (call / snapshot /
+// patch), in milliseconds (default 30000). Every host call checks the
+// remaining time first and a runtime-native net.fetch never waits longer than
+// what is left, so repeated slow fetches cannot hold the calling thread past
+// this budget (E02).
+FFI_PLUGIN_EXPORT void rasq_wasm_set_call_timeout_ms(RasqWasmInstance *instance, uint64_t timeout_ms);
+
 // Frees an instance created by rasq_wasm_instantiate.
 FFI_PLUGIN_EXPORT void rasq_wasm_destroy(RasqWasmInstance *instance);
 

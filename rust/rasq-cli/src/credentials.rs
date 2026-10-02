@@ -53,16 +53,8 @@ pub fn load() -> Result<Credentials> {
 
 pub fn save(c: &Credentials) -> Result<()> {
     let p = path()?;
-    let dir = p.parent().unwrap();
-    std::fs::create_dir_all(dir)?;
-    std::fs::write(&p, toml::to_string_pretty(c)?)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600))?;
-    }
-    Ok(())
+    // 0700 のディレクトリに、0600 で作った一時ファイルから原子的に置き換える(書いてから chmod しない、#5)。
+    crate::private_file::write(&p, toml::to_string_pretty(c)?.as_bytes())
 }
 
 /// accountKey = `kind:instance:handle`(schema/action-ref.schema.json)。戻りは (kind, instance, handle)。
