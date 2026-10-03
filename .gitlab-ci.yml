@@ -45,7 +45,8 @@ rust:
     - cargo build -p rasq-cli
     - export RASQ=$PWD/target/debug/rasq
     # rasq fee: 期待値の配布物(64,359 ピース・¥150。rasq-central の写しのテストと同じ期待値)
-    - $RASQ fee --json rasq-review-pieces/tests/fixtures/sample.rasqpkg | tee /tmp/fee.json && grep -q '"pieces": 64359' /tmp/fee.json && grep -q '"amountJpy": 150' /tmp/fee.json
+    - |
+      $RASQ fee --json rasq-review-pieces/tests/fixtures/sample.rasqpkg | tee /tmp/fee.json && grep -q '"pieces": 64359' /tmp/fee.json && grep -q '"amountJpy": 150' /tmp/fee.json
     - rm -rf /tmp/rasq-e2e && mkdir -p /tmp/rasq-e2e && cd /tmp/rasq-e2e
     - $RASQ init --sns ci.test.sns --namespace ci.test
     - for s in post.transform tl trend.suggest viewer.overlay composer.media composer.text astell.action post.share post.action page; do $RASQ new $s $(echo $s | tr . -); done
