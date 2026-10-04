@@ -1,4 +1,4 @@
-# RASQ スロットプラグイン契約 v0.19(正典)
+# RASQ スロットプラグイン契約 v0.20(正典)
 
 > **ここが正典。** 以前は `orgate-question/plugin-sample/*/CONTRACT.md` に同じ文書が複製されていたが、v0.8 から
 > 各リポジトリの `CONTRACT.md` はこのファイルへのポインタだけになった。節番号(§2.1〜§2.9 / §3 / §4 / §5)は複製時代のまま。
@@ -533,7 +533,7 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
 | キー | 値(既定) | 意味 |
 |---|---|---|
 | `mode` | `solo` \| `shared`(必須) | `solo` = 1 人で完結(サーバー変数なし)。`shared` = 複数人でセッションを共有(権限 **`shared.session` が必須**) |
-| `surfaces` | `page` / `astell` / `profile` / `swing` の配列(`["page"]`) | どこから開けるか(下) |
+| `surfaces` | `page` / `astell` / `profile` / `swing` の配列(`["page"]`) | どこから開けるか(下。v0.20 から Swing は書かなくても配れる) |
 | `title` | 文字列(`name`) | ページのヘッダーとタイルの名前。`page.open` / `page.render` の `title` で上書きできる |
 | `icon` | Material Icon の名前 | タイル / サイドメニュー / AsTell のカード |
 | `maxParticipants` | 1〜200(50) | shared の 1 セッションに入れる人数。超えると入れない(WS が 409) |
@@ -544,7 +544,17 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
 - **`profile`** = RASQ アカウントのページにタイルとして置く(`PUT /me/pages`、8 個まで)。**solo** は訪問者それぞれの端末で完結、
   **shared** は持ち主のプロフィールごとの 1 セッション(`profile:<accountId>`)を訪問者で共有する。
 - **`swing`**(v0.19、rasq-central S-056 / rasq-client D-377)= RASQ の **Swing**(フォロワーと RASQ リストの人へ流れて消える配信)として配る。
-  **`solo` のみ**(スキーマが見る)。
+  - **v0.20(rasq-central S-079 / rasq-client D-424)から、親子関係の無いページ型プラグインは `swing` を書かなくても Swing で配れ、
+    `shared` も配れる**(v0.19 の「solo のみ」は外した)。`swing` を書くのは「Swing 向けに作った」(全画面・`page.end`・`paused` を扱う)という宣言で、
+    ホストは Swing を作る画面でそれを先に並べる。書いていないプラグインにも、Swing では `surface: "swing"` で `page.open` が来る
+    (知らない surface は `page` と同じに描けばよい)。
+  - **親子関係**(配れないもの): 入れ物(`.rasqpkg`)の中に**ほかのプラグインと一緒に入っている**もの(SNS プラグインの `children` の 1 つ =
+    ホストの登録元が `…#<childId>`、または子を持つ入れ物の root)と、**ほかのプラグインを土台にする**もの(`bundle.json` の `root.requires`)。
+    ページ型が自分の FOW を `fow.open` で子として開くのは親子関係に数えない。
+  - **`shared` を Swing で配る** = 見る人は**作った人のセッションに入る**(Swing を見られる人 = セッションに入れる人)。作るときに
+    新しいセッション(scope **`swing:<swingId>`**。Swing が消えると閉じる)か、作った人がいま入っている `link:` / `profile:` のセッション
+    (カスタムプラグインのページの「招待」、rasq-client D-424)を Swing に付ける。`room:` のセッションは付けられない(ルームに入っている人だけのもの)。
+    見る人がプラグインを入れていなければ、ほかの共有セッションと同じく同意のうえ一時的に動かす(`?session=`、有料でも)。
   - 見る人の端末で**全画面**に開く。見る人がプラグインを入れていなければ、ストアへ案内する。
   - 開いている間は、スワイプで次の Swing へは移れない。見る人が「全画面から縮小」を押すと、ホストはページをぼかして止め(`page.event {type: "paused"}`)、スワイプで移れるようにする。
   - 縮小したページを押すと全画面に戻る(`{type: "resumed"}`)。
@@ -552,13 +562,15 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
   - `page.open` の `context` に `swingId` と、作った人が入れた `data`(JSON 16 KiB まで)と、`author: {accountId, handle, displayName}` が載る。
   - **未審査のまま配れる**(rasq-central S-057 / rasq-client D-379): 作った人が `.rasqpkg` / `.wasm` を上げる。
     - 見る人は同意してから、**制限モード + GPU** で一時的に動かす(`network` / `storage.unsafe` / interstitial・system の FOW / `url.open` などは閉、`gpu.compute` は可、fuel は半分)。
-    - 入れ物は**子プラグインを持たない 1 つだけ**(`requires` も 2 つめのプラグインも不可)。スロットは `page` だけで、surface `swing` の solo。
+    - 入れ物は**子プラグインを持たない 1 つだけ**(`requires` も 2 つめのプラグインも不可 = 上の親子関係が無い)。スロットは `page` だけの solo
+      (v0.20: surface `swing` の宣言は要らない。共有セッションはストアの審査済みの版にしか作れないので、未審査の shared は配れない)。
 - 有料のプラグインでも、有効なセッションに入れる人は**購入せずにそのセッションの中でだけ**使える(ホストは `?session=<id>` 付きで
   マニフェストと配布物を取る。Central の S-048)。
 
 **ホスト → プラグイン(`call`)** — args はすべて**平ら**(`page.event` の中身も `{token, type, ...}` の一段):
 
 - `page.open {token, surface: "page"|"astell"|"profile"|"swing", context: {roomId?, profileHandle?, profileAccountId?, swingId?, data?, author?}, me: {accountId, handle, displayName}, session?: Session, size: {width, height}}`
+  (v0.20: surface `swing` でも shared なら `session` が載る。scope は `swing:<swingId>` か、作った人が付けた `link:` / `profile:`)
   → 戻り **`{root: Node, title?: string}`**(ページの RRL。表示は全画面のページで、**ヘッダーと戻るはホスト**)。
   `session` は shared で、セッションに入っているときだけ載る(無い = 1 人で開いた。solo と同じに動けばよい):
   ```json
@@ -612,7 +624,8 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
 - 1 接続あたり **20 通/秒まで**(超えたぶんは `error`)。
 
 **セッション**(Central、rasq-central S-048 / [`../openapi/store.yaml`](../openapi/store.yaml) の `/custom/*`): scope は `room:<roomId>` /
-`profile:<accountId>` / `link:<sessionId>`。作るのはホスト(`POST /custom/sessions`)、中身の同期は WS `/custom/sessions/{id}/ws`
+`profile:<accountId>` / `link:<sessionId>` / `swing:<swingId>`(v0.20、S-079: Swing を作るときに Central が作り、その Swing を見られる人が入れる。
+Swing が消える / 取り下げられると閉じる)。作るのはホスト(`POST /custom/sessions`。`swing:` は `POST /swings` の `plugin.session`)、中身の同期は WS `/custom/sessions/{id}/ws`
 (`welcome` / `var` / `call` / `joined` / `left` / `conflict` / `error` / `closed`)。ホストは WS の通知を上の `page.event` に写す。
 プラグインは WS も Central も直接は見ない。
 

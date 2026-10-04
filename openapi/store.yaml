@@ -505,7 +505,7 @@ components:
         id: { type: string }
         pluginId: { type: string }
         version: { type: string, description: セッションを作ったときの版(参加者はこの版を使う) }
-        scope: { type: string, description: "room:<roomId> / profile:<accountId> / link:<sessionId>" }
+        scope: { type: string, description: "room:<roomId> / profile:<accountId> / link:<sessionId> / swing:<swingId>(v0.20、Central S-079: Swing を作るときに Central が作る。POST /custom/sessions では作れない)" }
         title: { type: string, description: manifest の page.title(無ければ name) }
         ownerAccountId: { type: string, format: uuid }
         ownerHandle: { type: string }

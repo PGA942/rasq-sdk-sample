@@ -234,6 +234,9 @@ mod tests {
         // astell は shared だけ
         let f = check_manifest(&v, &reg, &base(json!(["render"]), json!({"mode": "solo", "surfaces": ["astell"]})), Some("page"), None);
         assert!(!f.errors.is_empty());
+        // v0.20: swing は shared でも書ける(v0.19 の solo だけの決まりを外した)
+        let f = check_manifest(&v, &reg, &base(json!(["render", "shared.session"]), json!({"mode": "shared", "surfaces": ["page", "swing"]})), Some("page"), None);
+        assert!(f.errors.is_empty(), "{:?}", f.errors);
         // slots に page があれば page が要る
         let mut m = base(json!(["render"]), json!({"mode": "solo"}));
         m.as_object_mut().unwrap().remove("page");
