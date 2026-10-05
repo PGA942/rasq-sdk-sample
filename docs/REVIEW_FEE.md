@@ -1,7 +1,7 @@
 # 審査料の額の決め方(ピース数の計測方法 `xlmr-unigram-v1`)
 
 プラグインの掲載・新しい版の審査を申し込むときの**審査料**(規約案 C「プラグイン開発者の掲載・審査条件」第4条の2)は、
-申し込む版の**配布物(`.rasqpkg`)の中のファイルの内容**を、この文書の方法で数えた**ピース数**から、運営(ORGATE-Server)の式で決まる。
+申し込む版の**配布物(`.rspkg`)の中のファイルの内容**を、この文書の方法で数えた**ピース数**から、運営(ORGATE-Server)の式で決まる。
 配布物のバイト数は目安にすぎない(同じ大きさでも、内容によってピース数 = 額は変わる)。
 
 開発者は **`rasq fee <配布物>`** で、Central が申込みのときに数えるのと**同じ数と額**を手元で出せる(§6)。
@@ -13,7 +13,7 @@ Rust に依らない参照実装は [`rust/rasq-review-pieces/tool/reference_pie
 
 ## 1. 数える対象
 
-1. 配布物 = `rasq build` が出す `.rasqpkg`(**zstd** で圧縮した **tar**。[cli.md §6](cli.md))。zstd を解いて tar として読む。
+1. 配布物 = `rasq build` が出す `.rspkg`(**zstd** で圧縮した **tar**。[cli.md §6](cli.md))。zstd を解いて tar として読む。
 2. tar の**通常ファイル**(typeflag が `0` または NUL)を**全部**、tar の順に数える。`bundle.json`・マニフェスト・wasm・アセット・
    モデル・`SHA512SUMS` など、名前や種類で除くものは無い。
 3. 数えないもの: tar の見出し(512 バイトのヘッダ、GNU の長い名前 `L`/`K`、pax の `x`/`g`)・ディレクトリ・シンボリックリンク・
@@ -103,7 +103,7 @@ rounded = round(raw ÷ roundToJpy) × roundToJpy                   … round は
 | 欄 | 中身 |
 |---|---|
 | `feePieces` | ピース数(この文書の方法) |
-| `packageBytes` / `unpackedBytes` | `.rasqpkg` のバイト数 / 数えたファイルの合計のバイト数 |
+| `packageBytes` / `unpackedBytes` | `.rspkg` のバイト数 / 数えたファイルの合計のバイト数 |
 | `amountJpy` | 額(税込) |
 | `feeFormula` | そのときの式の文(例 `max(150, 10 円単位に四捨五入(100 × (ピース数 ÷ 1,876,000) ^ 1.21))`) |
 | `feeBasis` | `{baseJpy, divisorPieces, exponent, minimumJpy, roundToJpy, pieceMethod: "xlmr-unigram-v1", vocabSha256: "c1da55…"}` |
@@ -113,14 +113,14 @@ rounded = round(raw ÷ roundToJpy) × roundToJpy                   … round は
 ## 6. 手元で数える(`rasq fee`)
 
 ```sh
-rasq fee dist/net.example.hello-1.0.0.rasqpkg          # ファイルごとのピース数・合計・既定の式の額
-rasq fee dist/                                          # dist/ の .rasqpkg 全部
+rasq fee dist/net.example.hello-1.0.0.rspkg          # ファイルごとのピース数・合計・既定の式の額
+rasq fee dist/                                          # dist/ の .rspkg / .rasqpkg 全部
 rasq fee extracted/                                     # 展開した中身のディレクトリ(rasq inspect --extract の出力など)
-rasq fee dist/x.rasqpkg --orgate https://orgate.example  # そのサーバーの式の定数(公開の payments/config)で額を出す
-rasq fee dist/x.rasqpkg --json                          # {path, method, packageBytes, unpackedBytes, pieces, amountJpy, basis, files[]}
+rasq fee dist/x.rspkg --orgate https://orgate.example  # そのサーバーの式の定数(公開の payments/config)で額を出す
+rasq fee dist/x.rspkg --json                          # {path, method, packageBytes, unpackedBytes, pieces, amountJpy, basis, files[]}
 ```
 
-ネットは使わない(`--orgate` のときだけ ORGATE の公開の設定を読む)。ディレクトリは、中に `.rasqpkg` があればそれぞれを、
+ネットは使わない(`--orgate` のときだけ ORGATE の公開の設定を読む)。ディレクトリは、中に `.rspkg` があればそれぞれを、
 無ければ中の通常ファイル(再帰、シンボリックリンクはたどらない)を数える。同じファイルなら配布物と同じ数になる。
 
 ## 7. 確かめ方(期待値)

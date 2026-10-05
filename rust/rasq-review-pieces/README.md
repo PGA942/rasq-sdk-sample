@@ -2,7 +2,7 @@
 
 審査料のピース数(計測方法 `xlmr-unigram-v1`)。仕様は [docs/REVIEW_FEE.md](../../docs/REVIEW_FEE.md)。
 
-- `count_package(&[u8])` … `.rasqpkg` の中の通常ファイルを、流しながら数える(Central が申込みのときに使う。上限は `Limits::DEFAULT`、作業メモリは一定)。
+- `count_package(&[u8])` … 配布物(`.rspkg` / 旧来の `.rasqpkg`)の中の通常ファイルを、流しながら数える(Central が申込みのときに使う。上限は `Limits::DEFAULT`、作業メモリは一定)。
 - `PieceCounter::embedded().count_bytes(&[u8])` … バイト列 1 つ。
 - `PieceCounter::embedded().stream()` … 塊ごとに `feed` して `finish`(`PieceStream`。区切り方によらず `count_bytes` と同じ数)。
 - `fee::FeeBasis::default().amount_jpy(pieces)` … 額の式の写し(正は ORGATE-Server `src/payments/fee.rs`)。

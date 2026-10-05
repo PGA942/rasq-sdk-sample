@@ -115,7 +115,7 @@ pub struct Base {
     pub id: String,
     pub version: String,
     pub source: String,
-    /// true なら子を同梱して 1 つの .rasqpkg にする(D-244c)。
+    /// true なら子を同梱して 1 つの配布物(.rspkg)にする(D-244c)。
     #[serde(default)]
     pub owned: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

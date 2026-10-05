@@ -45,16 +45,16 @@ rasq-client(Flutter)を起動し、カタログ → **「WASMプラグイン試�
 misskey-wasm-sample は同梱アセットとして最初から読み込まれており、
 `TL取得` で実際の Misskey local TL(net.fetch 経由)を RRL で描画する
 (アプリに同梱しているアセットはアプリと同じ信頼で**フル**なので、そのまま動く。自分で作ったものをネットワーク込みで試すときは、
-下の**制限モード**を避けるために自分の鍵で署名した `.rasqpkg` を入れる)。
+下の**制限モード**を避けるために自分の鍵で署名した `.rspkg` を入れる)。
 
 ### サイドロードの 2 つのモード(全機能モード / 制限モード)
 
 試験画面から入れたもの(サイドロード)は、**署名で動き方が変わる**(正典は [PROTOCOL §6.1](../PROTOCOL.md))。
 
-- **全機能モード**: 自分の開発者鍵で署名した `.rasqpkg`。宣言した権限どおりに全部試せる。
+- **全機能モード**: 自分の開発者鍵で署名した `.rspkg`。宣言した権限どおりに全部試せる。
   1. `rasq key init`(1 度だけ。`~/.config/rasq/dev-key.toml` に鍵を作る)→ `rasq key show` で指紋を見る
   2. Web コンソールの `/console/keys` で、その鍵を自分の RASQ アカウントに登録する
-  3. `rasq build` → `dist/<id>-<version>.rasqpkg`(+ `.sig.json`)を、同じ RASQ アカウントでログインした rasq-client の試験画面から入れる
+  3. `rasq build` → `dist/<id>-<version>.rspkg`(+ `.sig.json`)を、同じ RASQ アカウントでログインした rasq-client の試験画面から入れる
 - **制限モード**: それ以外 — 署名の無いもの、ほかの人の鍵のもの、`rasq dev` の**生の `.wasm`**(上の「パスからインポート」)、あとから入れた `asset:`。
   アプリに同梱しているアセットは例外でフル。
   `net.fetch` / `gpu.compute` / `storage.unsafe` は `network` などを宣言していても `E01`、FOW は `fow.widget` だけ、

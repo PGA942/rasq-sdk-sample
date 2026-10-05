@@ -67,15 +67,20 @@ rust:
     - $RASQ token remove other:example.test:ci
     - $RASQ key init && $RASQ key show
     - $RASQ build --raw --no-build
+    - $RASQ inspect dist/ci.test.sns-0.1.0.rspkg
+    - $RASQ inspect dist/ci.test.stickers-0.1.0.rspkg | tee /tmp/pack.out && grep -q '(assets)' /tmp/pack.out
+    - $RASQ inspect dist/ci.test.starry-0.1.0.rspkg | tee /tmp/theme.out && grep -q '(theme)' /tmp/theme.out
+    # 旧来の拡張子(--ext rasqpkg): 中身は同じで名前だけ。読むほう(inspect / fee)はどちらも受け付ける
+    - $RASQ build --no-build --ext rasqpkg
+    - test -f dist/ci.test.sns-0.1.0.rasqpkg && test -f dist/ci.test.sns-0.1.0.rasqpkg.sig.json
     - $RASQ inspect dist/ci.test.sns-0.1.0.rasqpkg
-    - $RASQ inspect dist/ci.test.stickers-0.1.0.rasqpkg | tee /tmp/pack.out && grep -q '(assets)' /tmp/pack.out
-    - $RASQ inspect dist/ci.test.starry-0.1.0.rasqpkg | tee /tmp/theme.out && grep -q '(theme)' /tmp/theme.out
-    # 他人の土台として読み込み、子ごとの .rasqpkg(requires 付き)を出す
+    - $RASQ fee dist/
+    # 他人の土台として読み込み、子ごとの .rspkg(requires 付き)を出す
     - rm -rf /tmp/rasq-e2e-third && mkdir -p /tmp/rasq-e2e-third && cd /tmp/rasq-e2e-third
-    - $RASQ init --base /tmp/rasq-e2e/dist/ci.test.sns-0.1.0.rasqpkg --namespace ci.third
+    - $RASQ init --base /tmp/rasq-e2e/dist/ci.test.sns-0.1.0.rspkg --namespace ci.third
     - $RASQ new post.share tpl
     - $RASQ build
-    - $RASQ inspect dist/ci.third.tpl-0.1.0.rasqpkg
+    - $RASQ inspect dist/ci.third.tpl-0.1.0.rspkg
     - $RASQ publish --central http://central.invalid:8080 --dry-run --no-build
     - test -f dist/publish/ci.third.tpl-0.1.0/04-upload-bundle.bin && test -f dist/publish/ci.third.tpl-0.1.0/03-publish-version.json
   rules:

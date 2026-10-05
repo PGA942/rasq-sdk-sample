@@ -1,4 +1,4 @@
-//! `.rasqpkg`(docs/cli.md §6、D-034 / D-244d): zstd 圧縮 tar。先頭が `bundle.json`(`rasq.bundle/1`、schema/bundle.schema.json)、
+//! 配布物 `.rspkg`(旧 `.rasqpkg`。docs/cli.md §6、D-034 / D-244d): zstd 圧縮 tar。先頭が `bundle.json`(`rasq.bundle/1`、schema/bundle.schema.json)、
 //! 最後が `SHA512SUMS`。中のパスは bundle.schema.json の `path` の文法(`..` / 先頭 `/` 不可)。
 
 use crate::workspace::{Target, Workspace};
@@ -9,6 +9,23 @@ use sha2::{Digest, Sha512};
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
+
+/// 配布物の拡張子。既定は `.rspkg`。`--ext rasqpkg` で旧来の `.rasqpkg` で出す(中身は同じ。署名は `<pkg>.sig.json`)。
+pub const EXT: &str = "rspkg";
+/// 旧来の拡張子。読むほう(inspect / fee / submit / publish / init --base)はどちらも受け付ける。
+pub const LEGACY_EXT: &str = "rasqpkg";
+/// 受け付ける拡張子(先が既定)。
+pub const EXTS: [&str; 2] = [EXT, LEGACY_EXT];
+
+/// 拡張子が `.rspkg` か `.rasqpkg`。
+pub fn is_package(p: &Path) -> bool {
+    p.extension().and_then(|x| x.to_str()).is_some_and(|x| EXTS.contains(&x))
+}
+
+/// ファイル名から配布物の拡張子を外す(`x-1.0.0.rspkg` / `x-1.0.0.rasqpkg` → `x-1.0.0`)。
+pub fn strip_ext(name: &str) -> &str {
+    EXTS.iter().find_map(|e| name.strip_suffix(e).and_then(|s| s.strip_suffix('.'))).unwrap_or(name)
+}
 
 pub const BUNDLE: &str = "bundle.json";
 pub const SUMS: &str = "SHA512SUMS";
@@ -22,8 +39,8 @@ pub struct Entry {
 
 /// 組み立て前の配布物 1 つ。
 pub struct Package {
-    /// `<root.id>-<version>.rasqpkg`
-    pub file_name: String,
+    /// `<root.id>-<version>`(ファイル名は [`Package::file_name`] で拡張子を付ける)
+    pub stem: String,
     pub bundle: Value,
     /// bundle.json / SHA512SUMS 以外。
     pub entries: Vec<Entry>,
@@ -246,8 +263,15 @@ pub fn assemble_with(root_json: Value, children: Vec<Value>, libs: Vec<Value>, a
     if !errs.is_empty() {
         bail!("bundle.json が bundle.schema.json に合いません:\n  {}", errs.join("\n  "));
     }
-    let file_name = format!("{}-{}.rasqpkg", bundle["root"]["id"].as_str().unwrap(), bundle["root"]["version"].as_str().unwrap());
-    Ok(Package { file_name, bundle, entries })
+    let stem = format!("{}-{}", bundle["root"]["id"].as_str().unwrap(), bundle["root"]["version"].as_str().unwrap());
+    Ok(Package { stem, bundle, entries })
+}
+
+impl Package {
+    /// `<root.id>-<version>.<ext>`(`ext` は [`EXTS`] のどれか)。
+    pub fn file_name(&self, ext: &str) -> String {
+        format!("{}.{ext}", self.stem)
+    }
 }
 
 /// tar + zstd に固める。順序: bundle.json → entries → SHA512SUMS。
@@ -282,7 +306,7 @@ pub fn serialize(p: &Package) -> Result<Vec<u8>> {
     Ok(enc.finish()?)
 }
 
-/// 展開の上限(zstd 爆弾の対策)。`.rasqpkg` は他人の配布物で、`inspect` / `init --base` は中身を全部メモリに読む。
+/// 展開の上限(zstd 爆弾の対策)。配布物(`.rspkg` / `.rasqpkg`)は他人のもので、`inspect` / `init --base` は中身を全部メモリに読む。
 /// 圧縮率に上限は無い(0 が続くだけの 1 GiB は数十 KiB に縮む)ので、展開した量で切る。
 /// モデル本体(onnx / gguf、lazy = false)を同梱できるので 1 ファイルは大きめに取ってある。
 #[derive(Clone, Copy)]
@@ -335,18 +359,18 @@ impl<R: Read> Read for Capped<R> {
     }
 }
 
-/// `.rasqpkg` を全部読む(bundle.json / SHA512SUMS も含む)。上限は [`ExtractLimits::DEFAULT`]。
+/// 配布物(`.rspkg` / `.rasqpkg`)を全部読む(bundle.json / SHA512SUMS も含む)。上限は [`ExtractLimits::DEFAULT`]。
 pub fn extract(bytes: &[u8]) -> Result<Vec<Entry>> {
     extract_with(bytes, &ExtractLimits::DEFAULT)
 }
 
 pub fn extract_with(bytes: &[u8], limits: &ExtractLimits) -> Result<Vec<Entry>> {
-    let dec = zstd::Decoder::new(bytes).context("zstd として読めません(.rasqpkg ではない?)")?;
+    let dec = zstd::Decoder::new(bytes).context("zstd として読めません(.rspkg / .rasqpkg ではない?)")?;
     let mut ar = tar::Archive::new(Capped { inner: dec, left: limits.stream_bytes });
     let mut out = Vec::new();
     let mut total: u64 = 0;
     for e in ar.entries().context("tar として読めません")? {
-        let mut e = e.context("zstd + tar として読めません(.rasqpkg ではない? 展開後の大きさが上限を超えた?)")?;
+        let mut e = e.context("zstd + tar として読めません(.rspkg / .rasqpkg ではない? 展開後の大きさが上限を超えた?)")?;
         let path = e.path()?.to_string_lossy().into_owned();
         check_path(&path)?;
         if out.len() >= limits.entries {
@@ -468,9 +492,9 @@ pub fn inspect(bytes: &[u8]) -> Result<Inspected> {
 }
 
 /// 進捗表示用。
-pub fn describe(p: &Package) -> String {
+pub fn describe(p: &Package, ext: &str) -> String {
     let b = &p.bundle;
-    let mut s = format!("{} (root {} {} {})", p.file_name, b["root"]["kind"].as_str().unwrap_or(""), b["root"]["id"].as_str().unwrap_or(""), b["root"]["version"].as_str().unwrap_or(""));
+    let mut s = format!("{} (root {} {} {})", p.file_name(ext), b["root"]["kind"].as_str().unwrap_or(""), b["root"]["id"].as_str().unwrap_or(""), b["root"]["version"].as_str().unwrap_or(""));
     let n = |k: &str| b[k].as_array().map(|a| a.len()).unwrap_or(0);
     let _ = write!(s, "  children {}  libs {}  assets {}  models {}", n("children"), n("libs"), n("assets"), n("models"));
     if let Some(r) = b["root"]["requires"].as_array() {
@@ -498,6 +522,17 @@ mod tests {
     }
 
     const SMALL: ExtractLimits = ExtractLimits { total_bytes: 4096, entry_bytes: 2048, entries: 4, stream_bytes: 64 * 1024 };
+
+    #[test]
+    fn both_extensions_are_packages() {
+        assert!(is_package(Path::new("dist/a.b-1.0.0.rspkg")));
+        assert!(is_package(Path::new("dist/a.b-1.0.0.rasqpkg")));
+        assert!(!is_package(Path::new("dist/a.b-1.0.0.rspkg.sig.json")));
+        assert!(!is_package(Path::new("dist/a.b-1.0.0.source.tar.zst")));
+        assert_eq!(strip_ext("a.b-1.0.0.rspkg"), "a.b-1.0.0");
+        assert_eq!(strip_ext("a.b-1.0.0.rasqpkg"), "a.b-1.0.0");
+        assert_eq!(strip_ext("a.b-1.0.0.wasm"), "a.b-1.0.0.wasm");
+    }
 
     #[test]
     fn extract_within_the_limits() {

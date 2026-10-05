@@ -18,6 +18,6 @@ wasm を持たない配布物(`kind: "theme"`、スロット契約 v0.16 §2.12)
 - 画像は PNG / JPEG / WebP / GIF、1 枚 2 MiB まで、合計 16 MiB・256 枚まで
 - `rasq check` がスキーマ / 形式(マジックナンバー)/ 大きさ / 書き忘れ / 参照先(`layers[].asset` と `asset:<id>` が
   `assets` に `use: "theme"` であること)を見る
-- `rasq build` で `dist/{{id}}-<version>.rasqpkg`(このパックだけの配布物)、`rasq publish` でストアへ(カテゴリ `theme`)
+- `rasq build` で `dist/{{id}}-<version>.rspkg`(このパックだけの配布物)、`rasq publish` でストアへ(カテゴリ `theme`)
 
 `slots` / `permissions` / `actions` / `roles` は書けない。土台(SNS プラグイン)にも依らない。

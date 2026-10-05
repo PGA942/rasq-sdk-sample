@@ -182,7 +182,7 @@ external ffi.Pointer<ffi.Char> rasq_wasm_call(
 @ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Char>)>()
 external void rasq_wasm_free_string(ffi.Pointer<ffi.Char> s);
 
-/// Decompresses a zstd frame (.rasqpkg = zstd-compressed tar, D-034). Returns a
+/// Decompresses a zstd frame (.rspkg = zstd-compressed tar, D-034). Returns a
 /// buffer owned by the caller (free with rasq_bytes_free(ptr, *out_len)), or
 /// NULL on failure: corrupt input, or an output larger than `max_out` bytes
 /// (decompression-bomb guard). `*out_len` is set on success.

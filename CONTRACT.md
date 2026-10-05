@@ -162,7 +162,7 @@ PostTile スロット×権限(原典一致): avatar=`decorate_avatar`(審査済�
 
 `gpu.compute`(D-081)はランタイムの中で wgpu に短絡され host_fn の権限検査を通らないので、**ランタイムの門は既定で閉**(`E01` permission denied)。ホストはインスタンスごとに `RasqWasmPlugin.fromBytes(gpuCompute: env.gpuComputeEnabled)` で開ける(D-306): `gpuComputeEnabled` = 審査済み(ストアの `store:` 登録 / SNS プラグインは `verified`)または**自分の署名のサイドロード**(`SideloadTrust.full`)**かつ** `gpu_ml` の宣言。
 
-**サイドロードの段 (D-306、ユーザー決定 2026-09-24)**: サイドロードは**自分の署名がある場合だけフル機能**、それ以外は**制限モード**。自分の署名 = `.rasqpkg` の隣の `<pkg>.sig.json`(`rasq build` の出力)が配布物と合い、鍵の指紋がこのアカウントが Central に登録した開発者鍵(`GET /me/dev-keys`)のどれかと同じこと。署名なし / 他人の鍵 / 素の `.wasm` は制限モード。アプリに同梱しているアセット(`asset:`、中身が同梱のものと同じ)はアプリと同じ信頼でフル。見守られている子の端末 (D-307) は開発者鍵が無いものとして扱う(= サイドロードは全部制限モード)。
+**サイドロードの段 (D-306、ユーザー決定 2026-09-24)**: サイドロードは**自分の署名がある場合だけフル機能**、それ以外は**制限モード**。自分の署名 = `.rspkg`(旧来の拡張子 `.rasqpkg` も同じ形式)の隣の `<pkg>.sig.json`(`rasq build` の出力)が配布物と合い、鍵の指紋がこのアカウントが Central に登録した開発者鍵(`GET /me/dev-keys`)のどれかと同じこと。署名なし / 他人の鍵 / 素の `.wasm` は制限モード。アプリに同梱しているアセット(`asset:`、中身が同梱のものと同じ)はアプリと同じ信頼でフル。見守られている子の端末 (D-307) は開発者鍵が無いものとして扱う(= サイドロードは全部制限モード)。
 
 **制限モード (D-308)**: 表は `sideload_trust.dart` の `sideloadCapabilityTable` の 1 か所。マニフェストの宣言を**さらに絞る**だけで、宣言に無いものを足すことはない。
 
@@ -177,7 +177,7 @@ PostTile スロット×権限(原典一致): avatar=`decorate_avatar`(審査済�
 | `auto`(temp) | 審査済みだけ読む | 読まない(もとから) |
 | `replace_tile` / `transform_content` / `post.transform` | 宣言どおり | 宣言どおり(描画だけ) |
 
-dev の wasm 試験画面は、**debug ビルドだけ**全権限(「デバッグビルド: 全権限」)。release では読み込んだものに同じ段を当てる(署名した `.rasqpkg` = フル、素の `.wasm` = 制限)。Web 版の Worker にも同じ門が効く(fuel は Web には無い)。
+dev の wasm 試験画面は、**debug ビルドだけ**全権限(「デバッグビルド: 全権限」)。release では読み込んだものに同じ段を当てる(署名した `.rspkg` = フル、素の `.wasm` = 制限)。Web 版の Worker にも同じ門が効く(fuel は Web には無い)。
 
 Web 版はまだ `gpu.compute` を持たず常に `E01`(→ `ml.infer` へ縮退)。引数の上限と 10 秒の壁時計は rasq-sdk-sample `docs/host-functions.md`。
 

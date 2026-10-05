@@ -122,7 +122,7 @@ FFI_PLUGIN_EXPORT char *rasq_wasm_call(RasqWasmInstance *instance, const char *f
 // Frees a string returned by rasq_wasm_snapshot/rasq_wasm_patch/rasq_wasm_call.
 FFI_PLUGIN_EXPORT void rasq_wasm_free_string(char *s);
 
-// Decompresses a zstd frame (.rasqpkg = zstd-compressed tar, D-034). Returns a
+// Decompresses a zstd frame (.rspkg = zstd-compressed tar, D-034). Returns a
 // buffer owned by the caller (free with rasq_bytes_free(ptr, *out_len)), or
 // NULL on failure: corrupt input, or an output larger than `max_out` bytes
 // (decompression-bomb guard). `*out_len` is set on success.

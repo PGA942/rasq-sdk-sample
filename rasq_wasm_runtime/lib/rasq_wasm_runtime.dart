@@ -223,7 +223,7 @@ class RasqZstdException implements Exception {
   String toString() => 'RasqZstdException: $message';
 }
 
-/// `.rasqpkg`(zstd 圧縮 tar、D-034)の展開に使う zstd の復号。ランタイム内蔵の純 Rust 実装(ruzstd)なので
+/// `.rspkg`(zstd 圧縮 tar、D-034)の展開に使う zstd の復号。ランタイム内蔵の純 Rust 実装(ruzstd)なので
 /// 全プラットフォームで同じ。[maxOutput] を超える出力は失敗にする(展開爆弾の対策。既定 256 MiB)。
 Uint8List rasqZstdDecompress(Uint8List input, {int maxOutput = 256 * 1024 * 1024}) {
   if (input.isEmpty) throw const RasqZstdException('empty input');

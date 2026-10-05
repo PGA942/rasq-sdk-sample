@@ -3,7 +3,7 @@
 //! 1. `GET  /api/v1/plugins/{id}/manifest`(公開中の版。無ければ新規)→ `permissionsAdded` の差分
 //! 2. `PUT  /api/v1/admin/plugins/{id}`(掲載、`--skip-listing` で省略)
 //! 3. `POST /api/v1/admin/plugins/{id}/versions`(版 + マニフェスト)
-//! 4. `PUT  /api/v1/admin/plugins/{id}/versions/{v}/artifacts/bundle?kind=bundle`(.rasqpkg。応答の sha512 を照合)
+//! 4. `PUT  /api/v1/admin/plugins/{id}/versions/{v}/artifacts/bundle?kind=bundle`(.rspkg / 旧来の .rasqpkg。応答の sha512 を照合)
 //! 5. lazy モデルごとに `PUT …/artifacts/{artifactId}?kind=model&lazy=true`
 //! 6. `--with-source` なら `PUT …/artifacts/source?kind=source`(審査用のソース。配布されない)
 //!
@@ -203,7 +203,7 @@ pub fn run(root: &Path, ws: &Workspace, packages: &[(String, Value)], opts: &Opt
         };
         println!("{file_name} → {base} ({id} {version}, channel {})", opts.channel);
         if let Some(d) = &top_dry {
-            let sub = d.join(file_name.trim_end_matches(".rasqpkg"));
+            let sub = d.join(crate::pkg::strip_ext(file_name));
             std::fs::create_dir_all(&sub)?;
             c.dry_dir = Some(sub);
             c.seq = 0;

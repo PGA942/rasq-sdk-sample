@@ -4,7 +4,7 @@
 - 各 JSON Schema 自体が draft 2020-12 として正しいこと
 - examples/manifests/*.json と examples/misskey.function.json → manifest.schema.json
 - examples/*.rrl.json → rrl-node.schema.json、examples/*.rsl.json → rsl-span.schema.json、examples/*.model.json → model-manifest.schema.json
-- examples/*.bundle.json → bundle.schema.json(.rasqpkg の目次、D-244)。子の id は root.id + '.' で始まり、root の kind が sns でなければ children は空
+- examples/*.bundle.json → bundle.schema.json(.rspkg の目次、D-244)。子の id は root.id + '.' で始まり、root の kind が sns でなければ children は空
 - schema/slots.json → slot-registry.schema.json
 - 突き合わせ: マニフェストの slots は登録簿にあること(planned は警告)、kind がそのスロットで許されること、
   必要権限を持つこと、登録簿の hostFns は host-fn.schema.json の $defs.fns と boundary の hostFnName にあること
@@ -181,7 +181,7 @@ def main() -> int:
             name = "boundary.schema.json" if isinstance(doc, dict) and doc.get("schema") == "rasq.boundary/1" else schema_name
             validate(rep, reg, name, doc, os.path.relpath(path, ROOT))
 
-    # 4b. 配布物の目次(.rasqpkg の bundle.json、docs/cli.md §6)
+    # 4b. 配布物の目次(.rspkg の bundle.json、docs/cli.md §6)
     for path in sorted(glob.glob(os.path.join(EXAMPLES, "*.bundle.json"))):
         label = os.path.relpath(path, ROOT)
         b = load(path)

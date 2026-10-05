@@ -42,7 +42,7 @@ enum Cmd {
         /// 自分で SNS プラグインを作る(id を指定。土台は読まない)
         #[arg(long, value_name = "ID")]
         sns: Option<String>,
-        /// 土台の SNS プラグイン(.rasqpkg、または manifest.json と .wasm があるディレクトリ)
+        /// 土台の SNS プラグイン(.rspkg / .rasqpkg、または manifest.json と .wasm があるディレクトリ)
         #[arg(long, value_name = "PKG|DIR")]
         base: Option<PathBuf>,
         /// 土台が自分のもの(子を同梱する、D-244c)
@@ -96,7 +96,7 @@ enum Cmd {
         #[arg(long)]
         full: bool,
     },
-    /// デプロイ向けビルド: dist/<id>-<version>.rasqpkg(+ 開発者署名 .sig.json)。--raw なら生の .wasm も
+    /// デプロイ向けビルド: dist/<id>-<version>.rspkg(+ 開発者署名 .sig.json)。--raw なら生の .wasm も
     Build {
         /// 生の .wasm も dist/ に出す(今のホストのパス読み込み / ストアの生 wasm 配布(D-168)向け)
         #[arg(long)]
@@ -109,6 +109,9 @@ enum Cmd {
         /// 審査用のソース dist/<id>-<version>.source.tar.zst も出す(配布はされず、審査だけが読む)
         #[arg(long)]
         with_source: bool,
+        /// 配布物の拡張子(rasqpkg = 旧来の名前。中身は同じ)
+        #[arg(long, default_value = pkg::EXT, value_parser = pkg::EXTS)]
+        ext: String,
     },
     /// 開発者鍵(ed25519)。サイドロード用の署名に使う。ストア署名は Central 側
     Key {
@@ -134,7 +137,7 @@ enum Cmd {
         /// そのチャンネルの現在版にしない
         #[arg(long)]
         no_make_current: bool,
-        /// dist/ を作り直さない(既にある .rasqpkg を送る)
+        /// dist/ を作り直さない(既にある .rspkg / .rasqpkg を送る)
         #[arg(long)]
         no_build: bool,
         /// トークンを読む環境変数(無ければ credentials.toml の [central."<host>"])
@@ -143,10 +146,13 @@ enum Cmd {
         /// 審査用のソースも送る(kind = source。審査から求められたら必須)
         #[arg(long)]
         with_source: bool,
+        /// 作る配布物の拡張子(rasqpkg = 旧来の名前)。--no-build ならこの拡張子を先に探し、無ければもう一方
+        #[arg(long, default_value = pkg::EXT, value_parser = pkg::EXTS)]
+        ext: String,
     },
     /// 審査料のピース数と額を、Central と同じ方法(xlmr-unigram-v1、docs/REVIEW_FEE.md)で数える。ネットは使わない
     Fee {
-        /// .rasqpkg、.rasqpkg のあるディレクトリ(dist/ など)、または展開した中身のディレクトリ
+        /// .rspkg / .rasqpkg、それがあるディレクトリ(dist/ など)、または展開した中身のディレクトリ
         #[arg(required = true)]
         paths: Vec<PathBuf>,
         /// JSON で出す
@@ -161,7 +167,7 @@ enum Cmd {
     },
     /// 開発者の API で版を審査に出す(= 審査の申込み。POST /api/v1/dev/plugins/publish)。トークンは Web コンソールの「CLI 用のトークン」
     Submit {
-        /// 出す .rasqpkg(既定: dist/ にある 1 つ。<pkg>.sig.json があれば署名も送る)
+        /// 出す .rspkg / .rasqpkg(既定: dist/ にある 1 つ。<pkg>.sig.json があれば署名も送る)
         pkg: Option<PathBuf>,
         /// Central の URL
         #[arg(long)]
@@ -187,7 +193,7 @@ enum Cmd {
         #[arg(long, default_value = "RASQ_DEV_TOKEN", value_name = "VAR")]
         token_env: String,
     },
-    /// .rasqpkg の中身を目次(bundle.json)と突き合わせ、.sig.json があれば署名も確かめる
+    /// .rspkg / .rasqpkg の中身を目次(bundle.json)と突き合わせ、.sig.json があれば署名も確かめる
     Inspect {
         pkg: PathBuf,
         /// 中身をこのディレクトリに展開する
@@ -303,13 +309,15 @@ fn run() -> Result<()> {
             cargo(&root, &["test"])
         }
         Cmd::Call { name, r#fn, args, reply, then, full } => call_cmd(&name, &r#fn, &args, &reply, &then, full),
-        Cmd::Build { raw, no_build, no_sign, with_source } => build(raw, no_build, no_sign, with_source),
+        Cmd::Build { raw, no_build, no_sign, with_source, ext } => build(raw, no_build, no_sign, with_source, &ext),
         Cmd::Key { cmd } => key_cmd(cmd),
         Cmd::Inspect { pkg, extract } => inspect(&pkg, extract.as_deref()),
         Cmd::Fee { paths, json, files, orgate } => review::fee_cmd(&paths, json, files, orgate.as_deref()),
         Cmd::Submit { pkg, central, channel, notes_file, resubmission_of, token_env } => review::submit_cmd(&central, pkg, &channel, notes_file, resubmission_of, &token_env),
         Cmd::Submissions { central, json, token_env } => review::submissions_cmd(&central, &token_env, json),
-        Cmd::Publish { central, channel, notes_file, dry_run, skip_listing, no_make_current, no_build, token_env, with_source } => publish_cmd(central, channel, notes_file, dry_run, skip_listing, !no_make_current, no_build, &token_env, with_source),
+        Cmd::Publish { central, channel, notes_file, dry_run, skip_listing, no_make_current, no_build, token_env, with_source, ext } => {
+            publish_cmd(central, channel, notes_file, dry_run, skip_listing, !no_make_current, no_build, &token_env, with_source, &ext)
+        }
         Cmd::Help { query, count, full, central, plugin } => help::run(&query, count, full, central.as_deref(), plugin.as_deref()),
         Cmd::Registry { what } => registry(what),
         Cmd::Token { cmd } => token(cmd),
@@ -354,7 +362,7 @@ fn init(dir: PathBuf, sns: Option<String>, base: Option<PathBuf>, owned: bool, n
     Ok(())
 }
 
-/// 土台を base/ に写す(kind = sns だけ): `.rasqpkg` なら展開、ディレクトリなら `manifest.json` + `*.wasm`。
+/// 土台を base/ に写す(kind = sns だけ): 配布物(`.rspkg` / `.rasqpkg`)なら展開、ディレクトリなら `manifest.json` + `*.wasm`。
 fn load_base(src: &Path, dest: &Path) -> Result<Base> {
     if src.is_file() {
         let bytes = std::fs::read(src).with_context(|| format!("{} を読めません", src.display()))?;
@@ -733,13 +741,14 @@ fn report(label: &str, errs: &[String], warns: &[String]) {
     }
 }
 
-fn build(raw: bool, no_build: bool, no_sign: bool, with_source: bool) -> Result<()> {
+fn build(raw: bool, no_build: bool, no_sign: bool, with_source: bool, ext: &str) -> Result<()> {
     let (root, ws) = Workspace::find()?;
-    build_in(&root, &ws, raw, no_build, no_sign, with_source).map(|_| ())
+    build_in(&root, &ws, raw, no_build, no_sign, with_source, ext).map(|_| ())
 }
 
-/// dist/ を作る。戻りは (ファイル名, bundle.json)。
-fn build_in(root: &Path, ws: &Workspace, raw: bool, no_build: bool, no_sign: bool, with_source: bool) -> Result<Vec<(String, Value)>> {
+/// dist/ を作る。戻りは (ファイル名, bundle.json)。`ext` は配布物の拡張子(`rspkg` / 旧来の `rasqpkg`。中身は同じ)。
+#[allow(clippy::too_many_arguments)]
+fn build_in(root: &Path, ws: &Workspace, raw: bool, no_build: bool, no_sign: bool, with_source: bool, ext: &str) -> Result<Vec<(String, Value)>> {
     let root = root.to_path_buf();
     let has_code = !ws.targets(&root).is_empty();
     if !has_code && ws.packs.is_empty() {
@@ -787,10 +796,11 @@ fn build_in(root: &Path, ws: &Workspace, raw: bool, no_build: bool, no_sign: boo
     }
     for p in planned {
         let bytes = pkg::serialize(&p)?;
-        let out = dist.join(&p.file_name);
+        let file_name = p.file_name(ext);
+        let out = dist.join(&file_name);
         std::fs::write(&out, &bytes)?;
         let digest: [u8; 64] = Sha512::digest(&bytes).into();
-        println!("{}", pkg::describe(&p));
+        println!("{}", pkg::describe(&p, ext));
         println!("  {}  {} bytes  sha512:{}", out.strip_prefix(&root).unwrap_or(&out).display(), bytes.len(), hex(&digest));
         if let Some(sk) = &signer {
             let sig = key::sign(sk, &digest);
@@ -805,18 +815,18 @@ fn build_in(root: &Path, ws: &Workspace, raw: bool, no_build: bool, no_sign: boo
             std::fs::write(&sp, &src)?;
             println!("  {}  {} bytes(審査用のソース。配布されない)", sp.strip_prefix(&root).unwrap_or(&sp).display(), src.len());
         }
-        built.push((p.file_name.clone(), p.bundle.clone()));
+        built.push((file_name, p.bundle.clone()));
     }
     if raw {
         println!("rasq-client: 「WASMプラグイン試験 (dev)」→ .wasm のパスからインポート に上の絶対パス({})を入れる", dist.display());
     } else {
-        println!("rasq-client: 「WASMプラグイン試験 (dev)」→ パスからインポート に dist/ の .rasqpkg を入れるか、rasq publish でストアへ");
+        println!("rasq-client: 「WASMプラグイン試験 (dev)」→ パスからインポート に dist/ の .{ext} を入れるか、rasq publish でストアへ");
     }
     Ok(built)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn publish_cmd(central: String, channel: String, notes_file: Option<PathBuf>, dry_run: bool, skip_listing: bool, make_current: bool, no_build: bool, token_env: &str, with_source: bool) -> Result<()> {
+fn publish_cmd(central: String, channel: String, notes_file: Option<PathBuf>, dry_run: bool, skip_listing: bool, make_current: bool, no_build: bool, token_env: &str, with_source: bool, ext: &str) -> Result<()> {
     let (root, ws) = Workspace::find()?;
     if !central.starts_with("http://") && !central.starts_with("https://") {
         bail!("--central は http(s):// で始まる URL です: {central}");
@@ -826,17 +836,19 @@ fn publish_cmd(central: String, channel: String, notes_file: Option<PathBuf>, dr
         None => String::new(),
     };
     let packages = if no_build {
-        // dist/ にあるものを plan の名前で拾う(build 済み前提)
+        // dist/ にあるものを plan の名前で拾う(build 済み前提)。--ext の拡張子を先に、無ければもう一方(旧来の .rasqpkg も読む)
         let dist = root.join("dist");
         let mut v = Vec::new();
         for p in pkg::plan(&root, &ws, "release")? {
-            let bytes = std::fs::read(dist.join(&p.file_name)).with_context(|| format!("dist/{} がありません(rasq build を先に)", p.file_name))?;
+            let exts = std::iter::once(ext).chain(pkg::EXTS.into_iter().filter(|e| *e != ext));
+            let file_name = exts.map(|e| p.file_name(e)).find(|f| dist.join(f).is_file()).ok_or_else(|| anyhow!("dist/{} がありません(rasq build を先に)", p.file_name(ext)))?;
+            let bytes = std::fs::read(dist.join(&file_name)).with_context(|| format!("dist/{file_name} を読めません"))?;
             let ins = pkg::inspect(&bytes)?;
-            v.push((p.file_name, ins.bundle));
+            v.push((file_name, ins.bundle));
         }
         v
     } else {
-        build_in(&root, &ws, false, false, false, with_source)?
+        build_in(&root, &ws, false, false, false, with_source, ext)?
     };
     let token = if dry_run {
         None

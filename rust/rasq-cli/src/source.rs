@@ -206,7 +206,7 @@ mod tests {
         std::fs::write(tmp.join("plugins/hello/src/lib.rs"), "fn main() {}\n").unwrap();
         std::fs::write(tmp.join("plugins/hello/.env"), "SECRET=1\n").unwrap(); // 隠しファイルは入らない
         std::fs::write(tmp.join("plugins/hello/target/wasm32/hello.wasm"), b"\0asm").unwrap(); // 生成物は入らない
-        std::fs::write(tmp.join("dist/x.rasqpkg"), b"zz").unwrap();
+        std::fs::write(tmp.join("dist/x.rspkg"), b"zz").unwrap();
         let ws: crate::workspace::Workspace = toml::from_str(&std::fs::read_to_string(tmp.join("rasq.toml")).unwrap()).unwrap();
         let bundle = json!({"root": {"id": "dev.test.hello", "version": "0.1.0", "wasm": {"path": "hello.wasm", "sha512": "ab"}}, "children": []});
         let bytes = archive(&tmp, &ws, &bundle).unwrap();

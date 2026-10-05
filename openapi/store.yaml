@@ -106,7 +106,7 @@ paths:
   /plugins/{pluginId}/artifacts/{artifactId}:
     get:
       operationId: downloadArtifact
-      summary: インストール関数のダウンロード実体(.rasqpkg = Zstd tar。SHA-512 + ed25519 署名は InstallManifest 側)
+      summary: インストール関数のダウンロード実体(.rspkg = Zstd tar。SHA-512 + ed25519 署名は InstallManifest 側)
       parameters:
         - { name: pluginId, in: path, required: true, schema: { type: string } }
         - { name: artifactId, in: path, required: true, schema: { type: string } }
@@ -462,7 +462,7 @@ components:
             required: [id, kind, sizeBytes, sha512, signature]
             properties:
               id: { type: string }
-              kind: { type: string, enum: [bundle, model, asset], description: bundle = .rasqpkg 本体、model = ML モデル実体(遅延DL可) }
+              kind: { type: string, enum: [bundle, model, asset], description: bundle = .rspkg 本体、model = ML モデル実体(遅延DL可) }
               sizeBytes: { type: integer }
               sha512: { type: string }
               signature: { type: string, description: ed25519(ストア鍵)。base64 }
