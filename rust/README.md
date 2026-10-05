@@ -40,7 +40,7 @@ wasm plugin sample and the native runtime that hosts it inside Flutter.
   `build --raw` / `registry` / `token` (access tokens in
   `~/.config/rasq/credentials.toml`, 0600, never on argv) / `dev [--watch]`
   (build → verify → absolute paths for rasq-client's dev screen +
-  `.rasq/dev.json`) / `build` (`.rasqpkg` = zstd tar with `bundle.json` first
+  `.rasq/dev.json`) / `build` (`.rspkg` = zstd tar with `bundle.json` first
   and `SHA512SUMS` last, D-034) / `key init|show` (developer ed25519 key,
   signs the package's SHA-512 digest like the host's `verifyArtifact`) /
   `inspect` (table of contents vs. contents, hashes, signature) / `publish`

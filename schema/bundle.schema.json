@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rasq.io/schema/bundle-0.1.json",
   "title": "RASQ package descriptor (bundle.json, rasq.bundle/1 — D-244)",
-  "description": ".rasqpkg(D-034: zstd 圧縮 tar)の先頭に置く目次。root(この配布物の主プラグイン)と、その配下にバンドルされる子プラグイン / wasm 化ライブラリ / アセット / モデルを列挙し、ホストはこれを見て wasm.call の親子関係(構成許可)と展開先を決める。ハッシュはすべて配布物内のファイルに対する SHA-512(hex)。CLI(docs/cli.md)が `rasq build` で生成し、手書きしない。",
+  "description": ".rspkg(旧来の拡張子 .rasqpkg も同じ形式。D-034: zstd 圧縮 tar)の先頭に置く目次。root(この配布物の主プラグイン)と、その配下にバンドルされる子プラグイン / wasm 化ライブラリ / アセット / モデルを列挙し、ホストはこれを見て wasm.call の親子関係(構成許可)と展開先を決める。ハッシュはすべて配布物内のファイルに対する SHA-512(hex)。CLI(docs/cli.md)が `rasq build` で生成し、手書きしない。",
   "type": "object",
   "required": ["schema", "root", "children", "libs", "assets", "models"],
   "allOf": [
@@ -110,7 +110,7 @@
     },
     "models": {
       "type": "array",
-      "description": "ML モデル。manifest は model-manifest.schema.json に合うファイルで、その artifacts.*.sha512 が実ファイルと一致すること(D-034)。lazy なら .rasqpkg には manifest だけ入れ、本体はストアの別 artifact(kind=model)",
+      "description": "ML モデル。manifest は model-manifest.schema.json に合うファイルで、その artifacts.*.sha512 が実ファイルと一致すること(D-034)。lazy なら .rspkg には manifest だけ入れ、本体はストアの別 artifact(kind=model)",
       "items": {
         "type": "object",
         "required": ["manifest", "lazy"],

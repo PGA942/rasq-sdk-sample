@@ -8,7 +8,7 @@ Rust に依らずに仕様を確かめるためのもので、遅い(1 MB に数
 
 - 語彙 = MiniLM(paraphrase-multilingual-MiniLM-L12-v2)のトークナイザー(XLM-R の SentencePiece Unigram、250,002 個)の
   `model.vocab`([piece, score] の並び)から、特別なトークン(`<s>` `<pad>` `</s>` `<unk>` `<mask>`)を除いたもの。
-- 配布物(.rasqpkg = zstd の tar)なら、中の通常ファイル(typeflag '0' / NUL)をそれぞれ数えて足す。tar の見出し・ディレクトリ・リンクは数えない。
+- 配布物(.rspkg / 旧来の .rasqpkg = zstd の tar)なら、中の通常ファイル(typeflag '0' / NUL)をそれぞれ数えて足す。tar の見出し・ディレクトリ・リンクは数えない。
 - バイト列は UTF-8 として読み(壊れたところは U+FFFD に置き換え)、Python の `str.split()` と同じ空白で語に分ける
   (正規化 = Precompiled はしない)。
 - 語 w ごとに '▁' + w を、ピースの score の和が最大になるように切る(Viterbi)。語彙に無い 1 文字は score −30 の 1 ピース。
@@ -16,7 +16,7 @@ Rust に依らずに仕様を確かめるためのもので、遅い(1 MB に数
 - ピースの数を足す。額 = max(150, round(100 × (ピース数 ÷ 1,876,000) ^ 1.21 ÷ 10) × 10)(0.5 は切り上げ)、上限 1,000,000。
 
 使い方:
-    reference_pieces.py --vocab VOCAB FILE...        # ファイルごとのピース数(.rasqpkg は中のファイルごと + 合計と額)
+    reference_pieces.py --vocab VOCAB FILE...        # ファイルごとのピース数(.rspkg / .rasqpkg は中のファイルごと + 合計と額)
     reference_pieces.py --make-vocab tokenizer.json OUT.json.zst   # 埋め込む語彙を作る
 
 VOCAB は tokenizer.json か、--make-vocab で作った .json.zst(どちらでも同じ数になる)。
@@ -72,7 +72,7 @@ def count_bytes(data, vocab, max_len):
 
 
 def package_files(raw):
-    """.rasqpkg の中の通常ファイル(tar の順)。"""
+    """配布物(.rspkg / .rasqpkg)の中の通常ファイル(tar の順)。"""
     tar_bytes = subprocess.run(["zstd", "-dc"], input=raw, check=True, capture_output=True).stdout
     out = []
     with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:") as t:
@@ -111,7 +111,7 @@ def main(argv):
     for path in argv[2:]:
         with open(path, "rb") as f:
             raw = f.read()
-        if path.endswith(".rasqpkg"):
+        if path.endswith((".rspkg", ".rasqpkg")):
             total = 0
             for name, data in package_files(raw):
                 n = count_bytes(data, vocab, max_len)

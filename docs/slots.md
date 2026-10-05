@@ -352,7 +352,7 @@ TL プラグインはタブではなく、簡略カスタマイズ UI / ノー�
   ほかの `kind` のマニフェストは `assets` を書けない(プラグインに同梱するファイルは rasq.toml の `[[assets]]`)。
   例外は着せ替え(`kind: "theme"`、§2.12、v0.16)で、同じ `assets[]` に `use: "theme"` で画像を載せる(形式と上限はここと同じ)。
   アセットパックの `use` は `sticker`、着せ替えの `use` は `theme` だけ(混ぜられない)。
-- 配布物(`.rasqpkg`): `bundle.json` の `root` は `{id, version, kind: "assets", manifest}` で **`wasm` を持たない**。`children` / `libs` /
+- 配布物(`.rspkg`): `bundle.json` の `root` は `{id, version, kind: "assets", manifest}` で **`wasm` を持たない**。`children` / `libs` /
   `models` は空、`assets[]` は全部 `kind: "image"` で `sha512` / `sizeBytes` 必須([`bundle.schema.json`](../schema/bundle.schema.json))。
   署名 / ハッシュの扱いはほかの配布物と同じ。
 - CLI: `rasq new assets <name>` → `packs/<name>/`(`manifest.json` + `stickers/`)、rasq.toml に `[[packs]]`。`rasq check` は
@@ -497,7 +497,7 @@ v0.17 の追加は後方互換(v0.16 の宣言はそのまま有効)。
   `kind: "theme"` は `theme` と `assets` が必須。ただし `assets` は **0 枚でもよい**(色だけのテーマ)。
 - 画像の形式と上限はアセットパックと同じ(**PNG / JPEG / WebP / GIF**、1 枚 2 MiB・合計 16 MiB・256 枚)。
 - `slots` / `permissions` / `actions` / `roles` は書けない。土台(SNS プラグイン)にも依らない(`requires` 無し)。
-- 配布物(`.rasqpkg`): `bundle.json` の `root` は `{id, version, kind: "theme", manifest}` で **`wasm` を持たない**。`children` / `libs` /
+- 配布物(`.rspkg`): `bundle.json` の `root` は `{id, version, kind: "theme", manifest}` で **`wasm` を持たない**。`children` / `libs` /
   `models` は空、`assets[]` は全部 `kind: "image"` で `sha512` / `sizeBytes` 必須(色だけのテーマなら空)。アセットパックと同じ扱い
   ([`bundle.schema.json`](../schema/bundle.schema.json))。
 - CLI: `rasq new theme <name>` → `packs/<name>/`(`manifest.json`(kind = theme、上の例に近い雛形)+ `theme/` の画像 1 枚)、
@@ -548,7 +548,7 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
     `shared` も配れる**(v0.19 の「solo のみ」は外した)。`swing` を書くのは「Swing 向けに作った」(全画面・`page.end`・`paused` を扱う)という宣言で、
     ホストは Swing を作る画面でそれを先に並べる。書いていないプラグインにも、Swing では `surface: "swing"` で `page.open` が来る
     (知らない surface は `page` と同じに描けばよい)。
-  - **親子関係**(配れないもの): 入れ物(`.rasqpkg`)の中に**ほかのプラグインと一緒に入っている**もの(SNS プラグインの `children` の 1 つ =
+  - **親子関係**(配れないもの): 入れ物(`.rspkg`)の中に**ほかのプラグインと一緒に入っている**もの(SNS プラグインの `children` の 1 つ =
     ホストの登録元が `…#<childId>`、または子を持つ入れ物の root)と、**ほかのプラグインを土台にする**もの(`bundle.json` の `root.requires`)。
     ページ型が自分の FOW を `fow.open` で子として開くのは親子関係に数えない。
   - **`shared` を Swing で配る** = 見る人は**作った人のセッションに入る**(Swing を見られる人 = セッションに入れる人)。作るときに
@@ -560,7 +560,7 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
   - 縮小したページを押すと全画面に戻る(`{type: "resumed"}`)。
   - プラグインが **`page.end`** を呼ぶか、見る人が次へ進む / 閉じると、その Swing は**見終えた**ことになり、その人には二度と出ない。
   - `page.open` の `context` に `swingId` と、作った人が入れた `data`(JSON 16 KiB まで)と、`author: {accountId, handle, displayName}` が載る。
-  - **未審査のまま配れる**(rasq-central S-057 / rasq-client D-379): 作った人が `.rasqpkg` / `.wasm` を上げる。
+  - **未審査のまま配れる**(rasq-central S-057 / rasq-client D-379): 作った人が `.rspkg` / `.wasm` を上げる。
     - 見る人は同意してから、**制限モード + GPU** で一時的に動かす(`network` / `storage.unsafe` / interstitial・system の FOW / `url.open` などは閉、`gpu.compute` は可、fuel は半分)。
     - 入れ物は**子プラグインを持たない 1 つだけ**(`requires` も 2 つめのプラグインも不可 = 上の親子関係が無い)。スロットは `page` だけの solo
       (v0.20: surface `swing` の宣言は要らない。共有セッションはストアの審査済みの版にしか作れないので、未審査の shared は配れない)。
@@ -680,7 +680,7 @@ Swing が消える / 取り下げられると閉じる)。作るのはホスト(
 
 試験画面などからストアを通さずに入れたもの(サイドロード)は、署名で 2 つに分かれる。正典は [PROTOCOL §6.1](../PROTOCOL.md)。
 
-- **全機能モード** = `.rasqpkg` が**自分の開発者鍵**(自分の RASQ アカウントに登録した鍵)で署名されている。`rasq build` は
+- **全機能モード** = `.rspkg` が**自分の開発者鍵**(自分の RASQ アカウントに登録した鍵)で署名されている。`rasq build` は
   `~/.config/rasq/dev-key.toml` の鍵で署名し、`rasq key show` が指紋を出す。鍵の登録は Web コンソールの `/console/keys`。
 - **制限モード** = それ以外(署名の無いもの、ほかの人の鍵、`rasq dev` の生の `.wasm`、あとから入れた `asset:`)。
   アプリに同梱しているアセット(バイト列が同梱ファイルと一致するもの)はアプリと同じ信頼でフル。

@@ -40,7 +40,7 @@ pub struct Counted {
     pub count: PackageCount,
 }
 
-/// パスから数える。ファイルは `.rasqpkg`、ディレクトリは中に `.rasqpkg` があればそれぞれを、無ければ中身(通常ファイルを再帰で)を数える。
+/// パスから数える。ファイルは配布物(`.rspkg` / 旧来の `.rasqpkg`)、ディレクトリは中に配布物があればそれぞれを、無ければ中身(通常ファイルを再帰で)を数える。
 pub fn count_path(path: &Path) -> Result<Vec<Counted>> {
     if path.is_file() {
         let bytes = std::fs::read(path).with_context(|| format!("{} を読めません", path.display()))?;
@@ -52,7 +52,7 @@ pub fn count_path(path: &Path) -> Result<Vec<Counted>> {
     }
     let mut pkgs: Vec<PathBuf> = std::fs::read_dir(path)?
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.is_file() && p.extension().is_some_and(|x| x == "rasqpkg"))
+        .filter(|p| p.is_file() && crate::pkg::is_package(p))
         .collect();
     pkgs.sort();
     if !pkgs.is_empty() {
@@ -165,7 +165,7 @@ pub fn fee_cmd(paths: &[PathBuf], as_json: bool, files: bool, orgate: Option<&st
         if c.unpacked_dir {
             println!("{}(展開した中身のディレクトリ。配布物にしたときと同じファイルなら同じ数)", c.label);
         } else {
-            println!("{}(.rasqpkg {} バイト)", c.label, commas(c.count.package_bytes));
+            println!("{}(配布物 {} バイト)", c.label, commas(c.count.package_bytes));
         }
         if files || c.count.files.len() <= 30 {
             println!("  {:>12}  {:>12}  ファイル", "ピース", "バイト");
@@ -321,17 +321,16 @@ pub fn submit_cmd(central: &str, pkg: Option<PathBuf>, channel: &str, notes_file
             let mut found: Vec<PathBuf> = std::fs::read_dir(&dist)
                 .with_context(|| format!("{} がありません(配布物のパスを渡すか、rasq build を先に)", dist.display()))?
                 .filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| p.extension().is_some_and(|x| x == "rasqpkg"))
+                .filter(|p| p.is_file() && crate::pkg::is_package(p))
                 .collect();
             if found.len() != 1 {
-                bail!("dist/ の .rasqpkg が {} 個です。出す配布物のパスを渡してください", found.len());
+                bail!("dist/ の配布物(.rspkg / .rasqpkg)が {} 個です。出す配布物のパスを渡してください", found.len());
             }
             found.remove(0)
         }
     };
     let bytes = std::fs::read(&pkg).with_context(|| format!("{} を読めません", pkg.display()))?;
-    let mut sig_path = pkg.clone().into_os_string();
-    sig_path.push(".sig.json");
+    let sig_path = crate::key::sig_path(&pkg);
     let sig = std::fs::read(&sig_path).ok();
     let notes = match notes_file {
         Some(f) => std::fs::read_to_string(&f).with_context(|| format!("{} を読めません", f.display()))?,
@@ -435,6 +434,23 @@ mod tests {
         assert!(from_dir[0].unpacked_dir);
         assert_eq!(from_dir[0].count.pieces, from_pkg[0].count.pieces);
         assert_eq!(from_dir[0].count.unpacked_bytes, from_pkg[0].count.unpacked_bytes);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_dir_counts_both_rspkg_and_legacy_rasqpkg() {
+        // 既定の .rspkg と旧来の .rasqpkg は中身が同じ形式。ディレクトリを渡すとどちらも数える(署名の .sig.json は数えない)。
+        let pkg = std::fs::read(format!("{FIXTURES}/sample.rasqpkg")).unwrap();
+        let dir = std::env::temp_dir().join(format!("rasq-fee-ext-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a-1.0.0.rspkg"), &pkg).unwrap();
+        std::fs::write(dir.join("b-1.0.0.rasqpkg"), &pkg).unwrap();
+        std::fs::write(dir.join("a-1.0.0.rspkg.sig.json"), b"{}").unwrap();
+        let c = count_path(&dir).unwrap();
+        assert_eq!(c.len(), 2);
+        assert!(c.iter().all(|x| !x.unpacked_dir && x.count.pieces == c[0].count.pieces));
+        assert!(c[0].label.ends_with("a-1.0.0.rspkg") && c[1].label.ends_with("b-1.0.0.rasqpkg"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

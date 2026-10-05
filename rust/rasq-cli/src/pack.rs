@@ -230,7 +230,8 @@ mod tests {
             assert_eq!(p.bundle["root"]["kind"], kind);
             assert!(p.bundle["root"]["wasm"].is_null());
             assert_eq!(p.bundle["assets"][0]["kind"], "image");
-            assert_eq!(p.file_name, "sample.p-0.1.0.rasqpkg");
+            assert_eq!(p.file_name(crate::pkg::EXT), "sample.p-0.1.0.rspkg");
+            assert_eq!(p.file_name(crate::pkg::LEGACY_EXT), "sample.p-0.1.0.rasqpkg");
             let _ = std::fs::remove_dir_all(&dir);
         }
     }

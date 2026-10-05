@@ -1,13 +1,13 @@
 //! RASQ の審査料の「ピース数」— 計測方法 `xlmr-unigram-v1`(仕様は rasq-sdk-sample `docs/REVIEW_FEE.md`)。
 //!
-//! 審査料の額は、申し込む版の配布物(`.rasqpkg`)の**中のファイルの内容**を、このクレートの方法で数えたピース数で決まる
+//! 審査料の額は、申し込む版の配布物(`.rspkg`。旧来の拡張子 `.rasqpkg` も中身は同じ)の**中のファイルの内容**を、このクレートの方法で数えたピース数で決まる
 //! (額の式の正は ORGATE-Server。[`fee`] は同じ式の写しで、`rasq fee` が手元で額を出すのに使う)。
 //! rasq-central(申込みのときに数える)と SDK の `rasq fee`(開発者が手元で数える)が**同じこのクレート**を使う。
 //! Central は `crates/rasq-review-pieces/` にこのディレクトリをそのまま写し、CI が SDK との差を `diff -r` で確かめる。
 //!
 //! 決まり(参照実装 `tool/reference_pieces.py` と同じ数を出す。テストの期待値 `tests/fixtures/expected.json` はそれで作った):
 //!
-//! 1. 対象: `.rasqpkg`(zstd で圧縮した tar)を解いた中の**通常ファイル**(typeflag `0` / NUL)全部。tar の見出し・ディレクトリ・
+//! 1. 対象: 配布物 `.rspkg` / `.rasqpkg`(zstd で圧縮した tar)を解いた中の**通常ファイル**(typeflag `0` / NUL)全部。tar の見出し・ディレクトリ・
 //!    リンクは数えない。ファイルごとに数えて足す(順は和に関係しない)。
 //! 2. バイト列 → 文字列: UTF-8 として読み、壊れたところは U+FFFD(Rust の `String::from_utf8_lossy` = Python の
 //!    `bytes.decode("utf-8", errors="replace")`)。正規化(NFKC / Precompiled)はしない。
@@ -403,8 +403,8 @@ fn each_file(
     limits: Limits,
     mut on_file: impl FnMut(String, &mut dyn Read) -> Result<u64, String>,
 ) -> Result<u64, String> {
-    let decoder =
-        zstd::stream::read::Decoder::new(pkg).map_err(|_| "not a .rasqpkg (zstd)".to_string())?;
+    let decoder = zstd::stream::read::Decoder::new(pkg)
+        .map_err(|_| "not a .rspkg / .rasqpkg (zstd)".to_string())?;
     let mut archive = tar::Archive::new(decoder.take(limits.max_unpacked + 1));
     let mut files = 0usize;
     let mut unpacked = 0u64;
@@ -451,7 +451,7 @@ pub struct PackageFile {
     pub bytes: Vec<u8>,
 }
 
-/// 配布物(`.rasqpkg` = zstd の tar)を解いて、中の通常ファイルを tar の順に返す(中身をメモリに持つ。数えるだけなら
+/// 配布物(`.rspkg` / `.rasqpkg` = zstd の tar)を解いて、中の通常ファイルを tar の順に返す(中身をメモリに持つ。数えるだけなら
 /// [count_package] が流しながら数える)。
 pub fn package_files(pkg: &[u8], limits: Limits) -> Result<Vec<PackageFile>, String> {
     let mut out = Vec::new();

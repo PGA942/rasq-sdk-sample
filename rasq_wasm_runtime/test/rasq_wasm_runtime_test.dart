@@ -101,7 +101,7 @@ void main() {
     expect((result['error'] as Map)['code'], 'E00');
   });
 
-  group('zstd (.rasqpkg の展開, D-034)', () {
+  group('zstd (.rspkg の展開, D-034)', () {
     final packed = File('test/fixtures/hello.txt.zst').readAsBytesSync();
     final expected = utf8.encode('RASQ zstd fixture ' * 4096);
 

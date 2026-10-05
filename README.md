@@ -14,7 +14,7 @@ Misskey アダプタ(`packages/sns_misskey`)で検証したものを、ここで
 - [`docs/slots.md`](docs/slots.md) — **スロットプラグイン契約(正典、v0.20)**: 10 スロット(v0.18 でページ型 `page` = カスタムプラグイン、v0.19 で Swing の surface `swing`、v0.20 で shared / 宣言なしのページ型も Swing で配れる)の call / ホスト関数 / FOW の着き方。機械可読な登録簿は [`schema/slots.json`](schema/slots.json)。
 - [`docs/REVIEW_FEE.md`](docs/REVIEW_FEE.md) — **審査料の額の決め方**(配布物の内容のピース数 = 計測方法 `xlmr-unigram-v1` の仕様・語彙の指紋・式)。
   `rasq fee` で Central と同じ数と額を手元で出せる(クレート [`rust/rasq-review-pieces`](rust/rasq-review-pieces/)、Central はその写し)。
-- [`docs/cli.md`](docs/cli.md) — **`rasq` CLI の設計(D-244)**: ワークスペース(`rasq.toml`)、雛形、配下へのバンドル、`.rasqpkg` の目次 [`schema/bundle.schema.json`](schema/bundle.schema.json)、確認・ビルド・公開。
+- [`docs/cli.md`](docs/cli.md) — **`rasq` CLI の設計(D-244)**: ワークスペース(`rasq.toml`)、雛形、配下へのバンドル、`.rspkg` の目次 [`schema/bundle.schema.json`](schema/bundle.schema.json)、確認・ビルド・公開。
   `plugin-sample/*/CONTRACT.md` はここへのポインタ
 
 ## サンプル
@@ -52,8 +52,8 @@ rasq init --namespace net.example && rasq new post.action later && rasq check &&
 rasq call later post.action --args '{"token":"t","actionId":"hello","post":{"body":"abc"},"account":{}}'   # wasm そのものを wasmi で叩く
 rasq token set misskey:misskey.io:yamada   # トークンは非表示入力 → ~/.config/rasq/credentials.toml(0600)
 rasq dev --watch                           # ビルド → 往復検査 → dev 画面に入れる絶対パス(変更のたびに再ビルド)
-rasq key init && rasq build                # dist/<id>-<version>.rasqpkg(zstd tar + bundle.json)+ 開発者署名 .sig.json
-rasq inspect dist/net.example.later-0.1.0.rasqpkg   # 目次 / ハッシュ / 署名を確かめる
+rasq key init && rasq build                # dist/<id>-<version>.rspkg(zstd tar + bundle.json)+ 開発者署名 .sig.json(--ext rasqpkg で旧来の .rasqpkg)
+rasq inspect dist/net.example.later-0.1.0.rspkg   # 目次 / ハッシュ / 署名を確かめる
 rasq new assets stickers && rasq new theme starry   # wasm 無しの配布物: アセットパック(docs/slots.md §2.10)/ 着せ替え(§2.12)を packs/ に
 rasq token set --central 100.91.218.56:8080 && rasq publish --central http://100.91.218.56:8080   # 掲載 → 版 → 配布物(--dry-run で要求の書き出しだけ)
 ```
@@ -62,7 +62,7 @@ rasq token set --central 100.91.218.56:8080 && rasq publish --central http://100
 2. **雛形を選ぶ**: スロット(`schema/slots.json`)ごとの雛形から選ぶ。1 つ作るごとに、土台の SNS プラグインの**配下にバンドル**される(ActionRef の `pluginId` と `wasm.call` の親子関係)。
 3. **コーディング**: wasm 化した既存ライブラリの取り込みや、添付ファイル(アセット / モデル)の書き込みを含む。
 4. **確認**: Flutter(rasq-client の「WASMプラグイン試験 (dev)」)での動作確認と簡易テスト(`cargo test` + `schema/validate.py`)。
-5. **ビルド**: デプロイ向けのビルド(`.rasqpkg`、ストア掲載用の署名は Central 側)。
+5. **ビルド**: デプロイ向けのビルド(`.rspkg`、ストア掲載用の署名は Central 側)。
 
 ## 静的チェック
 

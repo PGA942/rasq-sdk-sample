@@ -2,7 +2,7 @@
   "schema": "rasq.bundle/1",
   "sdk": "0.1.0",
   "createdAt": "2026-09-18T00:00:00Z",
-  "$comment": "docs/cli.md の例。Misskey プラグイン(土台)を自分で作っていて、その配下に post.action の子と顔検知ライブラリ、設定画面の RRL、遅延取得のモデルをバンドルした .rasqpkg の目次。ハッシュは例(実物は rasq build が計算する)。",
+  "$comment": "docs/cli.md の例。Misskey プラグイン(土台)を自分で作っていて、その配下に post.action の子と顔検知ライブラリ、設定画面の RRL、遅延取得のモデルをバンドルした .rspkg の目次。ハッシュは例(実物は rasq build が計算する)。",
   "root": {
     "id": "rasq.official.misskey",
     "version": "0.1.0",

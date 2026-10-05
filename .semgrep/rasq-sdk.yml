@@ -111,7 +111,7 @@ rules:
     severity: ERROR
     message: >-
       tar のエントリのパスを、文法の検査 (`check_path`: `..` / 先頭 `/` / `.` 始まりを拒否) 無しに
-      使っています。他人の .rasqpkg のパスは `inspect --extract` / `init --base` で書き出し先になるので、
+      使っています。他人の .rspkg のパスは `inspect --extract` / `init --base` で書き出し先になるので、
       読んだ直後に check_path を通してください。
     paths:
       include: ["/rust/rasq-cli/**"]

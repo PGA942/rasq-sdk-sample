@@ -1,5 +1,5 @@
 //! 開発者鍵(docs/cli.md §6、D-244d): `~/.config/rasq/dev-key.toml`(0600)の ed25519。
-//! 署名対象は `.rasqpkg` 全体の SHA-512 ダイジェスト(生 64 バイト)= rasq-client の `verifyArtifact` と同じ。
+//! 署名対象は配布物(`.rspkg` / 旧来の `.rasqpkg`)全体の SHA-512 ダイジェスト(生 64 バイト)= rasq-client の `verifyArtifact` と同じ。
 //! ストア鍵は Central が持つ(D-034)ので、これはサイドロード(開発者鍵 + 警告)用。
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -64,7 +64,7 @@ pub fn fingerprint(public_b64: &str) -> String {
     d[..8].iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// `.rasqpkg.sig.json` の中身。`digest` は配布物バイト列の SHA-512。
+/// `<pkg>.sig.json`(`x.rspkg.sig.json` / `x.rasqpkg.sig.json`)の中身。`digest` は配布物バイト列の SHA-512。
 pub fn sign(sk: &SigningKey, digest: &[u8; 64]) -> Value {
     let sig = sk.sign(digest);
     json!({
