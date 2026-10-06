@@ -12,7 +12,7 @@
   assets[] に use = theme で載っていること(assets[].id の重複も見る)。v0.17 のグラデーションのレイヤーは参照先が無いので
   見ず、代わりに gradient.stops が colors と同じ数で昇順であることを見る
 - ページ型(slot page、v0.18、docs/slots.md §2.13): page.mode = solo なのに shared.session / maxParticipants があれば警告
-  (page が要ること、shared なら shared.session、astell は shared だけ、はスキーマが見る)
+  (page が要ること、shared なら shared.session、astell は shared だけ、profile.host は profile と一緒(v0.21)、はスキーマが見る)
 - action-ref.schema.json の examples が自分のパターンに合うこと
 
 依存: pip install jsonschema referencing

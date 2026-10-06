@@ -133,7 +133,8 @@ pub fn check_manifest(v: &Validator, registry: &[Slot], m: &Value, declared_slot
     if slots.contains(&"viewer.overlay") && !m["actions"].as_array().into_iter().flatten().any(|a| a["slot"] == "viewer.overlay") {
         f.warnings.push("全画面アクションバーのボタン宣言(actions[].slot = \"viewer.overlay\")がありません(ホストが name と既定アイコンで出す)".into());
     }
-    // ページ型(docs/slots.md §2.13 v0.18)。page が要ること / shared なら shared.session / astell は shared だけ、はスキーマが見る。
+    // ページ型(docs/slots.md §2.13 v0.18)。page が要ること / shared なら shared.session / astell は shared だけ /
+    // profile.host は profile と一緒(v0.21)、はスキーマが見る。
     if m["page"]["mode"] == "solo" {
         if perms.contains(&"shared.session") {
             f.warnings.push("page.mode = solo なのに permissions に shared.session があります(solo はセッションに入らないので過剰宣言)".into());
@@ -237,6 +238,11 @@ mod tests {
         // v0.20: swing は shared でも書ける(v0.19 の solo だけの決まりを外した)
         let f = check_manifest(&v, &reg, &base(json!(["render", "shared.session"]), json!({"mode": "shared", "surfaces": ["page", "swing"]})), Some("page"), None);
         assert!(f.errors.is_empty(), "{:?}", f.errors);
+        // v0.21: profile.host(持ち主だけのホスト用ページ)は profile と一緒に書く
+        let f = check_manifest(&v, &reg, &base(json!(["render"]), json!({"mode": "solo", "surfaces": ["profile", "profile.host"]})), Some("page"), None);
+        assert!(f.errors.is_empty(), "{:?}", f.errors);
+        let f = check_manifest(&v, &reg, &base(json!(["render"]), json!({"mode": "solo", "surfaces": ["page", "profile.host"]})), Some("page"), None);
+        assert!(!f.errors.is_empty());
         // slots に page があれば page が要る
         let mut m = base(json!(["render"]), json!({"mode": "solo"}));
         m.as_object_mut().unwrap().remove("page");

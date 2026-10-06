@@ -1,4 +1,4 @@
-# RASQ スロットプラグイン契約 v0.20(正典)
+# RASQ スロットプラグイン契約 v0.21(正典)
 
 > **ここが正典。** 以前は `orgate-question/plugin-sample/*/CONTRACT.md` に同じ文書が複製されていたが、v0.8 から
 > 各リポジトリの `CONTRACT.md` はこのファイルへのポインタだけになった。節番号(§2.1〜§2.9 / §3 / §4 / §5)は複製時代のまま。
@@ -533,7 +533,7 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
 | キー | 値(既定) | 意味 |
 |---|---|---|
 | `mode` | `solo` \| `shared`(必須) | `solo` = 1 人で完結(サーバー変数なし)。`shared` = 複数人でセッションを共有(権限 **`shared.session` が必須**) |
-| `surfaces` | `page` / `astell` / `profile` / `swing` の配列(`["page"]`) | どこから開けるか(下。v0.20 から Swing は書かなくても配れる) |
+| `surfaces` | `page` / `astell` / `profile` / `profile.host` / `swing` の配列(`["page"]`) | どこから開けるか(下。v0.20 から Swing は書かなくても配れる。v0.21 で `profile.host`) |
 | `title` | 文字列(`name`) | ページのヘッダーとタイルの名前。`page.open` / `page.render` の `title` で上書きできる |
 | `icon` | Material Icon の名前 | タイル / サイドメニュー / AsTell のカード |
 | `maxParticipants` | 1〜200(50) | shared の 1 セッションに入れる人数。超えると入れない(WS が 409) |
@@ -543,6 +543,14 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
   ホスト(ルームのオーナー / モデレーター)が承認するとルームのセッション(`room:<roomId>`)ができ、全員のルームにカードが出る。
 - **`profile`** = RASQ アカウントのページにタイルとして置く(`PUT /me/pages`、8 個まで)。**solo** は訪問者それぞれの端末で完結、
   **shared** は持ち主のプロフィールごとの 1 セッション(`profile:<accountId>`)を訪問者で共有する。
+  - サイドロード(未審査)のプラグインを RASQ のページに置くと**制限モード**(§5.1)で動き、置けるのは **`solo` だけ**
+    (共有セッションはストアの審査済みの版にしか作れない)。
+- **`profile.host`**(v0.21、rasq-client D-446)= `profile` で RASQ アカウントのページに置いた**持ち主(ホスト)だけ**が開ける**ホスト用ページ**。
+  - **`profile` と一緒に書く**(`profile.host` だけはスキーマのエラー)。置いたタイルとは別に、持ち主にだけ「〜のホスト用ページ」の入口が出て、
+    同じプラグインが `surface: "profile.host"` で `page.open` される。`context` は `profile` と同じ(`profileHandle` / `profileAccountId`)。
+  - **訪問者には出ない**(入口もなく、`profile.host` では開かれない)。持ち主だけが変えられる設定・管理(パラメーターなど)に使う。
+  - 決めた値はプラグインがふだんの保存先に持つ: 持ち主の端末だけで使うなら `storage.*`、訪問者のページに効かせるなら shared のサーバー変数
+    (`profile:<accountId>` のセッション。持ち主の `role` は `owner`。持ち主だけに書かせたいキーは `@<accountId>.` で始める)。
 - **`swing`**(v0.19、rasq-central S-056 / rasq-client D-377)= RASQ の **Swing**(フォロワーと RASQ リストの人へ流れて消える配信)として配る。
   - **v0.20(rasq-central S-079 / rasq-client D-424)から、親子関係の無いページ型プラグインは `swing` を書かなくても Swing で配れ、
     `shared` も配れる**(v0.19 の「solo のみ」は外した)。`swing` を書くのは「Swing 向けに作った」(全画面・`page.end`・`paused` を扱う)という宣言で、
@@ -569,8 +577,9 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
 
 **ホスト → プラグイン(`call`)** — args はすべて**平ら**(`page.event` の中身も `{token, type, ...}` の一段):
 
-- `page.open {token, surface: "page"|"astell"|"profile"|"swing", context: {roomId?, profileHandle?, profileAccountId?, swingId?, data?, author?}, me: {accountId, handle, displayName}, session?: Session, size: {width, height}}`
+- `page.open {token, surface: "page"|"astell"|"profile"|"profile.host"|"swing", context: {roomId?, profileHandle?, profileAccountId?, swingId?, data?, author?}, me: {accountId, handle, displayName}, session?: Session, size: {width, height}}`
   (v0.20: surface `swing` でも shared なら `session` が載る。scope は `swing:<swingId>` か、作った人が付けた `link:` / `profile:`)
+  (v0.21: surface `profile.host` は持ち主だけ。`context` は `profile` と同じ `profileHandle` / `profileAccountId`、shared なら `session` は `profile:<accountId>`)
   → 戻り **`{root: Node, title?: string}`**(ページの RRL。表示は全画面のページで、**ヘッダーと戻るはホスト**)。
   `session` は shared で、セッションに入っているときだけ載る(無い = 1 人で開いた。solo と同じに動けばよい):
   ```json
@@ -630,7 +639,7 @@ Swing が消える / 取り下げられると閉じる)。作るのはホスト(
 プラグインは WS も Central も直接は見ない。
 
 - CLI: `rasq new page <name>`(雛形 = shared のカウンター。セッションが無ければ端末だけで数える)。`rasq check` は上のスキーマの規則
-  (`page` が要る / shared なら `shared.session` / `astell` は shared だけ)と、solo なのに `shared.session` / `maxParticipants` がある警告を見る。
+  (`page` が要る / shared なら `shared.session` / `astell` は shared だけ / `profile.host` は `profile` と一緒)と、solo なのに `shared.session` / `maxParticipants` がある警告を見る。
 - ストアのカードの `pluginType` は、現在版のマニフェストの `slots` に `page` があれば **`custom`**(ほかより優先)。
 
 ## 3. RRL のホスト拡張(rasq-client D-167 以降。古いホストは無視/⚠ボックス)
