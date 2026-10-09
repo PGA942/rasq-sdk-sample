@@ -117,6 +117,108 @@ const MAX_MEMORY_BYTES: usize = 256 * 1024 * 1024;
 /// 間接呼び出しなら数千要素も使わない。
 const MAX_TABLE_ELEMENTS: usize = 100_000;
 
+/// 1 インスタンスが持てる線形メモリ / テーブル / インスタンスの数。セキュリティ確認 2026-10-09 の [5]。
+///
+/// ABI(PROTOCOL.md §4)は `memory` を 1 本だけ書き出す前提で、Rust の wasm32 も
+/// メモリ 1 本・テーブル 1 本(`__indirect_function_table`)しか出さない。wasmi の
+/// `Config::default()` は multi-memory が有効で、[`MAX_MEMORY_BYTES`] /
+/// [`MAX_TABLE_ELEMENTS`] は **1 本ごと**の上限なので、256 MiB の初期メモリを
+/// 何本も宣言すれば合計で数 GiB を確保できた(初期化の確保は燃料の外)。
+/// multi-memory を切ったうえで数も 1 に絞り、さらに [`AggregateLimits`] で
+/// 合計を見る(どれか 1 つが緩んでも合計の予算は越えない)。
+const MAX_MEMORIES: usize = 1;
+const MAX_TABLES: usize = 1;
+const MAX_INSTANCES: usize = 1;
+
+/// [`StoreLimits`](1 本ごとの上限・数・成長失敗のトラップ)に、ストア全体の
+/// **合計**の予算を重ねる `ResourceLimiter`。セキュリティ確認 2026-10-09 の [5]。
+///
+/// wasmi はインスタンス化の初期確保(`Memory::new` / `Table::new`、`current = 0`)も
+/// 実行中の `memory.grow` / `table.grow` も同じ口で問い合わせてくるので、ここで
+/// 足し込めばインスタンス化の前(数の検査)・中(初期確保)・後(成長)を一続きで縛れる。
+struct AggregateLimits {
+    inner: StoreLimits,
+    /// 許可した線形メモリの合計(バイト)と、テーブル要素の合計。
+    memory_bytes: usize,
+    table_elements: usize,
+    /// 直前に許可した増分。許可のあと確保そのものが失敗したら(`*_grow_failed`)差し戻す。
+    pending_memory: usize,
+    pending_table: usize,
+}
+
+impl AggregateLimits {
+    fn new() -> Self {
+        Self {
+            inner: StoreLimitsBuilder::new()
+                .memory_size(MAX_MEMORY_BYTES)
+                .table_elements(MAX_TABLE_ELEMENTS)
+                .memories(MAX_MEMORIES)
+                .tables(MAX_TABLES)
+                .instances(MAX_INSTANCES)
+                // 上限に当たった `memory.grow` は -1 ではなくトラップにする。
+                // 仕様どおり -1 を返すと、ゲストのアロケータはたいてい
+                // null → abort/unreachable で落ちるので、どのみちプラグインは
+                // 死ぬ。それなら原因の分かる形(E03)で落としたほうが、
+                // 「プラグインのバグ」と「上限に当てた」を運用で切り分けられる。
+                .trap_on_grow_failure(true)
+                .build(),
+            memory_bytes: 0,
+            table_elements: 0,
+            pending_memory: 0,
+            pending_table: 0,
+        }
+    }
+}
+
+/// 合計の予算を越える増分を拒む(`trap_on_grow_failure` と同じくトラップ = E03)。
+fn grow_within(total: &mut usize, pending: &mut usize, current: usize, desired: usize, cap: usize) -> Result<bool, wasmi_core::LimiterError> {
+    let add = desired.saturating_sub(current);
+    let Some(next) = total.checked_add(add).filter(|n| *n <= cap) else {
+        return Err(wasmi_core::LimiterError::ResourceLimiterDeniedAllocation);
+    };
+    *total = next;
+    *pending = add;
+    Ok(true)
+}
+
+impl wasmi::ResourceLimiter for AggregateLimits {
+    fn memory_growing(&mut self, current: usize, desired: usize, maximum: Option<usize>) -> Result<bool, wasmi_core::LimiterError> {
+        self.pending_memory = 0;
+        if !self.inner.memory_growing(current, desired, maximum)? {
+            return Ok(false);
+        }
+        grow_within(&mut self.memory_bytes, &mut self.pending_memory, current, desired, MAX_MEMORY_BYTES)
+    }
+
+    fn table_growing(&mut self, current: usize, desired: usize, maximum: Option<usize>) -> Result<bool, wasmi_core::LimiterError> {
+        self.pending_table = 0;
+        if !self.inner.table_growing(current, desired, maximum)? {
+            return Ok(false);
+        }
+        grow_within(&mut self.table_elements, &mut self.pending_table, current, desired, MAX_TABLE_ELEMENTS)
+    }
+
+    fn memory_grow_failed(&mut self, _error: &wasmi_core::LimiterError) {
+        self.memory_bytes = self.memory_bytes.saturating_sub(std::mem::take(&mut self.pending_memory));
+    }
+
+    fn table_grow_failed(&mut self, _error: &wasmi_core::LimiterError) {
+        self.table_elements = self.table_elements.saturating_sub(std::mem::take(&mut self.pending_table));
+    }
+
+    fn instances(&self) -> usize {
+        self.inner.instances()
+    }
+
+    fn tables(&self) -> usize {
+        self.inner.tables()
+    }
+
+    fn memories(&self) -> usize {
+        self.inner.memories()
+    }
+}
+
 /// ネイティブ `net.fetch` (D-023) の壁時計上限(ミリ秒・呼び出し全体)。
 ///
 /// 燃料は純粋な計算しか縛れない。host_fn の中でブロッキング HTTP を待って
@@ -224,7 +326,8 @@ struct HostState {
     gpu_compute: bool,
     /// 線形メモリ / テーブルの成長を止める `ResourceLimiter`。`Store` は
     /// ユーザーデータ経由でしか limiter を引けないのでここに同居させる。
-    limits: StoreLimits,
+    /// 1 本ごとの上限に加えて合計も見る([`AggregateLimits`]、2026-10-09 の [5])。
+    limits: AggregateLimits,
 }
 
 pub struct RasqWasmInstance {
@@ -292,18 +395,12 @@ impl RasqWasmInstance {
         // 有効にできない)。
         let mut config = Config::default();
         config.consume_fuel(true);
+        // ABI はメモリ 1 本(`memory`)。multi-memory を切って、2 本目を宣言するモジュールは
+        // 検証(確保の前)で落とす(2026-10-09 の [5]、数と合計は下の limiter でも見る)。
+        config.wasm_multi_memory(false);
         let engine = Engine::new(&config);
         let module = Module::new(&engine, wasm_bytes)?;
-        let limits = StoreLimitsBuilder::new()
-            .memory_size(MAX_MEMORY_BYTES)
-            .table_elements(MAX_TABLE_ELEMENTS)
-            // 上限に当たった `memory.grow` は -1 ではなくトラップにする。
-            // 仕様どおり -1 を返すと、ゲストのアロケータはたいてい
-            // null → abort/unreachable で落ちるので、どのみちプラグインは
-            // 死ぬ。それなら原因の分かる形(E03)で落としたほうが、
-            // 「プラグインのバグ」と「上限に当てた」を運用で切り分けられる。
-            .trap_on_grow_failure(true)
-            .build();
+        let limits = AggregateLimits::new();
         let mut store = Store::new(
             &engine,
             HostState {
@@ -2241,6 +2338,66 @@ mod tests {
         // 「clean」= ホストは生きていて、同じインスタンスにまた話しかけられる。
         let err2 = instance.call("grow", "{}", "call-mem-2").expect_err("still limited");
         assert!(matches!(err2, RasqWasmError::MemoryLimit), "{err2:?}");
+    }
+
+    /// 1 本ずつなら上限ちょうど(256 MiB = 4096 ページ)だが、合計では倍になるモジュール(2026-10-09 の [5])。
+    const TWO_MEMORIES_WAT: &str = r#"
+        (module
+          (memory (export "memory") 4096)
+          (memory $second 4096)
+          (func (export "alloc") (param i32) (result i32) (i32.const 0))
+          (func (export "dealloc") (param i32 i32)))
+    "#;
+
+    /// テーブルを 2 本宣言するモジュール(reference-types が有効なので検証は通る)。
+    const TWO_TABLES_WAT: &str = r#"
+        (module
+          (memory (export "memory") 1)
+          (table 1000 funcref)
+          (table 1000 funcref)
+          (func (export "alloc") (param i32) (result i32) (i32.const 0))
+          (func (export "dealloc") (param i32 i32)))
+    "#;
+
+    #[test]
+    fn modules_with_more_than_one_memory_or_table_are_rejected_before_allocation() {
+        // 2 本目のメモリは multi-memory を切った検証で落ちる(確保の前)。
+        let err = RasqWasmInstance::load_plain(TWO_MEMORIES_WAT.as_bytes()).err().expect("two memories must be rejected");
+        assert!(format!("{err:?}").to_lowercase().contains("memor"), "{err:?}");
+        // FFI の入口(両方のネイティブ controller が通る rasq_wasm_instantiate*)でも null が返る。
+        let bytes = TWO_MEMORIES_WAT.as_bytes(); // wasmi は WAT のテキストもそのまま受ける
+        let ptr = rasq_wasm_instantiate(bytes.as_ptr(), bytes.len());
+        assert!(ptr.is_null());
+        let ptr = rasq_wasm_instantiate_with_host(bytes.as_ptr(), bytes.len(), test_host_fn, std::ptr::null_mut());
+        assert!(ptr.is_null());
+        // テーブルの数も 1 本まで(インスタンス化の数の検査 = 確保の前)。
+        assert!(RasqWasmInstance::load_plain(TWO_TABLES_WAT.as_bytes()).is_err());
+        // ふつうの 1 本ずつのモジュールは通る(対照)。
+        RasqWasmInstance::load_plain(MEMORY_OK_WAT.as_bytes()).expect("single memory/table still loads");
+    }
+
+    #[test]
+    fn aggregate_limiter_caps_the_sum_across_memories_and_tables() {
+        use wasmi::ResourceLimiter as _;
+        const MIB: usize = 1024 * 1024;
+        // 数の検査がもし緩んでも、合計で 256 MiB を越える 2 本目の初期確保は拒む。
+        let mut l = AggregateLimits::new();
+        assert_eq!((l.memories(), l.tables(), l.instances()), (1, 1, 1));
+        assert!(l.memory_growing(0, 200 * MIB, None).expect("first memory fits"));
+        assert!(l.memory_growing(0, 100 * MIB, None).is_err(), "aggregate must not exceed MAX_MEMORY_BYTES");
+        // 1 本目の成長も合計で数える。
+        assert!(l.memory_growing(200 * MIB, 256 * MIB, None).expect("grow up to the cap"));
+        assert!(l.memory_growing(256 * MIB, 256 * MIB + 65536, None).is_err());
+        // 許可のあとの確保の失敗は差し戻す(合計が膨らみ続けない)。
+        let mut l = AggregateLimits::new();
+        assert!(l.memory_growing(0, 200 * MIB, None).expect("fits"));
+        l.memory_grow_failed(&wasmi_core::LimiterError::OutOfSystemMemory);
+        assert!(l.memory_growing(0, 256 * MIB, None).expect("budget returned after the failure"));
+        // テーブル要素も合計。
+        let mut l = AggregateLimits::new();
+        assert!(l.table_growing(0, MAX_TABLE_ELEMENTS - 10, None).expect("fits"));
+        assert!(l.table_growing(0, 11, None).is_err());
+        assert!(l.table_growing(0, 10, None).expect("exactly the cap"));
     }
 
     #[test]

@@ -11,6 +11,9 @@ crate-type = ["cdylib", "staticlib", "lib"]
 
 [dependencies]
 wasmi = "1"
+# `ResourceLimiter` の戻り値の型 `LimiterError` は wasmi から再公開されていないので、合計の予算を見る
+# 自前の limiter(lib.rs の AggregateLimits、セキュリティ確認 2026-10-09 の [5])のためだけに直接引く。wasmi と同じ版。
+wasmi_core = "1"
 serde_json = "1"
 # Native `net.fetch` backend (PROTOCOL §4 / D-023): blocking HTTP inside the
 # runtime so mobile hosts don't need a synchronous Dart HTTP bridge. Pure
