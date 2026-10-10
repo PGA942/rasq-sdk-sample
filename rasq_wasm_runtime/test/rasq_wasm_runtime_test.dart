@@ -101,6 +101,35 @@ void main() {
     expect((result['error'] as Map)['code'], 'E00');
   });
 
+  // セキュリティ確認 2026-10-09 の [5]: 1 本ずつは上限内(256 MiB)でも、メモリを 2 本宣言すれば
+  // 合計で倍を確保できた。ABI はメモリ 1 本なので、2 本目はインスタンス化(確保)の前に断る。
+  group('メモリは 1 本まで(2026-10-09 の [5])', () {
+    // (memory (export "memory") <min>) を [count] 本並べただけのモジュール。
+    Uint8List memoriesModule(int count, List<int> minLeb) {
+      final mem = <int>[count];
+      for (var i = 0; i < count; i++) {
+        mem..add(0x00)..addAll(minLeb);
+      }
+      final export = <int>[0x01, 0x06, ...utf8.encode('memory'), 0x02, 0x00];
+      return Uint8List.fromList([
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, //
+        0x05, mem.length, ...mem,
+        0x07, export.length, ...export,
+      ]);
+    }
+
+    test('2 本 × 256 MiB は hostFn の有無どちらでも読み込まない', () {
+      final bytes = memoriesModule(2, [0x80, 0x20]); // 4096 ページ = 256 MiB ずつ
+      expect(() => RasqWasmPlugin.fromBytes(bytes), throwsA(isA<RasqWasmInstantiateException>()));
+      expect(() => RasqWasmPlugin.fromBytes(bytes, hostFn: (_) => null), throwsA(isA<RasqWasmInstantiateException>()));
+    });
+
+    test('1 本なら読み込める(対照)', () {
+      final plugin = RasqWasmPlugin.fromBytes(memoriesModule(1, [0x01]), hostFn: (_) => null);
+      plugin.dispose();
+    });
+  });
+
   group('zstd (.rspkg の展開, D-034)', () {
     final packed = File('test/fixtures/hello.txt.zst').readAsBytesSync();
     final expected = utf8.encode('RASQ zstd fixture ' * 4096);
