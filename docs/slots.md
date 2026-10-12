@@ -526,7 +526,8 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
 ```
 
 (同じものが [`../examples/manifests/sample.custom-page.json`](../examples/manifests/sample.custom-page.json)、solo の例は
-[`../examples/manifests/sample.custom-page-solo.json`](../examples/manifests/sample.custom-page-solo.json)、実装は plugin-sample の `custom-page-plugin`。)
+[`../examples/manifests/sample.custom-page-solo.json`](../examples/manifests/sample.custom-page-solo.json)、実装は plugin-sample の `custom-page-plugin`。v0.22 の TTL と落書き(`media.editor.open`)の例は
+[`../examples/manifests/sample.custom-paint.json`](../examples/manifests/sample.custom-paint.json)、実装は plugin-sample の `custom-plugin-paint`。)
 
 **`page` のキー**([`manifest.schema.json`](../schema/manifest.schema.json) の `$defs.page`。`slots` に `page` があれば必須、無ければ書けない):
 
