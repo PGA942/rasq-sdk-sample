@@ -1,0 +1,27 @@
+{
+  "schema": "rasq.plugin-manifest/1",
+  "id": "sample.paint",
+  "name": "みんなで落書き",
+  "version": "0.1.0",
+  "kind": "view",
+  "description": "1 人 1 マスの落書きを、期限つきでみんなに見せ合う。shared のページ型プラグインのサンプル(plugin-sample/custom-plugin-paint、docs/slots.md §2.13 v0.22: media.editor.open / shared.set の ttl / owner の削除)",
+  "slots": [
+    "page"
+  ],
+  "permissions": [
+    "render",
+    "shared.session"
+  ],
+  "page": {
+    "title": "みんなで落書き",
+    "icon": "brush",
+    "mode": "shared",
+    "surfaces": [
+      "page",
+      "profile",
+      "profile.host",
+      "astell"
+    ],
+    "maxParticipants": 50
+  }
+}

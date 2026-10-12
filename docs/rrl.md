@@ -85,6 +85,28 @@ MFM 装飾は `transform` スパン(例: [`examples/mfm-body.rsl.json`](../examp
 静的ドキュメント。値は Bind `$.settings.<key>`、書き込みは `on: {"change": "settings.set"}` を
 ホストが KV へ写す。SNS プラグインは `settingsPages` として同形式を提供する(PROTOCOL §2.3 の設定ページ注記)。
 
+## SVG(v0.22、rasq-client D-465)
+
+`Image.p.src` に **`data:image/svg+xml;base64,…`**(または `data:image/svg+xml,<URL エンコードした SVG>`)を置ける。
+ページ型の落書き([slots.md §2.13](slots.md) の `media.editor.open`)が返す SVG をそのまま描くためのもの。
+
+```json
+{ "t": "Image", "k": "paint", "p": { "src": "data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgMzAwIDQwMCI…", "fit": "contain" } }
+```
+
+- ホストは描く前に**許可リストで消毒**する。残るのは要素 `svg` / `g` / `path` / `polyline` / `polygon` / `line` / `rect` / `circle` / `ellipse` と、
+  形と描き方の属性(`viewBox` `width` `height` `d` `points` `x` `y` `cx` `cy` `r` `rx` `ry` `x1` `y1` `x2` `y2` `fill` `stroke` `stroke-width`
+  `stroke-linecap` `stroke-linejoin` `opacity` `fill-opacity` `stroke-opacity`)だけ。色は `#RGB` / `#RRGGBB` / `none` / 色の名前。
+  `script` / `style` / `foreignObject` / `image` / `use` / `a` / `href` / `on*` / `url(...)` / `transform` などは捨てる(外のものを読まない)。
+- `path` の `d` は `M L H V C S Q T Z`(小文字の相対も)を読む。円弧 `A` は描かない。
+- 描く量の上限(下の「描く量の上限」)とは別に、SVG 1 枚は **64 KiB・要素 4,000 個・`d` / `points` の数 40,000 個**まで(超えた分は描かない)。
+- `p.fit` = `contain`(既定)/ `cover` / `fill`。`p.width` / `p.height` が無ければ親の幅に合わせ、`viewBox` の縦横比で高さを決める。
+
+## Grid の 1 マスの縦横比(v0.22)
+
+`Grid.p.aspectRatio` = 1 マスの**幅 ÷ 高さ**(既定 `1` = 正方形)。3:4 の縦長のマスを 2 列に並べるなら
+`{"t": "Grid", "p": {"columns": 2, "aspectRatio": 0.75}, "c": [...]}`。0.1〜10 の範囲で、外れた値は 1 にする。
+
 ## 障害隔離
 
 ノード単位で try/catch され、壊れたノードはインラインの ⚠ ボックスに縮退する(V12)。

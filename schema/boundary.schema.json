@@ -73,7 +73,7 @@
         "fow.open", "fow.close", "alert", "storage.get", "storage.set", "storage.delete", "net.fetch", "ml.infer", "gpu.compute", "wasm.call", "store.read", "geometry.lookup",
         "toast", "sound.play", "clipboard.set", "url.open", "mute.add", "composer.open", "astell.share",
         "composer.media.replace", "composer.media.preview", "composer.media.overlay", "composer.text.replace", "viewer.overlay.set",
-        "page.render", "page.end", "shared.set", "shared.op", "shared.call"
+        "page.render", "page.end", "shared.set", "shared.op", "shared.call", "media.editor.open"
       ]
     }
   }

@@ -306,6 +306,10 @@ paths:
         キーは ^[A-Za-z0-9_.:@-]{1,64}$、me. で始まるキーは @<accountId>. に書き換え、@<accountId>. のキーは本人だけが書ける。
         値は JSON 16 KiB まで、1 セッション 256 キー・合計 1 MiB まで、call の args は 16 KiB まで、1 接続 20 通/秒まで(超えたら error)。
         op の append は 500 要素まで(超えたら先頭から捨てる)。ホストはこれを page.event(docs/slots.md §2.13)に写す。
+        v0.22(S-106): set / op の ttl(秒、1〜2592000)で期限を付け、期限で Central が消して var {value: null, reason: expired} を配る。
+        審査を通った版の page.sharedLimits で値 / セッションの上限を広げられる(天井 256 KiB / 8 MiB)。ホスト(セッションの持ち主)ごとの
+        総量 16 MiB(無料版)を超える書き込みは、そのホストの全セッションから期限の早い順に前倒しで消してから書く(reason: evicted)。
+        セッションの owner は他人の @<accountId>. のキーを set value: null でだけ消せる(reason: removedByOwner)。
       security: []
       parameters:
         - { name: sessionId, in: path, required: true, schema: { type: string } }
@@ -526,6 +530,7 @@ components:
         value: { description: JSON の値(16 KiB まで) }
         rev: { type: integer, description: そのキーの版(書くたびに増える) }
         by: { type: string, format: uuid, description: 最後に書いた人の accountId }
+        expiresAt: { type: integer, description: "v0.22: 期限(エポックミリ秒)。期限の無いキーには無い" }
     CustomVars:
       type: object
       description: キー → CustomVar。キーは ^[A-Za-z0-9_.:@-]{1,64}$(@<accountId>. で始まるキーはその本人だけが書ける)
@@ -540,6 +545,7 @@ components:
             key: { type: string }
             value: { description: "null で消す" }
             ifRev: { type: integer, description: 今の rev と違えば書かずに conflict }
+            ttl: { type: integer, minimum: 1, maximum: 2592000, description: "v0.22: 残す秒数。省略 = 期限なし(前の期限も外す)" }
         - type: object
           required: [type, key, op, value]
           properties:
@@ -547,6 +553,7 @@ components:
             key: { type: string }
             op: { type: string, enum: [incr, append, remove, merge] }
             value: {}
+            ttl: { type: integer, minimum: 1, maximum: 2592000, description: "v0.22: 残す秒数。省略 = 今の期限のまま" }
         - type: object
           required: [type, fn]
           properties:
@@ -568,6 +575,7 @@ components:
             session: { $ref: "#/components/schemas/CustomSession" }
             participants: { type: array, items: { $ref: "#/components/schemas/CustomParticipant" } }
             vars: { $ref: "#/components/schemas/CustomVars" }
+            now: { type: integer, description: "v0.22: Central の時刻(エポックミリ秒)。ホストは端末の時計とのずれを直して page.open / page.event の now に使う" }
         - type: object
           required: [type, key, value, rev, by]
           properties:
@@ -575,7 +583,9 @@ components:
             key: { type: string, description: 書き換え後のキー(me. → @<accountId>.) }
             value: { description: null = 消えた }
             rev: { type: integer }
-            by: { type: string, format: uuid }
+            by: { type: [string, "null"], format: uuid, description: "書いた人。expired / evicted で消えたときは null" }
+            expiresAt: { type: integer, description: "v0.22: 期限(エポックミリ秒)" }
+            reason: { type: string, enum: [expired, evicted, removedByOwner], description: "v0.22: 書いた人が消したのでないときの消えた理由" }
         - type: object
           required: [type, fn, args, from]
           properties:

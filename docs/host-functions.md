@@ -25,9 +25,10 @@ let r = host_call("storage.set", json!({"ns": "safe", "key": "greets", "value": 
 | `geometry.lookup` | 画面上の矩形検索 | `fow.system` | 🔶(登録簿はホスト側実装済み — `fow.open` の `anchor` から使える) |
 | `page.render` | ページ型(slot `page`)のページの RRL を丸ごと差し替える `{token, root, title?}` → [slots.md §2.13](slots.md) | `render` | ✅ v0.18 |
 | `page.end` | プラグインが自分で終わる `{token}`(surface `swing` では見終えたことにして次へ)→ [slots.md §2.13](slots.md) | `render` | ✅ v0.19 |
-| `shared.set` | shared のサーバー変数を書く `{token, key, value, ifRev?}`(`me.` → `@<accountId>.`、`null` で消す) | `shared.session` | ✅ v0.18 |
-| `shared.op` | サーバー変数を原子的に `{token, key, op: incr\|append\|remove\|merge, value}` | `shared.session` | ✅ v0.18 |
+| `shared.set` | shared のサーバー変数を書く `{token, key, value, ifRev?, ttl?}`(`me.` → `@<accountId>.`、`null` で消す。`ttl` = 残す秒数、v0.22) | `shared.session` | ✅ v0.18 |
+| `shared.op` | サーバー変数を原子的に `{token, key, op: incr\|append\|remove\|merge, value, ttl?}` | `shared.session` | ✅ v0.18 |
 | `shared.call` | 参加者全員(自分も)へ `page.event {type: "call", fn, args, from}` を配る `{token, fn, args}` | `shared.session` | ✅ v0.18 |
+| `media.editor.open` | メディア編集画面を SVG モードで開く `{token, format: "svg", aspect?, svg?, title?}` → `page.event {type: "edited", svg}` / `{type: "editCancelled"}` → [slots.md §2.13](slots.md) | `render` | ✅ v0.22 |
 
 ## shared(ページ型のサーバー変数 / 関数、v0.18)の例
 
@@ -37,10 +38,14 @@ host::shared_op(&token, "counter", "incr", json!(1));            // 全員の co
 host::shared_set(&token, "me.vote", json!(2), None);              // 自分の票(サーバーが @<accountId>.vote に書き換える)
 host::shared_call(&token, "celebrate", json!({}));                // 全員(自分も)に page.event {type:"call", fn:"celebrate"}
 host::page_render(&token, root, None);                            // 受けた page.event {type:"var"} で描き直す
+host::shared_set_ttl(&token, "me.paint", json!({"svg": svg}), 86_400); // v0.22: 1 日で Central が消す(var {value: null, reason: "expired"})
+host::media_editor_open(&token, "3:4", Some(&svg), None);         // v0.22: SVG の落書き → page.event {type:"edited", svg}
 ```
 
 - **反映は必ず `page.event {type: "var", key, value, rev, by}` で届く**(自分の書き込みも)。手元で先に値を変えない。
 - セッションが無い(solo / 1 人で開いた / `closed` のあと)ときは `E01`。キーの規則と上限は [slots.md §2.13](slots.md)。
+- (v0.22)時刻は `page.open` / `page.event` / RRL のイベントの **`now`**(エポックミリ秒)を使う(wasm では `SystemTime::now` がトラップする)。
+  期限は `vars` / `var` の `expiresAt`。消えた理由は `var` の `reason`(`expired` / `evicted` / `removedByOwner`)。
 
 ## storage の例(hello プラグインの `greet`)
 

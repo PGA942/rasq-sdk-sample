@@ -110,6 +110,16 @@ rounded = round(raw ÷ roundToJpy) × roundToJpy                   … round は
 
 式が支払いまでに変わったら、Central は払わせずに見積もり直して見せ直す(`409 fee_changed`)。
 
+### 5.1 サーバー変数の上限を広げる宣言(`sharedLimits`、契約 v0.22)
+
+ページ型の shared がマニフェストに **`page.sharedLimits`**(値 1 つ 16 KiB / 1 セッション 1 MiB を超えて使う、[slots.md §2.13](slots.md))を
+書いた版は、**強化審査**の対象になる(運営の保存と転送の負担が増えるため、使い方と量の妥当さを見る)。
+
+- **リリース版からは、宣言した版の審査料を割り増す**(式の上に倍率を掛ける。倍率は運営が決めて `payments/config` に出す。強めに上げる予定)。
+- **β では割り増さない**(審査だけ)。
+- 申込みの `feeBasis` に **`sharedLimits`**(宣言の有無、`true` / `false`)を残す(Central S-106)。割り増しを始めたら、掛けた倍率も残す。
+- `rasq check` は宣言に警告を出し(強化審査・リリース版の割り増し)、`rasq fee` は宣言のある配布物にその旨を出す(額は β の式のまま)。
+
 ## 6. 手元で数える(`rasq fee`)
 
 ```sh

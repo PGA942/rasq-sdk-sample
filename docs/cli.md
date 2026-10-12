@@ -195,7 +195,7 @@ rasq call rmqr viewer.open --args '{"token":"v1","mimeType":"image/png","width":
 
 | 呼ぶと panic するもの | よくある入り口 | 代わり |
 |---|---|---|
-| 時刻(`SystemTime::now` / `Instant::now` / `chrono::Utc::now`) | 結果に timestamp を付けるライブラリ(例: `rxing` の Reader が作る `RXingResult`) | 時刻を使わない下位 API を直接呼ぶ。時刻が要るなら呼び出し元(ホストの args)からもらう |
+| 時刻(`SystemTime::now` / `Instant::now` / `chrono::Utc::now`) | 結果に timestamp を付けるライブラリ(例: `rxing` の Reader が作る `RXingResult`) | 時刻を使わない下位 API を直接呼ぶ。時刻が要るなら呼び出し元(ホストの args)からもらう(ページ型は v0.22 から `page.open` / `page.event` / RRL のイベントの `now`、エポックミリ秒) |
 | 乱数(`getrandom` の既定) | `rand` / `uuid` / ハッシュの種 | 種を args / `storage` からもらう、決定的な生成にする |
 | スレッド / ファイル / ソケット | `rayon`、`std::fs`、`std::net` | 単一スレッド、`storage.*` / `net.fetch`(ホスト関数) |
 

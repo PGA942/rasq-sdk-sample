@@ -91,6 +91,11 @@
       "then": { "properties": { "page": { "properties": { "mode": { "const": "shared" } } } } }
     },
     {
+      "$comment": "sharedLimits(サーバー変数の上限を広げる、v0.22)は shared だけ。",
+      "if": { "properties": { "page": { "required": ["sharedLimits"] } }, "required": ["page"] },
+      "then": { "properties": { "page": { "properties": { "mode": { "const": "shared" } } } } }
+    },
+    {
       "$comment": "profile.host(持ち主だけのホスト用ページ)は profile と一緒に書く(v0.21、rasq-client D-446)。",
       "if": { "properties": { "page": { "properties": { "surfaces": { "contains": { "const": "profile.host" } } }, "required": ["surfaces"] } }, "required": ["page"] },
       "then": { "properties": { "page": { "properties": { "surfaces": { "contains": { "const": "profile" } } } } } }
@@ -119,7 +124,17 @@
           "default": ["page"],
           "description": "どこから開けるか。page = 単独のページ(サイドメニューの「プラグイン」やストアから)、astell = AsTell のルームにデプロイ(shared のみ)、profile = RASQ アカウントのページにタイルとして置く(solo は訪問者それぞれの端末で完結、shared は持ち主のプロフィールごとの 1 セッションを訪問者で共有)、profile.host = profile で置いた持ち主だけが開けるホスト用ページ(v0.21。訪問者には出ない、持ち主だけが変えられる設定・管理用。profile と一緒に書く)、swing = RASQ の Swing 向けに作った(全画面、v0.19)。v0.20 から shared も書け、書いていなくても親子関係の無いページ型は Swing で配れる(shared は作った人のセッションに入る、docs/slots.md §2.13)"
         },
-        "maxParticipants": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50, "description": "shared の 1 セッションに入れる人数(既定 50、上限 200)。超えると WS が 409" }
+        "maxParticipants": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50, "description": "shared の 1 セッションに入れる人数(既定 50、上限 200)。超えると WS が 409" },
+        "sharedLimits": {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "description": "v0.22(docs/slots.md §2.13): サーバー変数の上限を既定より広げる宣言(shared だけ)。値 1 つ 16 KiB / 1 セッション合計 1 MiB を超えて使うときに書く。宣言した版は強化審査の対象で、Central は審査を通った版でだけ効かせる。リリース版からは審査料が割り増し(docs/REVIEW_FEE.md §5.1。β は審査だけ)。ホスト(セッションの持ち主)ごとの総量 16 MiB(無料版)の内側で効く",
+          "properties": {
+            "valueBytes": { "type": "integer", "minimum": 16384, "maximum": 262144, "description": "値 1 つの上限(JSON のバイト数)。既定 16 KiB(16384)、天井 256 KiB(262144)" },
+            "totalBytes": { "type": "integer", "minimum": 1048576, "maximum": 8388608, "description": "1 セッションの値の合計の上限(JSON のバイト数)。既定 1 MiB(1048576)、天井 8 MiB(8388608)" }
+          }
+        }
       }
     },
     "network": {

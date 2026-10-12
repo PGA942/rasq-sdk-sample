@@ -143,6 +143,10 @@ pub fn check_manifest(v: &Validator, registry: &[Slot], m: &Value, declared_slot
             f.warnings.push("page.maxParticipants は shared のときだけ意味があります".into());
         }
     }
+    // v0.22: サーバー変数の上限を広げる宣言は強化審査(shared だけ、はスキーマが見る)。
+    if m["page"]["sharedLimits"].is_object() {
+        f.warnings.push("page.sharedLimits(サーバー変数の上限を広げる)は強化審査の対象です。リリース版からは審査料が割り増しになります(β は審査だけ。docs/REVIEW_FEE.md §5.1)".into());
+    }
     if let (Some(cv), Some(mv)) = (cargo_version, m["version"].as_str()) {
         if cv != mv {
             f.warnings.push(format!("Cargo.toml の version {cv} と manifest の version {mv} が違います"));
@@ -250,6 +254,15 @@ mod tests {
         // solo + shared.session は警告
         let f = check_manifest(&v, &reg, &base(json!(["render", "shared.session"]), json!({"mode": "solo"})), Some("page"), None);
         assert!(f.errors.is_empty() && f.warnings.iter().any(|w| w.contains("shared.session")), "{:?} {:?}", f.errors, f.warnings);
+        // v0.22: sharedLimits は shared だけ(天井の内側)、宣言は強化審査の警告
+        let f = check_manifest(&v, &reg, &base(json!(["render", "shared.session"]), json!({"mode": "shared", "sharedLimits": {"valueBytes": 65536, "totalBytes": 4194304}})), Some("page"), None);
+        assert!(f.errors.is_empty() && f.warnings.iter().any(|w| w.contains("sharedLimits")), "{:?} {:?}", f.errors, f.warnings);
+        let f = check_manifest(&v, &reg, &base(json!(["render"]), json!({"mode": "solo", "sharedLimits": {"valueBytes": 65536}})), Some("page"), None);
+        assert!(!f.errors.is_empty());
+        let f = check_manifest(&v, &reg, &base(json!(["render", "shared.session"]), json!({"mode": "shared", "sharedLimits": {"valueBytes": 262145}})), Some("page"), None);
+        assert!(!f.errors.is_empty(), "over the 256 KiB ceiling");
+        let f = check_manifest(&v, &reg, &base(json!(["render", "shared.session"]), json!({"mode": "shared", "sharedLimits": {}})), Some("page"), None);
+        assert!(!f.errors.is_empty(), "empty sharedLimits");
     }
 
     #[test]
