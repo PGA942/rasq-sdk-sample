@@ -586,12 +586,14 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
   → 戻り **`{root: Node, title?: string}`**(ページの RRL。表示は全画面のページで、**ヘッダーと戻るはホスト**)。
   `session` は shared で、セッションに入っているときだけ載る(無い = 1 人で開いた。solo と同じに動けばよい):
   ```json
-  { "id": "cs_…", "scope": "room:<roomId>", "role": "owner",
+  { "id": "cs_…", "scope": "room:<roomId>", "role": "owner", "ownerAccountId": "<accountId>",
     "participants": [ { "accountId": "…", "handle": "…", "displayName": "…" } ],
     "vars": { "counter": { "value": 3, "rev": 7, "by": "<accountId>" },
               "@<accountId>.paint": { "value": { "svg": "<svg …>" }, "rev": 2, "by": "<accountId>", "expiresAt": 1791936000000 } } }
   ```
-  `role` = `owner`(セッションを作った人 / プロフィールの持ち主 / ルームのオーナー・モデレーター)か `member`。`vars` = 今のサーバー変数
+  `role` = `owner`(セッションを作った人 / プロフィールの持ち主 / ルームのオーナー・モデレーター)か `member`。
+  `ownerAccountId` = (v0.22)セッションの持ち主(作った人 / プロフィールの持ち主)。持ち主だけが書ける設定を `@<ownerAccountId>.…` に置けば、
+  参加者はそのキーで読める(ルームのモデレーターも `role` は `owner` だが、`ownerAccountId` は持ち主 1 人)。`vars` = 今のサーバー変数
   (`rev` = そのキーの版、`by` = 最後に書いた人、`expiresAt` = (v0.22)期限のエポックミリ秒。期限の無いキーには無い)。
 - `page.event {token, type, now, ...}` — ページを開いている間の通知(v0.22: どの `type` にも `now` = いまの時刻、エポックミリ秒):
 
