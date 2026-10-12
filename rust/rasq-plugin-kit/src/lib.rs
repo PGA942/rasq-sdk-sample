@@ -488,6 +488,51 @@ pub mod host {
     pub fn shared_call(token: &str, fn_name: &str, args: Value) -> Value {
         host_call("shared.call", json!({"token": token, "fn": fn_name, "args": args}))
     }
+    /// `shared.set {token, key, value, ttl}`(v0.22): 期限つきで書く。`ttl_secs` 秒(1〜2,592,000)で Central が消し、
+    /// 全員へ `page.event {type: "var", value: null, reason: "expired"}` が届く。
+    pub fn shared_set_ttl(token: &str, key: &str, value: Value, ttl_secs: u32) -> Value {
+        host_call("shared.set", json!({"token": token, "key": key, "value": value, "ttl": ttl_secs}))
+    }
+    /// `shared.op {token, key, op, value, ttl}`(v0.22): 原子的な操作と一緒に期限を付け直す。
+    pub fn shared_op_ttl(token: &str, key: &str, op: &str, value: Value, ttl_secs: u32) -> Value {
+        host_call("shared.op", json!({"token": token, "key": key, "op": op, "value": value, "ttl": ttl_secs}))
+    }
+    /// `media.editor.open {token, format: "svg", aspect, svg?, title?}`(v0.22、slot page): メディア編集画面を SVG モードで開く。
+    /// 保存で `page.event {type: "edited", svg, width, height}`、閉じたら `{type: "editCancelled"}`。`svg` を渡すと続きから描ける。
+    pub fn media_editor_open(token: &str, aspect: &str, svg: Option<&str>, title: Option<&str>) -> Value {
+        let mut a = json!({"token": token, "format": "svg", "aspect": aspect});
+        if let Some(s) = svg {
+            a["svg"] = json!(s);
+        }
+        if let Some(t) = title {
+            a["title"] = json!(t);
+        }
+        host_call("media.editor.open", a)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// data: URI(RRL の Image に置く画像)
+// ---------------------------------------------------------------------------
+
+/// 標準の base64(`+` `/`、`=` で埋める)。
+pub fn base64_encode(bytes: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        out.push(T[(n >> 18) as usize & 63] as char);
+        out.push(T[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+/// SVG の文字列を `Image.p.src` に置ける `data:image/svg+xml;base64,…` にする(v0.22、docs/rrl.md の「SVG」。ホストが消毒して描く)。
+pub fn svg_data_uri(svg: &str) -> String {
+    format!("data:image/svg+xml;base64,{}", base64_encode(svg.as_bytes()))
 }
 
 // ---------------------------------------------------------------------------
@@ -555,6 +600,16 @@ pub fn manifest(id: &str, name: &str, version: &str, kind: &str, description: &s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base64_and_svg_data_uri() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+        assert_eq!(svg_data_uri("<svg/>"), "data:image/svg+xml;base64,PHN2Zy8+");
+    }
 
     #[test]
     fn patch_and_rev() {

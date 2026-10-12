@@ -38,6 +38,23 @@ pub struct Counted {
     /// 展開した中身のディレクトリを数えた(配布物ではない)。
     pub unpacked_dir: bool,
     pub count: PackageCount,
+    /// マニフェストに `page.sharedLimits` がある(契約 v0.22: 強化審査、リリース版から審査料の割り増し。docs/REVIEW_FEE.md §5.1)。
+    pub shared_limits: bool,
+}
+
+/// 配布物のマニフェスト(root と子)のどれかが `page.sharedLimits` を宣言しているか。読めなければ false(数えるのは別)。
+fn declares_shared_limits(bytes: &[u8]) -> bool {
+    let Ok(entries) = crate::pkg::extract(bytes) else { return false };
+    let Some(bundle) = entries.first().and_then(|e| serde_json::from_slice::<Value>(&e.bytes).ok()) else { return false };
+    let mut manifests: Vec<&str> = bundle["root"]["manifest"].as_str().into_iter().collect();
+    manifests.extend(bundle["children"].as_array().into_iter().flatten().filter_map(|c| c["manifest"].as_str()));
+    manifests.iter().any(|path| {
+        entries
+            .iter()
+            .find(|e| e.path == *path)
+            .and_then(|e| serde_json::from_slice::<Value>(&e.bytes).ok())
+            .is_some_and(|m| m["page"]["sharedLimits"].is_object())
+    })
 }
 
 /// パスから数える。ファイルは配布物(`.rspkg` / 旧来の `.rasqpkg`)、ディレクトリは中に配布物があればそれぞれを、無ければ中身(通常ファイルを再帰で)を数える。
@@ -45,7 +62,8 @@ pub fn count_path(path: &Path) -> Result<Vec<Counted>> {
     if path.is_file() {
         let bytes = std::fs::read(path).with_context(|| format!("{} を読めません", path.display()))?;
         let count = rasq_review_pieces::count_package(&bytes).map_err(|e| anyhow!("{}: {e}", path.display()))?;
-        return Ok(vec![Counted { label: path.display().to_string(), unpacked_dir: false, count }]);
+        let shared_limits = declares_shared_limits(&bytes);
+        return Ok(vec![Counted { label: path.display().to_string(), unpacked_dir: false, count, shared_limits }]);
     }
     if !path.is_dir() {
         bail!("{} がありません", path.display());
@@ -74,7 +92,9 @@ pub fn count_path(path: &Path) -> Result<Vec<Counted>> {
         })
         .collect::<Result<_>>()?;
     let count = rasq_review_pieces::count_files(data.iter().map(|(p, b)| (p.as_str(), b.as_slice())));
-    Ok(vec![Counted { label: path.display().to_string(), unpacked_dir: true, count }])
+    // 展開した中身: 置いてある JSON のどれかが page.sharedLimits を持つか。
+    let shared_limits = data.iter().any(|(p, b)| p.ends_with(".json") && serde_json::from_slice::<Value>(b).is_ok_and(|m| m["page"]["sharedLimits"].is_object()));
+    Ok(vec![Counted { label: path.display().to_string(), unpacked_dir: true, count, shared_limits }])
 }
 
 fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
@@ -147,6 +167,7 @@ pub fn fee_cmd(paths: &[PathBuf], as_json: bool, files: bool, orgate: Option<&st
                     "pieces": c.count.pieces,
                     "amountJpy": basis.as_ref().map(|b| b.amount_jpy(c.count.pieces)),
                     "basis": basis,
+                    "sharedLimits": c.shared_limits,
                     "files": c.count.files,
                 })
             })
@@ -188,6 +209,9 @@ pub fn fee_cmd(paths: &[PathBuf], as_json: bool, files: bool, orgate: Option<&st
                 formula_text(b, c.count.pieces)
             ),
             None => println!("  審査料: {source}"),
+        }
+        if c.shared_limits {
+            println!("  page.sharedLimits を宣言しています: 強化審査の対象です。リリース版からは審査料が割り増しになります(β の額は上のまま。docs/REVIEW_FEE.md §5.1)");
         }
     }
     if orgate.is_none() {

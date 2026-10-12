@@ -1,6 +1,6 @@
 {
   "schema": "rasq.slots/1",
-  "$comment": "スロット登録簿 (D-005)。プラグインが差し込める面を 1 か所で定義する。マニフェストの `slots` はここにある id だけを指せる(schema/validate.py が照合)。`status: planned` は仮案(RRL&プラグイン周り §17)から採った未実装の面で、id だけ先に予約する。 tiers: 権限ティア(PROTOCOL §6 V1)。サイドロード(未審査)は content だけ、media は tag だけ、action / avatar / full / page は審査済みのみ。 permissions.required はホスト(rasq-client slot_plugins.dart)が v1 で実際に見る権限(fow.* / storage.* / mute.words)だけ。操作語彙(replace_media / register_action など、CONTRACT §8)は審査で付くので optional。 v0.14: ボタン共通の auto(初期状態 = temp)/ placement(auto | manual)を manifest.actions に追加。全体のオン / オフ(switch)はホスト設定。docs/slots.md §2.11。 v0.15: astell.action も manifest.actions で宣言(1 つ = ルーム下段のボタン 1 つ、astell.open に action)。docs/slots.md §2.1。 v0.16: 着せ替え(テーマ)パック kind = theme(スロットではない。wasm 無しで manifest.theme と assets[] の use = theme の画像だけ)。docs/slots.md §2.12。 v0.17: 着せ替えのレイヤーに gradient(線形グラデーション。asset とどちらか 1 つ)と height(辺に寄せた帯)、面に onColor(文字とアイコンの色)。docs/slots.md §2.12。 v0.18: page(ページ型プラグイン = カスタムプラグイン)を stable に。manifest.page(mode = solo | shared、surfaces = page | astell | profile)、shared のサーバー変数 / 関数(shared.set / shared.op / shared.call、権限 shared.session。Central が中継・保持、rasq-central S-048)。docs/slots.md §2.13(rasq-client D-357)。 v0.19: page の surfaces に swing(RASQ の Swing として配る。solo のみ、全画面)、page.event の paused / resumed、ホスト関数 page.end(プラグインが自分で終わる)。rasq-central S-056 / rasq-client D-377。 v0.20: 親子関係の無い(入れ物に 1 つだけで requires の無い)ページ型は surface swing を書かなくても Swing で配れ、shared も配れる(見る人は作った人のセッション = scope swing:<swingId> か link: / profile: に入る)。rasq-central S-079 / rasq-client D-424。 v0.21: page の surfaces に profile.host(RASQ アカウントのページに置いた持ち主だけに出るホスト用ページ。page.open の surface = profile.host、context は profile と同じ。profile と一緒に書く。サイドロードを RASQ のページに置けるのは solo だけ)。rasq-client D-446。",
+  "$comment": "スロット登録簿 (D-005)。プラグインが差し込める面を 1 か所で定義する。マニフェストの `slots` はここにある id だけを指せる(schema/validate.py が照合)。`status: planned` は仮案(RRL&プラグイン周り §17)から採った未実装の面で、id だけ先に予約する。 tiers: 権限ティア(PROTOCOL §6 V1)。サイドロード(未審査)は content だけ、media は tag だけ、action / avatar / full / page は審査済みのみ。 permissions.required はホスト(rasq-client slot_plugins.dart)が v1 で実際に見る権限(fow.* / storage.* / mute.words)だけ。操作語彙(replace_media / register_action など、CONTRACT §8)は審査で付くので optional。 v0.14: ボタン共通の auto(初期状態 = temp)/ placement(auto | manual)を manifest.actions に追加。全体のオン / オフ(switch)はホスト設定。docs/slots.md §2.11。 v0.15: astell.action も manifest.actions で宣言(1 つ = ルーム下段のボタン 1 つ、astell.open に action)。docs/slots.md §2.1。 v0.16: 着せ替え(テーマ)パック kind = theme(スロットではない。wasm 無しで manifest.theme と assets[] の use = theme の画像だけ)。docs/slots.md §2.12。 v0.17: 着せ替えのレイヤーに gradient(線形グラデーション。asset とどちらか 1 つ)と height(辺に寄せた帯)、面に onColor(文字とアイコンの色)。docs/slots.md §2.12。 v0.18: page(ページ型プラグイン = カスタムプラグイン)を stable に。manifest.page(mode = solo | shared、surfaces = page | astell | profile)、shared のサーバー変数 / 関数(shared.set / shared.op / shared.call、権限 shared.session。Central が中継・保持、rasq-central S-048)。docs/slots.md §2.13(rasq-client D-357)。 v0.19: page の surfaces に swing(RASQ の Swing として配る。solo のみ、全画面)、page.event の paused / resumed、ホスト関数 page.end(プラグインが自分で終わる)。rasq-central S-056 / rasq-client D-377。 v0.20: 親子関係の無い(入れ物に 1 つだけで requires の無い)ページ型は surface swing を書かなくても Swing で配れ、shared も配れる(見る人は作った人のセッション = scope swing:<swingId> か link: / profile: に入る)。rasq-central S-079 / rasq-client D-424。 v0.21: page の surfaces に profile.host(RASQ アカウントのページに置いた持ち主だけに出るホスト用ページ。page.open の surface = profile.host、context は profile と同じ。profile と一緒に書く。サイドロードを RASQ のページに置けるのは solo だけ)。rasq-client D-446。 v0.22: shared のサーバー変数に TTL(shared.set / shared.op の ttl、vars / page.event の expiresAt と削除の reason = expired | evicted | removedByOwner)、page.open と全 page.event の now(エポックミリ秒)、manifest.page.sharedLimits(値 / セッションの上限を広げる。強化審査)、owner による @<accountId>. のキーの削除、ホスト関数 media.editor.open(SVG の落書き → page.event edited / editCancelled)、RRL の Image に data:image/svg+xml と Grid の aspectRatio。ホスト(セッションの持ち主)ごとの総量 16 MiB(無料版)を超える書き込みは期限の早い順に前倒しで消す。rasq-central S-106 / rasq-client D-465。",
   "tiers": {
     "content": {
       "sideload": true,
@@ -765,7 +765,8 @@
           "app-owned の back / escape を奪えない(ヘッダーと戻るはホスト)",
           "BottomNavigation / safe area はホスト",
           "開く場所は manifest.page.surfaces(page = 単独のページ / astell = AsTell のルームにデプロイ(shared のみ)/ profile = RASQ アカウントのページのタイル / profile.host = そのタイルの持ち主だけのホスト用ページ(v0.21、profile と一緒に) / swing = RASQ の Swing 向け(v0.19。v0.20 から shared も可、書かなくても親子関係が無ければ Swing で配れる))",
-          "shared のセッションは Central が持つ(scope = room:<roomId> / profile:<accountId> / link:<sessionId>、rasq-central S-048)"
+          "shared のセッションは Central が持つ(scope = room:<roomId> / profile:<accountId> / link:<sessionId>、rasq-central S-048)",
+          "サーバー変数は TTL で消える(v0.22。期限 / ホストの総量 16 MiB 超えの前倒し / owner の削除は page.event var の reason で分かる)"
         ]
       },
       "calls": [
@@ -779,6 +780,7 @@
         "shared.set",
         "shared.op",
         "shared.call",
+        "media.editor.open",
         "fow.open",
         "fow.close",
         "storage.get",

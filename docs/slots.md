@@ -1,4 +1,4 @@
-# RASQ スロットプラグイン契約 v0.21(正典)
+# RASQ スロットプラグイン契約 v0.22(正典)
 
 > **ここが正典。** 以前は `orgate-question/plugin-sample/*/CONTRACT.md` に同じ文書が複製されていたが、v0.8 から
 > 各リポジトリの `CONTRACT.md` はこのファイルへのポインタだけになった。節番号(§2.1〜§2.9 / §3 / §4 / §5)は複製時代のまま。
@@ -537,6 +537,7 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
 | `title` | 文字列(`name`) | ページのヘッダーとタイルの名前。`page.open` / `page.render` の `title` で上書きできる |
 | `icon` | Material Icon の名前 | タイル / サイドメニュー / AsTell のカード |
 | `maxParticipants` | 1〜200(50) | shared の 1 セッションに入れる人数。超えると入れない(WS が 409) |
+| `sharedLimits` | `{valueBytes?, totalBytes?}`(無し) | (v0.22)サーバー変数の上限を広げる(shared だけ)。下の「キーと上限」。**宣言した版は強化審査**、リリース版からは審査料が割り増し |
 
 - **`page`** = 単独のページ(サイドメニューの「プラグイン」やストアから)。shared なら招待リンク(`link:` のセッション)で人を呼べる。
 - **`astell`** = AsTell のルームに**デプロイ**する(**`shared` のみ**。スキーマが見る)。参加者は共有に `kind: "plugin"` の提案を出し、
@@ -577,22 +578,26 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
 
 **ホスト → プラグイン(`call`)** — args はすべて**平ら**(`page.event` の中身も `{token, type, ...}` の一段):
 
-- `page.open {token, surface: "page"|"astell"|"profile"|"profile.host"|"swing", context: {roomId?, profileHandle?, profileAccountId?, swingId?, data?, author?}, me: {accountId, handle, displayName}, session?: Session, size: {width, height}}`
+- `page.open {token, surface: "page"|"astell"|"profile"|"profile.host"|"swing", context: {roomId?, profileHandle?, profileAccountId?, swingId?, data?, author?}, me: {accountId, handle, displayName}, session?: Session, size: {width, height}, now}`
   (v0.20: surface `swing` でも shared なら `session` が載る。scope は `swing:<swingId>` か、作った人が付けた `link:` / `profile:`)
   (v0.21: surface `profile.host` は持ち主だけ。`context` は `profile` と同じ `profileHandle` / `profileAccountId`、shared なら `session` は `profile:<accountId>`)
+  (v0.22: **`now`** = いまの時刻(エポックミリ秒)。wasm32 では `SystemTime::now` がトラップするので([cli.md](cli.md) の落とし穴)、時刻はホストからもらう。
+  ホストは Central の時計に合わせた値を渡す(welcome の `now` との差で端末の時計のずれを直す)。`page.event` と RRL のイベントにも毎回載る)
   → 戻り **`{root: Node, title?: string}`**(ページの RRL。表示は全画面のページで、**ヘッダーと戻るはホスト**)。
   `session` は shared で、セッションに入っているときだけ載る(無い = 1 人で開いた。solo と同じに動けばよい):
   ```json
   { "id": "cs_…", "scope": "room:<roomId>", "role": "owner",
     "participants": [ { "accountId": "…", "handle": "…", "displayName": "…" } ],
-    "vars": { "counter": { "value": 3, "rev": 7, "by": "<accountId>" } } }
+    "vars": { "counter": { "value": 3, "rev": 7, "by": "<accountId>" },
+              "@<accountId>.paint": { "value": { "svg": "<svg …>" }, "rev": 2, "by": "<accountId>", "expiresAt": 1791936000000 } } }
   ```
-  `role` = `owner`(セッションを作った人 / プロフィールの持ち主)か `member`。`vars` = 今のサーバー変数(`rev` = そのキーの版、`by` = 最後に書いた人)。
-- `page.event {token, type, ...}` — ページを開いている間の通知:
+  `role` = `owner`(セッションを作った人 / プロフィールの持ち主 / ルームのオーナー・モデレーター)か `member`。`vars` = 今のサーバー変数
+  (`rev` = そのキーの版、`by` = 最後に書いた人、`expiresAt` = (v0.22)期限のエポックミリ秒。期限の無いキーには無い)。
+- `page.event {token, type, now, ...}` — ページを開いている間の通知(v0.22: どの `type` にも `now` = いまの時刻、エポックミリ秒):
 
   | `type` | 残りのフィールド | いつ |
   |---|---|---|
-  | `var` | `key, value, rev, by` | サーバー変数が変わった(**自分の書き込みも届く**。`value: null` = 消えた)。`key` は書き換え後(`me.vote` → `@<accountId>.vote`) |
+  | `var` | `key, value, rev, by, expiresAt?, reason?` | サーバー変数が変わった(**自分の書き込みも届く**。`value: null` = 消えた)。`key` は書き換え後(`me.vote` → `@<accountId>.vote`)。(v0.22)`expiresAt` = 期限(あれば)。`reason` = 書いた人が消したのでないときの消えた理由: `expired`(期限が来た)/ `evicted`(ホストの総量を超えたので期限の早い順に前倒しで消した)/ `removedByOwner`(セッションの owner が消した)。`expired` / `evicted` の `by` は `null` |
   | `call` | `fn, args, from: {accountId, handle, displayName}` | 誰かの `shared.call`(**自分のも届く**) |
   | `joined` | `participant: {accountId, handle, displayName}` | 参加者が入った |
   | `left` | `accountId` | 参加者が出た |
@@ -601,9 +606,11 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
   | `resized` | `size: {width, height}` | ページの大きさが変わった |
   | `paused` | — | (v0.19、surface `swing`)見る人が「全画面から縮小」を押した。ホストはページをぼかして入力を止めている。動き(音・時間・アニメーション)を止める |
   | `resumed` | — | (v0.19、surface `swing`)全画面に戻った |
+  | `edited` | `svg, width, height` | (v0.22)`media.editor.open` で開いた編集画面で保存した。`svg` は許可リストで消毒した SVG の文字列(`width` / `height` はその `viewBox` の大きさ) |
+  | `editCancelled` | — | (v0.22)`media.editor.open` で開いた編集画面を保存せずに閉じた |
 
-- RRL のイベント: `on: {"tap": "<fn>"}` などは FOW と同じく `<fn>` を call する。args は **`{token, nodeId, kind, ...payload}`**
-  (payload のフィールドは**平らに展開**。例: `RadioListTile` の `change` = `{token, nodeId, kind: "change", value}`)。
+- RRL のイベント: `on: {"tap": "<fn>"}` などは FOW と同じく `<fn>` を call する。args は **`{token, nodeId, kind, now, ...payload}`**
+  (payload のフィールドは**平らに展開**。例: `RadioListTile` の `change` = `{token, nodeId, kind: "change", now, value}`。`now` は v0.22)。
 - 文字の入力は **`Input`**([`rrl.md`](rrl.md) の「入力欄 `Input`」、v0.18): `p: {hint?, value?, multiline?, maxLength?, submitLabel?, clearOnSubmit?}`、
   `on: {submit}` → `{token, nodeId, kind: "submit", text}`(`change` → `{…, text}` は打つたび。要らなければ書かない)。打ちかけの文字はホストが持つので、
   `page.render` で描き直しても消えない。
@@ -615,9 +622,10 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
 |---|---|---|
 | `page.render` | `{token, root, title?}` — ページの RRL を丸ごと差し替える | `render` |
 | `page.end` | `{token}` — (v0.19)プラグインが自分で終わる。surface `swing` では、その Swing を見終えたことにして次へ進む(ほかの surface では何もしない) | `render` |
-| `shared.set` | `{token, key, value, ifRev?}` — サーバー変数を書く(`value: null` で消す) | `shared.session` |
-| `shared.op` | `{token, key, op: "incr"\|"append"\|"remove"\|"merge", value}` — サーバー側で原子的に | `shared.session` |
+| `shared.set` | `{token, key, value, ifRev?, ttl?}` — サーバー変数を書く(`value: null` で消す)。`ttl` = 残す秒数(v0.22、下) | `shared.session` |
+| `shared.op` | `{token, key, op: "incr"\|"append"\|"remove"\|"merge", value, ttl?}` — サーバー側で原子的に | `shared.session` |
 | `shared.call` | `{token, fn, args}` — 参加者全員(自分も)へ `page.event {type: "call"}` を配る(サーバー関数 = 中継) | `shared.session` |
+| `media.editor.open` | `{token, format: "svg", aspect?, svg?, title?}` — (v0.22)メディア編集画面を **SVG モード**で開く(下) | `render` |
 
 - `shared.op`: `incr` = 数値に足す(無ければ 0 から)、`append` = 配列の末尾に足す(**上限 500 要素**、超えたら先頭から捨てる)、
   `remove` = 配列から等しい要素を 1 つ消す、`merge` = オブジェクトに浅くマージ。
@@ -625,26 +633,61 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
   プラグインは**手元で先に値を変えず**、`var` を受けて描き直す(全員が同じ順で同じ値を見る)。
 - ほかに使えるホスト関数: `fow.open` / `fow.close`(ページの子として開く)/ `storage.*`(`storage.safe`)/ `toast` / `url.open`。
 
+**落書き(SVG の編集、v0.22、rasq-client D-465)** — `media.editor.open {token, format: "svg", aspect?: "3:4", svg?, title?}`:
+
+- ホストのメディア編集画面を **SVG モード**で開く。**広い画面は第 3 カラム**(ページの横)、**狭い画面は全画面**。道具はホストのもの
+  (ペン / 消しゴム / 色 / 太さ / 取り消し)。縦横比は `aspect`(`"<w>:<h>"`、1〜16 の整数、既定 `"3:4"`)で固定。
+- `svg` を渡すと**続きから描ける**(64 KiB まで。ホストが下の許可リストで消毒してから読む。読めない部分は捨てる)。
+- 保存すると `page.event {type: "edited", svg, width, height}`、保存せずに閉じると `{type: "editCancelled"}`。
+  開いている間にもう一度呼ぶと、前のものを閉じて(`editCancelled`)開き直す。ページを閉じると編集画面も閉じる。
+- 出力の `svg` は `<svg viewBox="0 0 W H">` に、なぞった線を簡略化した `<path>` を並べたもの(`fill="none"`、`stroke` / `stroke-width` /
+  `stroke-linecap="round"` / `stroke-linejoin="round"`。消しゴムは描いた線を消す)。大きさは線の数で決まるので、サーバー変数に置くなら
+  値の上限(16 KiB、`sharedLimits` で広げられる)に入るかを確かめる。
+- 描くとき(RRL の `Image` の `data:image/svg+xml`、§3)も読むとき(`svg`)も、ホストは**許可リスト**で消毒する:
+  要素は `svg` / `g` / `path` / `polyline` / `polygon` / `line` / `rect` / `circle` / `ellipse`、属性は形と描き方(`viewBox` `d` `points`
+  `x` `y` `width` `height` `cx` `cy` `r` `rx` `ry` `x1` `y1` `x2` `y2` `fill` `stroke` `stroke-width` `stroke-linecap` `stroke-linejoin` `opacity`
+  `fill-opacity` `stroke-opacity`)だけ。`script` / `style` / `foreignObject` / `image` / `use` / `href` / `on*` / 外部参照(`url(...)`)は捨てる。
+
 **キーと上限**(サーバーが守る。外れたら書かずに `error`):
 
 - キーは `^[A-Za-z0-9_.:@-]{1,64}$`。**`me.` で始まるキーはサーバーが `@<accountId>.` に書き換える**(例: `me.vote` → `@<自分>.vote`)。
   **`@<accountId>.` で始まるキーはその本人だけが書ける**(読むのは全員)= 1 人 1 票の投票などに使う。
+  - (v0.22)**セッションの owner(`role: "owner"`)は、ほかの人の `@<accountId>.` のキーを消せる**(モデレーション)。
+    `shared.set {key: "@<その人>.x", value: null}` だけで、書き換え(`null` 以外)と `shared.op` はできない。
+    全員へ `var {value: null, by: <owner>, reason: "removedByOwner"}` が届く。
 - 値は JSON で **16 KiB まで**、1 セッション **256 キー・合計 1 MiB まで**。`call` の `args` は 16 KiB まで。
+  - (v0.22)マニフェストの **`page.sharedLimits: {valueBytes?, totalBytes?}`** で広げられる(天井: 値 **256 KiB** / セッション **8 MiB**)。
+    宣言した版は**強化審査**の対象で、Central は**審査を通った版**のセッションでだけ効かせる(共有セッションはもともと審査済みの版にしか作れない)。
+    **リリース版からは審査料が割り増し**になる(β では審査だけ、[REVIEW_FEE.md](REVIEW_FEE.md) §5.1)。`rasq check` は宣言に警告を出す。
+- (v0.22)**TTL**: `shared.set` / `shared.op` の **`ttl`**(秒、1〜2,592,000 = 30 日)で、そのキーに期限を付ける。
+  - 期限が来ると **Central が消し**、全員へ `var {value: null, by: null, reason: "expired"}` を配る(数秒の遅れはある)。
+    期限を過ぎたキーは、消す前でも welcome / `GET /custom/sessions/{id}` に出さない。
+  - `shared.set` で `ttl` を省くと**期限なし**(前の期限も外す)。`shared.op` で省くと**今の期限のまま**(`ttl` を渡せば付け直す)。
+  - 期限は `vars` / `var` の **`expiresAt`**(エポックミリ秒)で見える。残りを出すなら `expiresAt - now`。
+- (v0.22)**ホストの総量**: 無料版のホスト(β ではこれだけ)は、**1 ホスト 16 MiB**(ホスト = セッションの持ち主のアカウント。
+  そのアカウントが持つ**全部の共有プラグイン・全部のセッション**の値の合計)。超える書き込みが来ると、Central はそのホストの全セッションから
+  **期限の早い順に、時刻を待たずに消して**空ける(期限の無いキーは最後、その中は古い書き込みから。いま書くキーは消さない)。
+  消したキーは、そのセッションの全員へ `var {value: null, by: null, reason: "evicted"}`。空けても入らなければ書かずに `error`。
 - 1 接続あたり **20 通/秒まで**(超えたぶんは `error`)。
 
 **セッション**(Central、rasq-central S-048 / [`../openapi/store.yaml`](../openapi/store.yaml) の `/custom/*`): scope は `room:<roomId>` /
 `profile:<accountId>` / `link:<sessionId>` / `swing:<swingId>`(v0.20、S-079: Swing を作るときに Central が作り、その Swing を見られる人が入れる。
 Swing が消える / 取り下げられると閉じる)。作るのはホスト(`POST /custom/sessions`。`swing:` は `POST /swings` の `plugin.session`)、中身の同期は WS `/custom/sessions/{id}/ws`
-(`welcome` / `var` / `call` / `joined` / `left` / `conflict` / `error` / `closed`)。ホストは WS の通知を上の `page.event` に写す。
+(`welcome` / `var` / `call` / `joined` / `left` / `conflict` / `error` / `closed`)。ホストは WS の通知を上の `page.event` に写す
+(v0.22: `welcome` に Central の時刻 `now`、`var` / `vars` に `expiresAt` と `reason`)。
 プラグインは WS も Central も直接は見ない。
 
 - CLI: `rasq new page <name>`(雛形 = shared のカウンター。セッションが無ければ端末だけで数える)。`rasq check` は上のスキーマの規則
-  (`page` が要る / shared なら `shared.session` / `astell` は shared だけ / `profile.host` は `profile` と一緒)と、solo なのに `shared.session` / `maxParticipants` がある警告を見る。
+  (`page` が要る / shared なら `shared.session` / `astell` は shared だけ / `profile.host` は `profile` と一緒 / `sharedLimits` は shared だけ)と、
+  solo なのに `shared.session` / `maxParticipants` がある警告、`sharedLimits` の宣言(強化審査・リリース版の審査料の割り増し)の警告を見る。
 - ストアのカードの `pluginType` は、現在版のマニフェストの `slots` に `page` があれば **`custom`**(ほかより優先)。
 
 ## 3. RRL のホスト拡張(rasq-client D-167 以降。古いホストは無視/⚠ボックス)
 
 - `Image.p.src` に **`data:image/png;base64,…`** を受ける。`p.width` / `p.height` で大きさ指定。
+  (v0.22)**`data:image/svg+xml;base64,…`**(または `data:image/svg+xml,<URL エンコードした SVG>`)も受け、ホストが許可リストで消毒してから描く
+  (§2.13 の「落書き」、[rrl.md](rrl.md) の「SVG」)。`p.fit`(`contain` 既定 / `cover` / `fill`)。
+- (v0.22)`Grid.p.aspectRatio` = 1 マスの**幅 ÷ 高さ**(既定 1 = 正方形。3:4 の縦長なら `0.75`)。`Grid.p.columns` と一緒に使う。
 - `Stack` の子で `p.left` / `p.top`(+ `width` / `height`)があるものは絶対配置(`Positioned`)。
 - 新ノード **`Box`**: `p: {width, height, color, borderColor, borderWidth, radius, angle?(度、v0.6: 中心で回転して描く), label?(v0.6: 合わせる先の一覧に出す名前)}`、子を持てる。`on: {tap}` 可。
 - `Text.p` に `size` / `bold` / `color`。色は `#RRGGBB` か `#RRGGBBAA`(8 桁は末尾が不透明度)。`Icon.p.color` も同じ。
@@ -671,9 +714,10 @@ Swing が消える / 取り下げられると閉じる)。作るのはホスト(
 | `composer.text.replace` | `{token, start, end, text}` | スロット `composer.text` |
 | `viewer.overlay.set` | `{token, root}` | スロット `viewer.overlay` |
 | `page.render` | `{token, root, title?}`(§2.13、v0.18) | スロット `page` + `render` |
-| `shared.set` | `{token, key, value, ifRev?}`(§2.13) | スロット `page` + `shared.session` |
-| `shared.op` | `{token, key, op: incr\|append\|remove\|merge, value}`(§2.13) | スロット `page` + `shared.session` |
+| `shared.set` | `{token, key, value, ifRev?, ttl?}`(§2.13。`ttl` は v0.22) | スロット `page` + `shared.session` |
+| `shared.op` | `{token, key, op: incr\|append\|remove\|merge, value, ttl?}`(§2.13) | スロット `page` + `shared.session` |
 | `shared.call` | `{token, fn, args}`(§2.13) | スロット `page` + `shared.session` |
+| `media.editor.open` | `{token, format: "svg", aspect?, svg?, title?}`(§2.13、v0.22) | スロット `page` + `render` |
 
 `token` はホストが `call` で渡した値をそのまま返す(古い呼び出しに対する反映を捨てるため)。
 
