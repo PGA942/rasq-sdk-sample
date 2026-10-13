@@ -101,6 +101,9 @@ MFM 装飾は `transform` スパン(例: [`examples/mfm-body.rsl.json`](../examp
 - `path` の `d` は `M L H V C S Q T Z`(小文字の相対も)を読む。円弧 `A` は描かない。
 - 描く量の上限(下の「描く量の上限」)とは別に、SVG 1 枚は **64 KiB・要素 4,000 個・`d` / `points` の数 40,000 個**まで(超えた分は描かない)。
 - `p.fit` = `contain`(既定)/ `cover` / `fill`。`p.width` / `p.height` が無ければ親の幅に合わせ、`viewBox` の縦横比で高さを決める。
+- (v0.23、rasq-client D-472)**`data:image/svg+xml;zstd;base64,…`** = zstd で縮めた SVG(落書きの `edited` の `svgz` をそのまま、
+  `rasq-plugin-kit` の `svgz_data_uri`)。ホストは展開して(展開後も 64 KiB まで)から上と同じく消毒して描く。v0.22 以前のホストは描けない
+  (箱になる。`page.open` の `contract` で見分ける、[slots.md §2.13](slots.md))。
 
 ## Grid の 1 マスの縦横比(v0.22)
 

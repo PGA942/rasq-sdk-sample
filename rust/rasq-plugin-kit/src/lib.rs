@@ -535,6 +535,24 @@ pub fn svg_data_uri(svg: &str) -> String {
     format!("data:image/svg+xml;base64,{}", base64_encode(svg.as_bytes()))
 }
 
+/// zstd で縮めた SVG(`page.event {type: "edited"}` の `svgz` = zstd のフレームの標準の base64、v0.23)を `Image.p.src` に置ける
+/// `data:image/svg+xml;zstd;base64,…` にする。v0.23 のホスト(`page.open` の `contract` が `"0.23"` 以上)が展開・消毒して描く。
+/// `media.editor.open` の `svg` にもそのまま渡せる(続きから描く)。
+pub fn svgz_data_uri(svgz_b64: &str) -> String {
+    format!("data:image/svg+xml;zstd;base64,{svgz_b64}")
+}
+
+/// `page.open` の `contract`(ホストが話す契約の版、v0.23 から)が `want` 以上か。`"0.23"` のような `<major>.<minor>`。
+/// 無い(v0.22 以前のホスト)/ 読めないときは false。
+pub fn host_contract_at_least(args: &Value, want: (u32, u32)) -> bool {
+    let Some(v) = args.get("contract").and_then(Value::as_str) else { return false };
+    let mut it = v.split('.').map(|p| p.trim().parse::<u32>());
+    match (it.next(), it.next()) {
+        (Some(Ok(major)), Some(Ok(minor))) => (major, minor) >= want,
+        _ => false,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // export を生やすマクロ
 // ---------------------------------------------------------------------------
@@ -609,6 +627,18 @@ mod tests {
         assert_eq!(base64_encode(b"foo"), "Zm9v");
         assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
         assert_eq!(svg_data_uri("<svg/>"), "data:image/svg+xml;base64,PHN2Zy8+");
+        assert_eq!(svgz_data_uri("KLUv/QBYIQAAPHN2Zy8+"), "data:image/svg+xml;zstd;base64,KLUv/QBYIQAAPHN2Zy8+");
+    }
+
+    #[test]
+    fn host_contract() {
+        assert!(host_contract_at_least(&json!({"contract": "0.23"}), (0, 23)));
+        assert!(host_contract_at_least(&json!({"contract": "0.24"}), (0, 23)));
+        assert!(host_contract_at_least(&json!({"contract": "1.0"}), (0, 23)));
+        assert!(!host_contract_at_least(&json!({"contract": "0.22"}), (0, 23)));
+        assert!(!host_contract_at_least(&json!({}), (0, 23)));
+        assert!(!host_contract_at_least(&json!({"contract": "x"}), (0, 23)));
+        assert!(!host_contract_at_least(&json!({"contract": 23}), (0, 23)));
     }
 
     #[test]

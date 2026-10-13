@@ -28,7 +28,7 @@ let r = host_call("storage.set", json!({"ns": "safe", "key": "greets", "value": 
 | `shared.set` | shared のサーバー変数を書く `{token, key, value, ifRev?, ttl?}`(`me.` → `@<accountId>.`、`null` で消す。`ttl` = 残す秒数、v0.22) | `shared.session` | ✅ v0.18 |
 | `shared.op` | サーバー変数を原子的に `{token, key, op: incr\|append\|remove\|merge, value, ttl?}` | `shared.session` | ✅ v0.18 |
 | `shared.call` | 参加者全員(自分も)へ `page.event {type: "call", fn, args, from}` を配る `{token, fn, args}` | `shared.session` | ✅ v0.18 |
-| `media.editor.open` | メディア編集画面を SVG モードで開く `{token, format: "svg", aspect?, svg?, title?}` → `page.event {type: "edited", svg}` / `{type: "editCancelled"}` → [slots.md §2.13](slots.md) | `render` | ✅ v0.22 |
+| `media.editor.open` | メディア編集画面を SVG モードで開く `{token, format: "svg", aspect?, svg?, title?}` → `page.event {type: "edited", svg, svgz?}` / `{type: "editCancelled"}` → [slots.md §2.13](slots.md)(v0.23: `svgz` = zstd で縮めた SVG、`svg` に `data:image/svg+xml;zstd;base64,…` も可) | `render` | ✅ v0.22 |
 
 ## shared(ページ型のサーバー変数 / 関数、v0.18)の例
 
@@ -40,6 +40,7 @@ host::shared_call(&token, "celebrate", json!({}));                // 全員(自�
 host::page_render(&token, root, None);                            // 受けた page.event {type:"var"} で描き直す
 host::shared_set_ttl(&token, "me.paint", json!({"svg": svg}), 86_400); // v0.22: 1 日で Central が消す(var {value: null, reason: "expired"})
 host::media_editor_open(&token, "3:4", Some(&svg), None);         // v0.22: SVG の落書き → page.event {type:"edited", svg}
+let src = rasq_plugin_kit::svgz_data_uri(svgz);                    // v0.23: edited の svgz(zstd)を Image.p.src に(contract >= 0.23 のホストが描く)
 ```
 
 - **反映は必ず `page.event {type: "var", key, value, rev, by}` で届く**(自分の書き込みも)。手元で先に値を変えない。

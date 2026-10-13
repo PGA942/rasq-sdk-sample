@@ -223,6 +223,27 @@ class RasqZstdException implements Exception {
   String toString() => 'RasqZstdException: $message';
 }
 
+/// zstd の圧縮(ランタイム内蔵の ruzstd の `Fastest` = zstd のレベル 1 相当)。契約 v0.23 の落書きの `svgz`
+/// (rasq-client D-472: 編集画面が返した SVG を小さくしてページ型プラグインへ渡す)。出力は zstd のフレーム 1 つで、
+/// [rasqZstdDecompress](と標準の zstd)で読める。
+Uint8List rasqZstdCompress(Uint8List input) {
+  final inPtr = malloc<ffi.Uint8>(input.isEmpty ? 1 : input.length);
+  final outLen = malloc<ffi.IntPtr>();
+  try {
+    inPtr.asTypedList(input.length).setAll(0, input);
+    final out = bindings.rasq_zstd_compress(inPtr, input.length, outLen);
+    if (out == ffi.nullptr) throw const RasqZstdException('compression failed');
+    try {
+      return Uint8List.fromList(out.asTypedList(outLen.value));
+    } finally {
+      bindings.rasq_bytes_free(out, outLen.value);
+    }
+  } finally {
+    malloc.free(inPtr);
+    malloc.free(outLen);
+  }
+}
+
 /// `.rspkg`(zstd 圧縮 tar、D-034)の展開に使う zstd の復号。ランタイム内蔵の純 Rust 実装(ruzstd)なので
 /// 全プラットフォームで同じ。[maxOutput] を超える出力は失敗にする(展開爆弾の対策。既定 256 MiB)。
 Uint8List rasqZstdDecompress(Uint8List input, {int maxOutput = 256 * 1024 * 1024}) {
