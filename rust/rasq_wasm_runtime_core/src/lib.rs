@@ -1389,7 +1389,27 @@ pub extern "C" fn rasq_zstd_decompress(bytes_ptr: *const u8, bytes_len: usize, m
     }
 }
 
-/// Frees a buffer returned by `rasq_zstd_decompress`.
+/// zstd で圧縮する(ruzstd の `Fastest` = zstd のレベル 1 相当)。契約 v0.23 の落書きの `svgz`(rasq-client D-472):
+/// 編集画面が返した SVG を小さくしてサーバー変数に置く。入力は呼ぶ側が小さく切る(SVG は 64 KiB まで)。
+pub fn zstd_compress(input: &[u8]) -> Vec<u8> {
+    ruzstd::encoding::compress_to_vec(input, ruzstd::encoding::CompressionLevel::Fastest)
+}
+
+/// Compresses `bytes` into one zstd frame (ruzstd `Fastest`, about zstd level 1).
+/// Returns a buffer owned by the caller (free it with
+/// `rasq_bytes_free(ptr, *out_len)`), or null when a pointer is null.
+#[no_mangle]
+pub extern "C" fn rasq_zstd_compress(bytes_ptr: *const u8, bytes_len: usize, out_len: *mut usize) -> *mut u8 {
+    if out_len.is_null() || (bytes_ptr.is_null() && bytes_len != 0) {
+        return std::ptr::null_mut();
+    }
+    let input = if bytes_len == 0 { &[][..] } else { unsafe { slice::from_raw_parts(bytes_ptr, bytes_len) } };
+    let boxed = zstd_compress(input).into_boxed_slice();
+    unsafe { *out_len = boxed.len() };
+    Box::into_raw(boxed) as *mut u8
+}
+
+/// Frees a buffer returned by `rasq_zstd_decompress` / `rasq_zstd_compress`.
 #[no_mangle]
 pub extern "C" fn rasq_bytes_free(ptr: *mut u8, len: usize) {
     if !ptr.is_null() {
@@ -1809,6 +1829,42 @@ mod tests {
         assert!(result.contains(r#""count":1"#), "{result}");
         let snapshot = instance.snapshot().expect("snapshot");
         assert!(snapshot.contains("ネイティブfetchの投稿"), "{snapshot}");
+    }
+
+    #[test]
+    fn zstd_compress_round_trips_and_shrinks_svg() {
+        // 落書きの SVG(契約 v0.23 の svgz、rasq-client D-472): 線の座標が並ぶので、よく縮む。
+        let mut svg = String::from(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 400">"#);
+        for i in 0..120u32 {
+            svg.push_str(&format!(
+                r##"<path d="M{} {}L{} {} {} {} {} {}" fill="none" stroke="#1D2939" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>"##,
+                i % 300,
+                (i * 7) % 400,
+                (i * 3) % 300,
+                (i * 11) % 400,
+                (i * 5) % 300,
+                (i * 13) % 400,
+                (i * 17) % 300,
+                (i * 19) % 400
+            ));
+        }
+        svg.push_str("</svg>");
+        let packed = zstd_compress(svg.as_bytes());
+        assert!(packed.len() * 3 < svg.len(), "{} -> {}", svg.len(), packed.len());
+        assert_eq!(zstd_decompress(&packed, svg.len()).unwrap(), svg.as_bytes());
+        // 参照の実装(zstd)でも読める
+        assert_eq!(zstd::decode_all(&packed[..]).unwrap(), svg.as_bytes());
+        // 空の入力も 1 フレーム
+        assert!(zstd_decompress(&zstd_compress(b""), 16).unwrap().is_empty());
+
+        // C ABI: 長さが返り、解放できる。null は null
+        let mut n: usize = 0;
+        let p = rasq_zstd_compress(svg.as_ptr(), svg.len(), &mut n);
+        assert!(!p.is_null());
+        assert_eq!(zstd_decompress(unsafe { slice::from_raw_parts(p, n) }, svg.len()).unwrap(), svg.as_bytes());
+        rasq_bytes_free(p, n);
+        assert!(rasq_zstd_compress(std::ptr::null(), 3, &mut n).is_null());
+        assert!(rasq_zstd_compress(svg.as_ptr(), svg.len(), std::ptr::null_mut()).is_null());
     }
 
     #[test]

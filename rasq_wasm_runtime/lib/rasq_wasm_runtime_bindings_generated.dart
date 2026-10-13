@@ -201,7 +201,23 @@ external ffi.Pointer<ffi.Uint8> rasq_zstd_decompress(
   ffi.Pointer<ffi.IntPtr> out_len,
 );
 
-/// Frees a buffer returned by rasq_zstd_decompress.
+/// Compresses bytes into one zstd frame (ruzstd Fastest, about zstd level 1;
+/// contract v0.23 svgz, rasq-client D-472). Returns a buffer owned by the caller
+/// (free with rasq_bytes_free(ptr, *out_len)), or NULL when a pointer is NULL.
+@ffi.Native<
+  ffi.Pointer<ffi.Uint8> Function(
+    ffi.Pointer<ffi.Uint8>,
+    ffi.IntPtr,
+    ffi.Pointer<ffi.IntPtr>,
+  )
+>()
+external ffi.Pointer<ffi.Uint8> rasq_zstd_compress(
+  ffi.Pointer<ffi.Uint8> bytes_ptr,
+  int bytes_len,
+  ffi.Pointer<ffi.IntPtr> out_len,
+);
+
+/// Frees a buffer returned by rasq_zstd_decompress / rasq_zstd_compress.
 @ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>, ffi.IntPtr)>()
 external void rasq_bytes_free(ffi.Pointer<ffi.Uint8> ptr, int len);
 

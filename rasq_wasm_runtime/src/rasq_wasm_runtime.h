@@ -128,5 +128,10 @@ FFI_PLUGIN_EXPORT void rasq_wasm_free_string(char *s);
 // (decompression-bomb guard). `*out_len` is set on success.
 FFI_PLUGIN_EXPORT uint8_t *rasq_zstd_decompress(const uint8_t *bytes_ptr, intptr_t bytes_len, intptr_t max_out, intptr_t *out_len);
 
-// Frees a buffer returned by rasq_zstd_decompress.
+// Compresses bytes into one zstd frame (ruzstd Fastest, about zstd level 1;
+// contract v0.23 svgz, rasq-client D-472). Returns a buffer owned by the caller
+// (free with rasq_bytes_free(ptr, *out_len)), or NULL when a pointer is NULL.
+FFI_PLUGIN_EXPORT uint8_t *rasq_zstd_compress(const uint8_t *bytes_ptr, intptr_t bytes_len, intptr_t *out_len);
+
+// Frees a buffer returned by rasq_zstd_decompress / rasq_zstd_compress.
 FFI_PLUGIN_EXPORT void rasq_bytes_free(uint8_t *ptr, intptr_t len);

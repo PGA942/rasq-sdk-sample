@@ -1,4 +1,4 @@
-# RASQ スロットプラグイン契約 v0.22(正典)
+# RASQ スロットプラグイン契約 v0.23(正典)
 
 > **ここが正典。** 以前は `orgate-question/plugin-sample/*/CONTRACT.md` に同じ文書が複製されていたが、v0.8 から
 > 各リポジトリの `CONTRACT.md` はこのファイルへのポインタだけになった。節番号(§2.1〜§2.9 / §3 / §4 / §5)は複製時代のまま。
@@ -110,6 +110,14 @@
 - **`accepts`** = このボタンが出る添付の種類: MIME の型(`image/*` / `video/mp4` / `audio/*`)か拡張子(`.gif`)。
   **省略 = `["image/*"]`**。音声だけのファイルは動画の加工画面で扱うので、`audio/*` のボタンは動画用のバーに出る。
   当てはまる添付が無いときボタンは出ない(要らないボタンでバーを埋めない)。
+- **SVG(v0.23、rasq-client D-472)**: 加工画面は添付の種類(MIME / 拡張子)で道具を変える。SVG(`image/svg+xml` / `.svg`)は
+  **SVG モード** = ホストの SVG の道具(ペン / 消しゴム / 色 / 太さ / 取り消し)で描き、ラスターの編集(クロップ / フィルター / ステッカー …)と
+  動画 / 音声だけの編集は出ない。下段バーの構成は画像 / 動画と別の **`editor:svg`**(並べ替え / バンドル / 削除は同じ仕組み)。
+  - SVG モードのバーに出るのは、`accepts` に **`image/svg+xml` か `.svg` を書いた**ボタンだけ(`image/*` / `*` / `*/*` では出ない。
+    ラスターの画像を前提にしたプラグインへ SVG の文字列を渡さないため)。`output: "sticker"` / `"filter"` のボタンは SVG モードには出ない。
+  - 押すと、そのときの絵を SVG(UTF-8)にして `media.edit {…, name: "<元の名前>.svg", mimeType: "image/svg+xml", width, height, bytesB64}`
+    (`width` / `height` = `viewBox` の大きさ)。`media.commit` の結果も **SVG**(`mimeType: "image/svg+xml"`)で返す。ホストは許可リスト
+    (§2.13 の「落書き」)で消毒して紙に読み直す(続きから描ける。プラグインを掛ける前には「取り消し」で戻れない)。SVG でない結果は捨てる。
 - 押すと `media.edit` に **`actionId`**(宣言の `id`)が付いて届く。戻りの `genres` に**同じ id の編集**があれば、ホストは
   セッションを開いた直後にその `media.action` を呼ぶ(ボタン = その編集への近道)。無ければパネルを開くだけ。
 - 画像: ホストは今の見た目を 1 枚(PNG)に焼き込んで渡し、`media.commit` の結果を新しい背景にする。
@@ -566,6 +574,9 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
     (カスタムプラグインのページの「招待」、rasq-client D-424)を Swing に付ける。`room:` のセッションは付けられない(ルームに入っている人だけのもの)。
     見る人がプラグインを入れていなければ、ほかの共有セッションと同じく同意のうえ一時的に動かす(`?session=`、有料でも)。
   - 見る人の端末で**全画面**に開く。見る人がプラグインを入れていなければ、ストアへ案内する。
+    (v0.23、rasq-client D-472)全画面になるのは **`surfaces` に `swing` を書いたもの**(= 全画面で動かす宣言)。書いていないページ型と
+    プラグインでない Swing は、幅の広い画面では**右のカラム**に開く(狭い画面は全画面。見る人が設定で全画面を選んでいればそれに従う)。
+    右のカラムでも `paused` / `resumed` / `page.end` は同じ。
   - 開いている間は、スワイプで次の Swing へは移れない。見る人が「全画面から縮小」を押すと、ホストはページをぼかして止め(`page.event {type: "paused"}`)、スワイプで移れるようにする。
   - 縮小したページを押すと全画面に戻る(`{type: "resumed"}`)。
   - プラグインが **`page.end`** を呼ぶか、見る人が次へ進む / 閉じると、その Swing は**見終えた**ことになり、その人には二度と出ない。
@@ -584,6 +595,8 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
   (v0.21: surface `profile.host` は持ち主だけ。`context` は `profile` と同じ `profileHandle` / `profileAccountId`、shared なら `session` は `profile:<accountId>`)
   (v0.22: **`now`** = いまの時刻(エポックミリ秒)。wasm32 では `SystemTime::now` がトラップするので([cli.md](cli.md) の落とし穴)、時刻はホストからもらう。
   ホストは Central の時計に合わせた値を渡す(welcome の `now` との差で端末の時計のずれを直す)。`page.event` と RRL のイベントにも毎回載る)
+  (v0.23: **`contract`** = ホストが話すこの契約の版(`"0.23"`、`<major>.<minor>`)。無ければ v0.22 以前のホスト。下の `svgz` / `data:image/svg+xml;zstd`
+  のような新しい形を、**このページを見ている人のホスト**が描けるかの目安にする)
   → 戻り **`{root: Node, title?: string}`**(ページの RRL。表示は全画面のページで、**ヘッダーと戻るはホスト**)。
   `session` は shared で、セッションに入っているときだけ載る(無い = 1 人で開いた。solo と同じに動けばよい):
   ```json
@@ -609,7 +622,7 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
   | `resized` | `size: {width, height}` | ページの大きさが変わった |
   | `paused` | — | (v0.19、surface `swing`)見る人が「全画面から縮小」を押した。ホストはページをぼかして入力を止めている。動き(音・時間・アニメーション)を止める |
   | `resumed` | — | (v0.19、surface `swing`)全画面に戻った |
-  | `edited` | `svg, width, height` | (v0.22)`media.editor.open` で開いた編集画面で保存した。`svg` は許可リストで消毒した SVG の文字列(`width` / `height` はその `viewBox` の大きさ) |
+  | `edited` | `svg, width, height, svgz?, svgzEncoding?` | (v0.22)`media.editor.open` で開いた編集画面で保存した。`svg` は許可リストで消毒した SVG の文字列(`width` / `height` はその `viewBox` の大きさ)。(v0.23)`svgz` = 同じ SVG を zstd で縮めたフレームの標準の base64、`svgzEncoding` = `"zstd"`(下の「圧縮して置く」) |
   | `editCancelled` | — | (v0.22)`media.editor.open` で開いた編集画面を保存せずに閉じた |
 
 - RRL のイベント: `on: {"tap": "<fn>"}` などは FOW と同じく `<fn>` を call する。args は **`{token, nodeId, kind, now, ...payload}`**
@@ -638,15 +651,26 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
 
 **落書き(SVG の編集、v0.22、rasq-client D-465)** — `media.editor.open {token, format: "svg", aspect?: "3:4", svg?, title?}`:
 
-- ホストのメディア編集画面を **SVG モード**で開く。**広い画面は第 3 カラム**(ページの横)、**狭い画面は全画面**。道具はホストのもの
+- ホストのメディア編集画面を **SVG モード**で開く(§2.2 の加工画面と同じ画面で、道具が SVG 用になる。v0.23)。**広い画面は、ページ(や右のカラムの
+  Swing)の隣にもう 1 カラム**開いて置く(ページは隠れない。v0.22 は第 3 カラム)、**狭い画面は全画面**。道具はホストのもの
   (ペン / 消しゴム / 色 / 太さ / 取り消し)。縦横比は `aspect`(`"<w>:<h>"`、1〜16 の整数、既定 `"3:4"`)で固定。
 - `svg` を渡すと**続きから描ける**(64 KiB まで。ホストが下の許可リストで消毒してから読む。読めない部分は捨てる)。
+  SVG の文字列のほか、`data:image/svg+xml;base64,…` と(v0.23)`data:image/svg+xml;zstd;base64,…`(下の「圧縮して置く」)も渡せる。
 - 保存すると `page.event {type: "edited", svg, width, height}`、保存せずに閉じると `{type: "editCancelled"}`。
   開いている間にもう一度呼ぶと、前のものを閉じて(`editCancelled`)開き直す。ページを閉じると編集画面も閉じる。
 - 出力の `svg` は `<svg viewBox="0 0 W H">` に、なぞった線を簡略化した `<path>` を並べたもの(`fill="none"`、`stroke` / `stroke-width` /
   `stroke-linecap="round"` / `stroke-linejoin="round"`。消しゴムは描いた線を消す)。大きさは線の数で決まるので、サーバー変数に置くなら
   値の上限(16 KiB、`sharedLimits` で広げられる)に入るかを確かめる。
-- 描くとき(RRL の `Image` の `data:image/svg+xml`、§3)も読むとき(`svg`)も、ホストは**許可リスト**で消毒する:
+- **圧縮して置く(v0.23、rasq-client D-472)**: v0.23 のホストは `edited` に **`svgz`**(同じ SVG を zstd で縮めたフレームの標準の base64)と
+  **`svgzEncoding: "zstd"`** を付ける。サーバー変数にはこちらを置くと小さい(線の座標が並ぶ SVG は 1/4〜1/6 ほどに縮み、base64 の 4/3 倍を
+  掛けても 1/3〜1/4。値の上限 16 KiB に入る絵が増え、ホストの総量も食わない)。
+  - 描くときは `Image.p.src` に **`data:image/svg+xml;zstd;base64,<svgz>`**(§3)、続きから描くときは `media.editor.open` の `svg` にそのまま渡す。
+    ホストは展開してから(展開後も **64 KiB まで**。超えるものは描かない)同じ許可リストで消毒する。`rasq-plugin-kit` の `svgz_data_uri`。
+  - **古いホストとの混在**: v0.22 のホストは `svgz` を付けず(`svg` だけの `edited` = 古いホスト。そのときは `svg` を置く)、
+    `data:image/svg+xml;zstd;…` も描けない(箱になる)。見る人のホストが描けるかは `page.open` の **`contract`**(v0.23 から。
+    `rasq-plugin-kit` の `host_contract_at_least(&args, (0, 23))`)で見て、描けない人には圧縮した値の代わりに「アプリを更新すると見られます」などを出す。
+  - サーバー(Central)は値の中身を見ない(値の JSON の大きさで上限を数えるだけ)ので、Central 側の変更は要らない。
+- 描くとき(RRL の `Image` の `data:image/svg+xml`、§3。v0.23 の zstd も展開してから)も読むとき(`svg`)も、ホストは**許可リスト**で消毒する:
   要素は `svg` / `g` / `path` / `polyline` / `polygon` / `line` / `rect` / `circle` / `ellipse`、属性は形と描き方(`viewBox` `d` `points`
   `x` `y` `width` `height` `cx` `cy` `r` `rx` `ry` `x1` `y1` `x2` `y2` `fill` `stroke` `stroke-width` `stroke-linecap` `stroke-linejoin` `opacity`
   `fill-opacity` `stroke-opacity`)だけ。`script` / `style` / `foreignObject` / `image` / `use` / `href` / `on*` / 外部参照(`url(...)`)は捨てる。
@@ -690,6 +714,8 @@ Swing が消える / 取り下げられると閉じる)。作るのはホスト(
 - `Image.p.src` に **`data:image/png;base64,…`** を受ける。`p.width` / `p.height` で大きさ指定。
   (v0.22)**`data:image/svg+xml;base64,…`**(または `data:image/svg+xml,<URL エンコードした SVG>`)も受け、ホストが許可リストで消毒してから描く
   (§2.13 の「落書き」、[rrl.md](rrl.md) の「SVG」)。`p.fit`(`contain` 既定 / `cover` / `fill`)。
+  (v0.23)**`data:image/svg+xml;zstd;base64,…`**(zstd で縮めた SVG の標準の base64 = `edited` の `svgz`)も受ける。展開して(64 KiB まで)から同じく消毒して描く。
+  v0.22 以前のホストでは描けない(`page.open` の `contract` で見分ける)。
 - (v0.22)`Grid.p.aspectRatio` = 1 マスの**幅 ÷ 高さ**(既定 1 = 正方形。3:4 の縦長なら `0.75`)。`Grid.p.columns` と一緒に使う。
 - `Stack` の子で `p.left` / `p.top`(+ `width` / `height`)があるものは絶対配置(`Positioned`)。
 - 新ノード **`Box`**: `p: {width, height, color, borderColor, borderWidth, radius, angle?(度、v0.6: 中心で回転して描く), label?(v0.6: 合わせる先の一覧に出す名前)}`、子を持てる。`on: {tap}` 可。

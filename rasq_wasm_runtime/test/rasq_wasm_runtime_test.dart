@@ -143,6 +143,15 @@ void main() {
       expect(rasqZstdDecompress(packed, maxOutput: expected.length), expected);
     });
 
+    test('compresses (svgz, contract v0.23) and round-trips', () {
+      final svg = utf8.encode('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 400">${'<path d="M10 20L30 40 50 60" fill="none" stroke="#1D2939" stroke-width="5"/>' * 80}</svg>');
+      final z = rasqZstdCompress(Uint8List.fromList(svg));
+      expect(z.sublist(0, 4), [0x28, 0xB5, 0x2F, 0xFD]);
+      expect(z.length * 4, lessThan(svg.length));
+      expect(rasqZstdDecompress(z, maxOutput: svg.length), svg);
+      expect(rasqZstdDecompress(rasqZstdCompress(Uint8List.fromList(expected))), expected);
+    });
+
     test('rejects garbage, truncated and empty input', () {
       expect(() => rasqZstdDecompress(Uint8List.fromList(utf8.encode('not zstd'))), throwsA(isA<RasqZstdException>()));
       expect(() => rasqZstdDecompress(Uint8List.sublistView(packed, 0, packed.length ~/ 2)), throwsA(isA<RasqZstdException>()));

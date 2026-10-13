@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rasq.io/schema/host-fn-0.2.json",
   "title": "Host function calls (rasq.hostfn/1, v0.2) — $id の版は wire の形の版。ホスト関数の名前はスロット契約 v0.19 まで",
-  "description": "Args/result contract for each host function (PROTOCOL.md §4). Over the wasm ABI the request is {schema:'rasq.hostfn/1', callId, fn, args} and the response is {callId, ok, value|error} — same envelope as boundary hostFn/hostFnResult. v1 is synchronous from the plugin's point of view. v0.2: plugin-sample/CONTRACT.md §4 のアプリ向けホスト関数(fire-and-forget、戻り {})を足した。fn の一覧は boundary.schema.json の hostFnName と同じ(validate.py が照合)。 v0.18 (docs/slots.md §2.13、rasq-client D-357): ページ型の page.render と、shared のサーバー変数 / 関数 shared.set / shared.op / shared.call(Central が中継・保持、rasq-central S-048)。 v0.19 (docs/slots.md §2.13、rasq-client D-377): page.end(プラグインが自分で終わる。Swing では見終えたことにする)。 v0.22 (docs/slots.md §2.13、rasq-client D-465 / rasq-central S-106): shared.set / shared.op の ttl(秒。期限で Central が消す)、owner による @<accountId>. のキーの削除、media.editor.open(メディア編集画面を SVG モードで開き、page.event {type: edited | editCancelled} で返す)。",
+  "description": "Args/result contract for each host function (PROTOCOL.md §4). Over the wasm ABI the request is {schema:'rasq.hostfn/1', callId, fn, args} and the response is {callId, ok, value|error} — same envelope as boundary hostFn/hostFnResult. v1 is synchronous from the plugin's point of view. v0.2: plugin-sample/CONTRACT.md §4 のアプリ向けホスト関数(fire-and-forget、戻り {})を足した。fn の一覧は boundary.schema.json の hostFnName と同じ(validate.py が照合)。 v0.18 (docs/slots.md §2.13、rasq-client D-357): ページ型の page.render と、shared のサーバー変数 / 関数 shared.set / shared.op / shared.call(Central が中継・保持、rasq-central S-048)。 v0.19 (docs/slots.md §2.13、rasq-client D-377): page.end(プラグインが自分で終わる。Swing では見終えたことにする)。 v0.22 (docs/slots.md §2.13、rasq-client D-465 / rasq-central S-106): shared.set / shared.op の ttl(秒。期限で Central が消す)、owner による @<accountId>. のキーの削除、media.editor.open(メディア編集画面を SVG モードで開き、page.event {type: edited | editCancelled} で返す)。 v0.23 (docs/slots.md §2.13、rasq-client D-472): media.editor.open の svg に data:image/svg+xml;zstd;base64 も渡せ、edited に svgz(zstd で縮めた SVG の base64)と svgzEncoding が付く。",
   "type": "object",
   "required": [
     "schema",
@@ -363,12 +363,12 @@
           "token": "string",
           "format": "\"svg\"(v0.22 は svg だけ)",
           "aspect": "string? — 縦横比 \"<w>:<h>\"(既定 \"3:4\"。1〜16 の整数)",
-          "svg": "string? — 続きから描く SVG(64 KiB まで。ホストが許可リストで消毒してから読む)",
+          "svg": "string? — 続きから描く SVG(64 KiB まで。ホストが許可リストで消毒してから読む)。SVG の文字列か data:image/svg+xml;base64,… / (v0.23)data:image/svg+xml;zstd;base64,…",
           "title": "string? — 編集画面の見出し"
         },
         "value": {},
         "permission": "render(slot page)",
-        "notes": "fire-and-forget。v0.22: メディア編集画面を SVG モードで開く(広い画面は第 3 カラム、狭い画面は全画面)。保存で page.event {type: edited, svg, width, height}、閉じたら {type: editCancelled}。同じページで開いている間の 2 度目は前のものを閉じて開き直す。出力の svg は許可リストの要素・属性だけ(docs/rrl.md の「SVG」)"
+        "notes": "fire-and-forget。v0.22: メディア編集画面を SVG モードで開く(広い画面はページの隣のカラム(v0.23 はもう 1 カラム開く)、狭い画面は全画面)。保存で page.event {type: edited, svg, width, height, svgz?, svgzEncoding?}(svgz は v0.23)、閉じたら {type: editCancelled}。同じページで開いている間の 2 度目は前のものを閉じて開き直す。出力の svg は許可リストの要素・属性だけ(docs/rrl.md の「SVG」)"
       }
     }
   }
