@@ -29,7 +29,7 @@ pollster = "0.3"
 base64 = "0.22"
 # .rspkg(D-034: zstd 圧縮 tar)の展開。純 Rust の復号器なので C ツールチェーン無しで iOS / Android にもそのまま
 # クロスコンパイルできる(圧縮は要らない: 作るのは rasq CLI 側)。
-ruzstd = "0.8"
+ruzstd = "0.9.1"
 
 [dev-dependencies]
 # テストで圧縮側を作るためだけ(C の zstd)。ランタイム本体には入らない。
