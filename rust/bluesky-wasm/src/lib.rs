@@ -41,6 +41,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use unicode_segmentation::UnicodeSegmentation;
 
+mod settings;
+
 const SCOPE: &str = "rasq.official.bluesky:bluesky:bsky.social:sample:0.1.0:sns";
 const KIND: &str = "bluesky";
 const DEFAULT_HOST: &str = "bsky.social";
@@ -968,7 +970,11 @@ fn sns_timeline(ctx: &Ctx) -> Result<Value, Value> {
         }
         // home / local / social はすべてフォロー中 TL。
         _ => {
-            let res = xrpc_get(ctx, "app.bsky.feed.getTimeline", &[("limit", limit), ("cursor", cursor)])?;
+            let mut res = xrpc_get(ctx, "app.bsky.feed.getTimeline", &[("limit", limit), ("cursor", cursor)])?;
+            // TL 設定 (D-482): リポスト / 返信を外す。カーソルはサーバーのもの(次のページはずれない)。
+            let tl_settings = &args["settings"]["timeline"];
+            let kept: Vec<Value> = as_list(&res["feed"]).into_iter().filter(|i| settings::keep_feed_item(i, tl_settings)).collect();
+            res["feed"] = Value::Array(kept);
             Ok(feed_page(&ctx.host, &res))
         }
     }
@@ -2037,6 +2043,8 @@ pub fn dispatch(fn_name: &str, args: &Value) -> Result<Value, Value> {
         "sns.actions" => return sns_actions(),
         "sns.emojis" => return Ok(json!({ "emojis": [] })),
         "sns.trendingTags" => return sns_trending_tags(args),
+        // 設定ページの宣言 (D-044 / rasq-client D-482)。ホストはアカウントを開く前(匿名ワーカー)に読む。
+        "sns.settingsPages" => return settings::sns_settings_pages(),
         _ => {}
     }
     let ctx = Ctx::authed(args);
@@ -2088,7 +2096,10 @@ pub fn dispatch(fn_name: &str, args: &Value) -> Result<Value, Value> {
         "sns.createList" | "sns.updateListMember" => Err(unsupported("list editing (not yet)")),
         "sns.clips" | "sns.clipInfo" | "sns.clipNotes" | "sns.createClip" | "sns.deleteClip" | "sns.updateClipNote" => Err(unsupported("clips (Misskey only)")),
         "sns.userPlays" => Err(unsupported("plays (Misskey only)")),
-        "sns.applySettings" | "sns.settingsRead" | "sns.settingsWrite" => Err(unsupported("settings pages")),
+        // remote ページ(account)の読み書き。ローカルページの値は args.settings に載るので applySettings は持たない。
+        "sns.settingsRead" => authed!(settings::sns_settings_read),
+        "sns.settingsWrite" => authed!(settings::sns_settings_write),
+        "sns.applySettings" => Err(unsupported("applySettings (values arrive in args.settings)")),
         other => Err(err("C01", format!("unsupported fn: {other}"))),
     }
 }

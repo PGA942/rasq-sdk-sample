@@ -29,8 +29,11 @@ use serde_json::{json, Value};
 use std::mem;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod settings;
+
 const SCOPE: &str = "rasq.official.mastodon:mastodon:mastodon.social:sample:0.1.0:sns";
 
+#[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "rasq")]
 extern "C" {
     /// ホスト関数 import (PROTOCOL §4.1)。リクエスト JSON の ptr/len を渡し、
@@ -42,16 +45,48 @@ static HOST_CALL_SEQ: AtomicU64 = AtomicU64::new(0);
 
 // ── wasm ABI (PROTOCOL §4.1) ──────────────────────────────────────
 
+#[cfg(not(target_arch = "wasm32"))]
+thread_local! {
+    /// native(テスト)でホスト関数を差し替える口(rasq-plugin-kit と同じ形)。
+    static HOST_HOOK: std::cell::RefCell<Option<Box<dyn FnMut(&str, Value) -> Value>>> = std::cell::RefCell::new(None);
+    /// native でのホスト関数呼び出し記録(テストが読む)。
+    static HOST_LOG: std::cell::RefCell<Vec<(String, Value)>> = std::cell::RefCell::new(Vec::new());
+}
+
+/// テスト用: ホスト関数の応答を差し替える(戻り値は `value` 部分。`{ok:true,value}` に包まれる)。
+#[cfg(not(target_arch = "wasm32"))]
+pub fn set_host_hook<F: FnMut(&str, Value) -> Value + 'static>(f: F) {
+    HOST_HOOK.with(|h| *h.borrow_mut() = Some(Box::new(f)));
+}
+
+/// テスト用: これまでのホスト関数呼び出し `(fn, args)` を取り出す(取り出すと空になる)。
+#[cfg(not(target_arch = "wasm32"))]
+pub fn take_host_log() -> Vec<(String, Value)> {
+    HOST_LOG.with(|l| mem::take(&mut *l.borrow_mut()))
+}
+
 fn host_call(fn_name: &str, args: Value) -> Value {
     let call_id = format!("hf-{}", HOST_CALL_SEQ.fetch_add(1, Ordering::Relaxed));
-    let request = json!({"schema": "rasq.hostfn/1", "callId": call_id, "fn": fn_name, "args": args}).to_string();
-    let bytes = request.as_bytes();
-    let packed = unsafe { host_fn(bytes.as_ptr() as u32, bytes.len() as u32) };
-    let ptr = (packed >> 32) as u32;
-    let len = (packed & 0xFFFF_FFFF) as u32;
-    // ホストは我々の `alloc` で確保した領域に書いたので、ここで回収する。
-    let response = unsafe { Vec::from_raw_parts(ptr as *mut u8, len as usize, len as usize) };
-    serde_json::from_slice(&response).unwrap_or(Value::Null)
+    #[cfg(target_arch = "wasm32")]
+    {
+        let request = json!({"schema": "rasq.hostfn/1", "callId": call_id, "fn": fn_name, "args": args}).to_string();
+        let bytes = request.as_bytes();
+        let packed = unsafe { host_fn(bytes.as_ptr() as u32, bytes.len() as u32) };
+        let ptr = (packed >> 32) as u32;
+        let len = (packed & 0xFFFF_FFFF) as u32;
+        // ホストは我々の `alloc` で確保した領域に書いたので、ここで回収する。
+        let response = unsafe { Vec::from_raw_parts(ptr as *mut u8, len as usize, len as usize) };
+        serde_json::from_slice(&response).unwrap_or(Value::Null)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        HOST_LOG.with(|l| l.borrow_mut().push((fn_name.to_string(), args.clone())));
+        let hooked = HOST_HOOK.with(|h| h.borrow_mut().as_mut().map(|f| f(fn_name, args.clone())));
+        match hooked {
+            Some(v) => json!({"callId": call_id, "ok": true, "value": v}),
+            None => json!({"callId": call_id, "ok": false, "error": {"code": "E01", "message": "no host (native)"}}),
+        }
+    }
 }
 
 fn pack(mut buf: Vec<u8>) -> u64 {
@@ -550,7 +585,9 @@ fn sns_timeline(args: &Value) -> Result<Value, Value> {
     ]);
     let path = format!("{path}{}", q.replacen('?', sep, 1));
     let list = as_list(get(args, &path)?);
-    let items: Vec<Value> = list.iter().map(|s| post_wire(s, &host)).collect();
+    // TL 設定 (D-482): ブースト / 返信を外す。カーソルは外す前の最後の id(次のページがずれない)。
+    let tl_settings = &args["settings"]["timeline"];
+    let items: Vec<Value> = list.iter().filter(|s| settings::keep_in_timeline(s, tl_settings)).map(|s| post_wire(s, &host)).collect();
     Ok(json!({ "page": { "items": items, "nextCursor": next_cursor(&list) } }))
 }
 
@@ -1220,6 +1257,10 @@ pub extern "C" fn call(
         // メディア / プロフィール / リスト (D-136)。
         "sns.uploadMedia" => sns_upload_media(&args_value),
         "sns.updateProfile" => sns_update_profile(&args_value),
+        // 設定ページ (D-044 / rasq-client D-482): ページの宣言と、remote ページ(account)の読み書き。
+        "sns.settingsPages" => settings::sns_settings_pages(&args_value),
+        "sns.settingsRead" => settings::sns_settings_read(&args_value),
+        "sns.settingsWrite" => settings::sns_settings_write(&args_value),
         "sns.lists" => sns_lists(&args_value),
         "sns.listInfo" => get(&args_value, &format!("/api/v1/lists/{}", urlencode(args_value["id"].as_str().unwrap_or("")))).map(|l| json!({ "list": list_wire(&l) })),
         "sns.listMembers" => sns_list_members(&args_value),

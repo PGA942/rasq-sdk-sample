@@ -14,8 +14,11 @@ use std::mem;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
+mod settings;
+
 const SCOPE: &str = "rasq.official.misskey:misskey:misskey.io:sample:0.1.0:tl-home";
 
+#[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "rasq")]
 extern "C" {
     /// Host function import (PROTOCOL.md §4.1): request JSON in, packed
@@ -48,17 +51,49 @@ fn with_state<R>(f: impl FnOnce(&mut (u64, Value)) -> R) -> R {
     f(state)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+thread_local! {
+    /// native(テスト)でホスト関数を差し替える口(rasq-plugin-kit と同じ形)。
+    static HOST_HOOK: std::cell::RefCell<Option<Box<dyn FnMut(&str, Value) -> Value>>> = std::cell::RefCell::new(None);
+    /// native でのホスト関数呼び出し記録(テストが読む)。
+    static HOST_LOG: std::cell::RefCell<Vec<(String, Value)>> = std::cell::RefCell::new(Vec::new());
+}
+
+/// テスト用: ホスト関数の応答を差し替える(戻り値は `value` 部分。`{ok:true,value}` に包まれる)。
+#[cfg(not(target_arch = "wasm32"))]
+pub fn set_host_hook<F: FnMut(&str, Value) -> Value + 'static>(f: F) {
+    HOST_HOOK.with(|h| *h.borrow_mut() = Some(Box::new(f)));
+}
+
+/// テスト用: これまでのホスト関数呼び出し `(fn, args)` を取り出す(取り出すと空になる)。
+#[cfg(not(target_arch = "wasm32"))]
+pub fn take_host_log() -> Vec<(String, Value)> {
+    HOST_LOG.with(|l| mem::take(&mut *l.borrow_mut()))
+}
+
 /// Calls a host function (`rasq.hostfn/1`) and returns its parsed response.
 fn host_call(fn_name: &str, args: Value) -> Value {
     let call_id = format!("hf-{}", HOST_CALL_SEQ.fetch_add(1, Ordering::Relaxed));
-    let request = json!({"schema": "rasq.hostfn/1", "callId": call_id, "fn": fn_name, "args": args}).to_string();
-    let bytes = request.as_bytes();
-    let packed = unsafe { host_fn(bytes.as_ptr() as u32, bytes.len() as u32) };
-    let ptr = (packed >> 32) as u32;
-    let len = (packed & 0xFFFF_FFFF) as u32;
-    // The host wrote the response via our exported `alloc`; reclaim it here.
-    let response = unsafe { Vec::from_raw_parts(ptr as *mut u8, len as usize, len as usize) };
-    serde_json::from_slice(&response).unwrap_or(Value::Null)
+    #[cfg(target_arch = "wasm32")]
+    {
+        let request = json!({"schema": "rasq.hostfn/1", "callId": call_id, "fn": fn_name, "args": args}).to_string();
+        let bytes = request.as_bytes();
+        let packed = unsafe { host_fn(bytes.as_ptr() as u32, bytes.len() as u32) };
+        let ptr = (packed >> 32) as u32;
+        let len = (packed & 0xFFFF_FFFF) as u32;
+        // The host wrote the response via our exported `alloc`; reclaim it here.
+        let response = unsafe { Vec::from_raw_parts(ptr as *mut u8, len as usize, len as usize) };
+        serde_json::from_slice(&response).unwrap_or(Value::Null)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        HOST_LOG.with(|l| l.borrow_mut().push((fn_name.to_string(), args.clone())));
+        let hooked = HOST_HOOK.with(|h| h.borrow_mut().as_mut().map(|f| f(fn_name, args.clone())));
+        match hooked {
+            Some(v) => json!({"callId": call_id, "ok": true, "value": v}),
+            None => json!({"callId": call_id, "ok": false, "error": {"code": "E01", "message": "no host (native)"}}),
+        }
+    }
 }
 
 fn pack(mut buf: Vec<u8>) -> u64 {
@@ -774,38 +809,6 @@ fn sns_capabilities(args: &Value) -> Result<Value, Value> {
     Ok(json!({ "maxPostLength": max }))
 }
 
-/// `call("sns.settingsRead", {area})` / `sns.settingsWrite` (D-044):
-/// `source: "remote"` の設定ページはサーバーが真実なので、KV ではなく
-/// ここを通す。Misskey は `account` ページを `i` / `i/update` に写す。
-fn sns_settings_read(args: &Value) -> Result<Value, Value> {
-    if args["area"].as_str() != Some("account") {
-        return Err(json!({ "code": "C01", "message": "no such remote settings area" }));
-    }
-    let me = misskey_fetch(args, "i", json!({}))?;
-    Ok(json!({ "values": {
-        "isLocked": me["isLocked"],
-        "isExplorable": me["isExplorable"],
-        "hideOnlineStatus": me["hideOnlineStatus"],
-        "noCrawle": me["noCrawle"],
-        "alwaysMarkNsfw": me["alwaysMarkNsfw"],
-        "autoAcceptFollowed": me["autoAcceptFollowed"],
-    } }))
-}
-
-fn sns_settings_write(args: &Value) -> Result<Value, Value> {
-    if args["area"].as_str() != Some("account") {
-        return Err(json!({ "code": "C01", "message": "no such remote settings area" }));
-    }
-    let Some(key) = args["key"].as_str() else {
-        return Err(json!({ "code": "D01", "message": "key required" }));
-    };
-    let mut body = json!({});
-    body[key] = args["value"].clone();
-    misskey_fetch(args, "i/update", body)?;
-    // 書き込み後の最新値を返す(サーバーが弾いた変更も見えるように)。
-    sns_settings_read(args)
-}
-
 /// `call("sns.timelines")`: このアカウントで出せる基本 TL の宣言。
 /// ホストはこれをタブに並べる(CONTRACT §6 の id 体系)。SNS ごとに
 /// 揃う TL が違うため、ハードコードではなくプラグインが宣言する。
@@ -1513,8 +1516,10 @@ pub extern "C" fn call(
         "sns.inspectServer" => sns_inspect_server(&args_value),
         "sns.timelines" => sns_timelines(&args_value),
         "sns.capabilities" => sns_capabilities(&args_value),
-        "sns.settingsRead" => sns_settings_read(&args_value),
-        "sns.settingsWrite" => sns_settings_write(&args_value),
+        // 設定ページ (D-044 / rasq-client D-482): ページの宣言と、remote ページ(account)の読み書き。
+        "sns.settingsPages" => settings::sns_settings_pages(&args_value),
+        "sns.settingsRead" => settings::sns_settings_read(&args_value),
+        "sns.settingsWrite" => settings::sns_settings_write(&args_value),
         "sns.notifications" => sns_notifications(&args_value),
         "sns.markNotificationsRead" => misskey_fetch(&args_value, "notifications/mark-all-as-read", json!({})).map(|_| json!({})),
         "sns.relationships" => sns_relationships(&args_value),

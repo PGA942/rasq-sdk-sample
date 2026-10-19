@@ -70,7 +70,9 @@ RAi の位置検索、タイムラインソート、リレーショナルTL(本�
 - `area` は短名(`account` / `timeline` …)。ホストが `sns.<pluginId>.` を前置して名前空間を強制し、ルート `/settings/dsl/sns.<area>`・KV `sns.<pluginId>.<area>.v1`(`storage.safe` 相当)に割り当てる。
 - ローカル保存ページの値は、変更毎に `SnsSession.applySettings(area, values)`(defaults マージ済み)でプラグインへ即時反映される(例: Misskey の `timeline.withRenotes` → TL 取得パラメーター)。
 - `source: "remote"` のページは KV を使わず、ホストが `SnsSession.settingsRead(area)` / `settingsWrite(area, key, value)`(戻り値 = 最新値マップ)でサーバーに読み書きする(例: Misskey の `account` → `i` / `i/update`)。
-- `on: {"tap": "web.open"}` は `k` をパスとして接続先インスタンスの web 設定を開く(パスワードが要る操作の逃がし先)。
+- `on: {"tap": "web.open"}` は `k` をパスとして接続先インスタンスの web 設定を開く(パスワードが要る操作の逃がし先)。`k` が `https://` で始まればその URL をそのまま開く(Bluesky の bsky.app のように、設定の web がアカウントの PDS と別のとき。rasq-client D-482)。
+- 文字の設定は `Input`(`p.label` = 欄の名前、`p.value` = Bind、`p.submitLabel`、`p.clearOnSubmit: false`、`p.allowEmpty: true` で空も送れる、`p.pad` = 左右の余白)+ `on: {"submit": "settings.set"}`。ホストは `payload.text` を値として書く(rasq-client D-482)。
+- wasm の SNS プラグインはページを `sns.settingsPages {}` → `{pages: [<rasq.settings-page/1 のオブジェクト>…]}` で返す(rasq-client D-482、§4.3)。ホストの「SNSプラグイン」の行(アカウント / タイムライン / セキュリティ / プライバシーとセーフモード = `account` / `timeline` / `security` / `safety`)は、**宣言されたページだけ**出す。
 
 - 種別: `text`(bold/italic/strike/small/code)/ `emoji` / `image` / `link` / `mention` / `hashtag` / `transform`
 - **`transform` = MFM 装飾関数**。`{s:"transform", fn, args, c:[...]}` で入れ子可。ホストが必ず描画するコアセット:
@@ -264,6 +266,13 @@ SNS プラグインのイベントハンドラー関数は「一定程度は抽�
   - `sns.applySettings {area, values}` → `{}` — 値の変更をプラグインに通知する
     (保存したいプラグイン向け)。未実装 = C01 でよく、ホストは無視する。
     次回以降の呼び出しに `args.settings` として載るので実害はない。
+  - `sns.settingsPages {}` → `{pages: [page…]}` (rasq-client D-482) — 設定ページの宣言。
+    `page` は `rasq.settings-page/1` のオブジェクト(文字列ではない)。アカウントに依らないこと:
+    ホストは**セッション無しの匿名ワーカー**で 1 度だけ呼んでプラグインごとに持つ(token / host は来ない)。
+    ホストの「SNSプラグイン」の行は `account` / `timeline` / `security` / `safety` のうち宣言された
+    ものだけ出る。未実装(C01)= ページ無し(行が出ない)。同梱の 4 プラグイン(Misskey / Mastodon /
+    Bluesky / mixi2)は 4 つとも返す。`safety` のキー(`sensitiveMedia` = blur / show / hide、`openCw`)は
+    ホストが投稿タイルに当てるので、どのプラグインも同じキーにする。
   - `sns.settingsRead {area}` → `{values}` / `sns.settingsWrite {area, key, value}`
     → `{values}` — `source: "remote"` のページ。**戻りは書き込み後に読み直した
     最新値**にすること(サーバーが弾いた変更も画面に出るように)。

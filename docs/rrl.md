@@ -63,6 +63,9 @@ Ok(json!({ "patch": true }))
 | `maxLength` | 整数 | 打てる文字数の上限 |
 | `submitLabel` | 文字列(送信アイコン) | 送信ボタンの文字 |
 | `clearOnSubmit` | bool(`true`) | 送ったら欄を空にする |
+| `label` | 文字列 | 欄の名前(枠の上に残る。設定ページの「名前」「自己紹介」など、rasq-client D-482) |
+| `allowEmpty` | bool(`false`) | 空のまま送れる(設定ページで項目を消すとき、rasq-client D-482) |
+| `pad` | 数 | 左右の余白(上下はその 1/4。設定ページの欄、rasq-client D-482) |
 
 | on | payload | いつ |
 |---|---|---|
