@@ -1611,9 +1611,10 @@ fn sns_report_user(ctx: &Ctx) -> Result<Value, Value> {
 
 fn sns_search(ctx: &Ctx) -> Result<Value, Value> {
     let args = ctx.args;
-    // ハッシュタグの検索(コンポーザーの `#` の補完、rasq-client D-475)は Bluesky の API に無い。C01 でホストは候補を出さない。
+    // ハッシュタグの候補(コンポーザーの `#` の補完、rasq-client D-475 / D-478)。Bluesky にタグの検索は無いので、
+    // トレンドと Discover フィードから集めた候補を手元で前方一致に絞る([sns_search_hashtags])。
     if args["kind"].as_str() == Some("hashtags") {
-        return Err(unsupported("sns.search kind=hashtags"));
+        return Ok(sns_search_hashtags(ctx));
     }
     let params = [("q", str_or(&args["q"], "").to_string()), ("limit", limit_arg(args, 25, 100)), ("cursor", cursor_arg(args))];
     if args["kind"].as_str() == Some("users") {
@@ -1623,6 +1624,295 @@ fn sns_search(ctx: &Ctx) -> Result<Value, Value> {
     let res = xrpc_get(ctx, "app.bsky.feed.searchPosts", &params)?;
     let items: Vec<Value> = as_list(&res["posts"]).iter().map(|p| post_view_wire(&ctx.host, p)).collect();
     Ok(page(items, &res["cursor"]))
+}
+
+// ── ハッシュタグの候補(sns.search kind=hashtags、rasq-client D-478)──────────
+//
+// Bluesky にはタグの検索 API が無い(`searchPosts` は投稿の検索で、タグ名の一覧は返らない)。そこで
+// **いま使われているタグの候補の池**を 2 つの出どころから作り、打っている途中のタグで前方一致に絞る:
+//
+// 1. **トレンド** `app.bsky.unspecced.getTrends`(公式アプリの「トレンド」と同じ。失敗したら
+//    `getTrendingTopics` に倒す)。話題は複数語のこともあるので、空白を含まないものだけをタグとみなす。
+// 2. **Discover フィード**(`whats-hot`)を `getFeed` で 100 件。投稿の facets の `#tag` と、レコードの `tags`。
+//
+// どちらも PDS 経由(ほかの `app.bsky.*` と同じく `atproto-proxy` は付けず、PDS が AppView へ代理転送)。
+// 池はメモリに 3 分だけ置く(公式アプリのトレンドの staleTime と同じ。打つたびに引き直さない)。時刻は
+// ホストの `args.now`(wasm に時計は無い)。`now` が無ければ置かない。片方が失敗しても残りで答え、
+// 両方失敗したら `{tags: []}`(ホストは候補を出さないだけ。失敗した池は置かない)。
+
+/// 候補の池を置いておく時間(秒)。
+const HASHTAG_POOL_TTL_SECS: i64 = 180;
+/// Discover から読む投稿の数(`getFeed` の上限)。
+const HASHTAG_FEED_LIMIT: &str = "100";
+/// トレンドを読む数(`getTrends` / `getTrendingTopics` の上限)。
+const HASHTAG_TREND_LIMIT: &str = "25";
+/// Bluesky のタグの長さの上限(`app.bsky.richtext.facet#tag` の `maxGraphemes`)。
+const MAX_TAG_GRAPHEMES: usize = 64;
+
+/// 池の 1 件: 照合用のキー([fold_tag])ごとに、見た表記・Discover で使われた投稿の数・トレンドの順位。
+#[derive(Clone, Debug, Default, PartialEq)]
+struct TagEntry {
+    /// 見た表記ごとの回数(いちばん多い表記を返す。同数なら先に見たもの)。
+    surfaces: Vec<(String, u32)>,
+    /// Discover でこのタグを使っていた投稿の数(1 投稿 1 回)。
+    posts: u32,
+    /// トレンドの順位(0 始まり)。トレンドに無ければ None。
+    trend_rank: Option<usize>,
+    /// 池に入った順(同点の並びを決める)。
+    order: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct TagPool {
+    entries: HashMap<String, TagEntry>,
+}
+
+impl TagPool {
+    fn add(&mut self, raw: &str, trend_rank: Option<usize>, post: bool) {
+        let Some(surface) = clean_tag(raw) else { return };
+        let key = fold_tag(&surface);
+        let order = self.entries.len();
+        let e = self.entries.entry(key).or_insert_with(|| TagEntry { order, ..TagEntry::default() });
+        match e.surfaces.iter_mut().find(|(s, _)| *s == surface) {
+            Some((_, n)) => *n += 1,
+            None => e.surfaces.push((surface, 1)),
+        }
+        if post {
+            e.posts += 1;
+        }
+        if let Some(r) = trend_rank {
+            e.trend_rank = Some(e.trend_rank.map_or(r, |old| old.min(r)));
+        }
+    }
+
+    /// トレンドの話題の一覧(`getTrends` の `trends` / `getTrendingTopics` の `topics`)を入れる。
+    /// 表示名(大文字小文字の整ったもの)を優先し、無ければ `topic`。
+    fn add_trends(&mut self, list: &Value) {
+        for (rank, t) in as_list(list).iter().enumerate() {
+            let name = t["displayName"].as_str().filter(|s| !s.trim().is_empty()).or_else(|| t["topic"].as_str());
+            if let Some(n) = name {
+                self.add(n, Some(rank), false);
+            }
+        }
+    }
+
+    /// `getFeed` の答え(`{feed: [{post}]}`)から、投稿ごとのタグ(facets の `#tag` と `record.tags`)を入れる。
+    /// 同じ投稿の同じタグは 1 回と数える。
+    fn add_feed(&mut self, res: &Value) {
+        for item in as_list(&res["feed"]) {
+            let record = &item["post"]["record"];
+            let mut seen: Vec<String> = vec![];
+            let facet_tags = as_list(&record["facets"])
+                .iter()
+                .flat_map(|f| as_list(&f["features"]))
+                .filter(|f| f["$type"] == "app.bsky.richtext.facet#tag")
+                .filter_map(|f| f["tag"].as_str().map(str::to_string))
+                .collect::<Vec<_>>();
+            let record_tags = as_list(&record["tags"]).iter().filter_map(|t| t.as_str().map(str::to_string)).collect::<Vec<_>>();
+            for raw in facet_tags.into_iter().chain(record_tags) {
+                let Some(clean) = clean_tag(&raw) else { continue };
+                let key = fold_tag(&clean);
+                if seen.contains(&key) {
+                    continue;
+                }
+                seen.push(key);
+                self.add(&clean, None, true);
+            }
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// 打っている途中のタグ `q` で前方一致に絞り、並べて `limit` 件。
+    ///
+    /// 並び: ①打ったものと同じタグ ②そのほかの前方一致を点の高い順(点 = Discover で使われた投稿の数 +
+    /// トレンドの重み `max(1, 10 - 順位)`)③同点は短いタグ ④池に入った順。照合は [fold_tag] どうし。
+    fn search(&self, q: &str, limit: usize) -> Vec<String> {
+        let fq = fold_tag(q.trim().trim_start_matches(['#', '#']));
+        let mut hits: Vec<(&String, &TagEntry)> = self.entries.iter().filter(|(k, _)| k.starts_with(&fq)).collect();
+        let score = |e: &TagEntry| e.posts + e.trend_rank.map_or(0, |r| 10u32.saturating_sub(r as u32).max(1));
+        hits.sort_by(|(ka, a), (kb, b)| {
+            (**kb == fq)
+                .cmp(&(**ka == fq))
+                .then(score(b).cmp(&score(a)))
+                .then(ka.chars().count().cmp(&kb.chars().count()))
+                .then(a.order.cmp(&b.order))
+        });
+        hits.into_iter()
+            .take(limit)
+            .filter_map(|(_, e)| {
+                // いちばん多く見た表記(同数なら先に見たもの)。
+                let mut best: Option<&(String, u32)> = None;
+                for s in &e.surfaces {
+                    if best.is_none_or(|b| s.1 > b.1) {
+                        best = Some(s);
+                    }
+                }
+                best.map(|(s, _)| s.clone())
+            })
+            .collect()
+    }
+}
+
+/// タグとして使える形に: 先頭の `#`(全角も)を外し、空 / 空白を含む / 数字だけ / 64 グラフェム超は捨てる
+/// (Bluesky のタグの解析も数字だけのものはタグにしない)。
+fn clean_tag(raw: &str) -> Option<String> {
+    let t = raw.trim().trim_start_matches(['#', '#']).trim_end_matches(['.', ',', '!', '?', '。', '、']);
+    if t.is_empty() || t.chars().any(char::is_whitespace) || t.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    if grapheme_count(t) > MAX_TAG_GRAPHEMES {
+        return None;
+    }
+    Some(t.to_string())
+}
+
+/// 照合用のキー(NFKC に近い畳み込み + 小文字): 全角英数記号 → 半角、半角カナ → 全角カナ(濁点・半濁点は
+/// 前の字と合わせる)、それから小文字。ひらがな / カタカナの区別や漢字の異体字は畳まない。
+fn fold_tag(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        let u = c as u32;
+        match u {
+            // 全角の ASCII(!〜~)→ 半角。
+            0xFF01..=0xFF5E => out.extend(char::from_u32(u - 0xFEE0).unwrap_or(c).to_lowercase()),
+            0x3000 => out.push(' '),
+            // 半角の濁点 / 半濁点: 直前のカナに合わせる(合わせられなければ全角の結合しない記号)。
+            0xFF9E | 0xFF9F => {
+                let voiced = u == 0xFF9E;
+                let combined = out.chars().last().and_then(|p| combine_kana_mark(p, voiced));
+                match combined {
+                    Some(m) => {
+                        out.pop();
+                        out.push(m);
+                    }
+                    None => out.push(if voiced { '゛' } else { '゜' }),
+                }
+            }
+            0xFF61..=0xFF9D => out.push(halfwidth_kana(c)),
+            _ => out.extend(c.to_lowercase()),
+        }
+    }
+    out
+}
+
+/// 半角カナ(U+FF61〜FF9D)→ 全角。
+fn halfwidth_kana(c: char) -> char {
+    const TABLE: &str = "。「」、・ヲァィゥェォャュョッーアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワン";
+    TABLE.chars().nth((c as u32 - 0xFF61) as usize).unwrap_or(c)
+}
+
+/// 全角カナ + 濁点(`voiced`)/ 半濁点 → 合わせた字。合わせられなければ None。
+fn combine_kana_mark(base: char, voiced: bool) -> Option<char> {
+    let u = base as u32;
+    if voiced {
+        // カ〜ト(清音の次の符号位置が濁音)、ハ行(+1)、ウ → ヴ。
+        let ka_to = matches!(u, 0x30AB | 0x30AD | 0x30AF | 0x30B1 | 0x30B3 | 0x30B5 | 0x30B7 | 0x30B9 | 0x30BB | 0x30BD | 0x30BF | 0x30C1 | 0x30C4 | 0x30C6 | 0x30C8);
+        let ha = matches!(u, 0x30CF | 0x30D2 | 0x30D5 | 0x30D8 | 0x30DB);
+        if ka_to || ha {
+            return char::from_u32(u + 1);
+        }
+        if base == 'ウ' {
+            return Some('ヴ');
+        }
+        None
+    } else if matches!(u, 0x30CF | 0x30D2 | 0x30D5 | 0x30D8 | 0x30DB) {
+        char::from_u32(u + 2)
+    } else {
+        None
+    }
+}
+
+/// ISO 8601(`2026-10-19T12:34:56.789Z` / `+09:00`)→ UNIX 秒。読めなければ None。
+fn iso_to_unix(s: &str) -> Option<i64> {
+    let b = s.as_bytes();
+    if b.len() < 19 || b[4] != b'-' || b[7] != b'-' || !(b[10] == b'T' || b[10] == b' ') || b[13] != b':' || b[16] != b':' {
+        return None;
+    }
+    let num = |r: std::ops::Range<usize>| s.get(r).and_then(|x| x.parse::<i64>().ok());
+    let (y, mo, d, h, mi, se) = (num(0..4)?, num(5..7)?, num(8..10)?, num(11..13)?, num(14..16)?, num(17..19)?);
+    // 小数秒を飛ばしてから時差。
+    let mut rest = &s[19..];
+    if let Some(r) = rest.strip_prefix('.') {
+        rest = r.trim_start_matches(|c: char| c.is_ascii_digit());
+    }
+    let offset = match rest {
+        "" | "Z" | "z" => 0,
+        o if o.len() == 6 && (o.starts_with('+') || o.starts_with('-')) && o.get(3..4) == Some(":") => {
+            let sign = if o.starts_with('-') { -1 } else { 1 };
+            sign * (o.get(1..3)?.parse::<i64>().ok()? * 3600 + o.get(4..6)?.parse::<i64>().ok()? * 60)
+        }
+        _ => return None,
+    };
+    // 暦日 → 日数(Howard Hinnant の days_from_civil)。
+    let y2 = if mo <= 2 { y - 1 } else { y };
+    let era = y2.div_euclid(400);
+    let yoe = y2 - era * 400;
+    let mp = (mo + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(days * 86_400 + h * 3600 + mi * 60 + se - offset)
+}
+
+/// 置いてある池: `(PDS ホスト + did, 作った時刻の UNIX 秒, 池)`。
+static HASHTAG_POOL: Mutex<Option<(String, i64, TagPool)>> = Mutex::new(None);
+
+/// 候補の池を作る(トレンド + Discover)。両方失敗したら None。
+fn build_tag_pool(ctx: &Ctx) -> Option<TagPool> {
+    let mut pool = TagPool::default();
+    let mut any_ok = false;
+    // トレンドを先に入れる(同点の並びで先になり、表記の同数でも優先される)。
+    let trends = xrpc_get(ctx, "app.bsky.unspecced.getTrends", &[("limit", HASHTAG_TREND_LIMIT.into())])
+        .map(|res| res["trends"].clone())
+        .or_else(|_| xrpc_get(ctx, "app.bsky.unspecced.getTrendingTopics", &[("limit", HASHTAG_TREND_LIMIT.into())]).map(|res| res["topics"].clone()));
+    if let Ok(list) = trends {
+        any_ok = true;
+        pool.add_trends(&list);
+    }
+    if let Ok(res) = xrpc_get(ctx, "app.bsky.feed.getFeed", &[("feed", DISCOVER_FEED.into()), ("limit", HASHTAG_FEED_LIMIT.into())]) {
+        any_ok = true;
+        pool.add_feed(&res);
+        // 見た投稿の cid はいいね等の strong ref に使えるので溜めておく(TL と同じ)。
+        for item in as_list(&res["feed"]) {
+            remember_cid(str_or(&item["post"]["uri"], ""), &item["post"]["cid"]);
+        }
+    }
+    any_ok.then_some(pool)
+}
+
+/// `sns.search {kind: hashtags, q, limit}` → `{tags: [{tag}]}`。件数(`count`)は付けない: Discover の 100 件の
+/// 中の数はネットワーク全体の数ではなく、ホストは件数を「N人」と出すので誤解させる。
+fn sns_search_hashtags(ctx: &Ctx) -> Value {
+    let args = ctx.args;
+    let q = str_or(&args["q"], "");
+    let limit = args["limit"].as_u64().unwrap_or(10).clamp(1, 40) as usize;
+    let now = args["now"].as_str().and_then(iso_to_unix).filter(|t| *t > 0);
+    let key = format!("{}|{}", ctx.host, ctx.did());
+
+    let cached = {
+        let guard = HASHTAG_POOL.lock().unwrap_or_else(|p| p.into_inner());
+        match (guard.as_ref(), now) {
+            (Some((k, at, pool)), Some(t)) if *k == key && t >= *at && t - at < HASHTAG_POOL_TTL_SECS => Some(pool.clone()),
+            _ => None,
+        }
+    };
+    let pool = match cached {
+        Some(p) => p,
+        None => match build_tag_pool(ctx) {
+            Some(p) => {
+                if let (Some(t), false) = (now, p.is_empty()) {
+                    *HASHTAG_POOL.lock().unwrap_or_else(|e| e.into_inner()) = Some((key, t, p.clone()));
+                }
+                p
+            }
+            None => TagPool::default(),
+        },
+    };
+    let tags: Vec<Value> = pool.search(q, limit).into_iter().map(|t| json!({ "tag": t })).collect();
+    json!({ "tags": tags })
 }
 
 /// `call("sns.uploadMedia", {bytesB64, filename, mimeType?, alt?})` → `{media}`。
@@ -1833,6 +2123,7 @@ mod tests {
     fn test_lock() -> std::sync::MutexGuard<'static, ()> {
         let g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         *super::CID_CACHE.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        *super::HASHTAG_POOL.lock().unwrap_or_else(|p| p.into_inner()) = None;
         let _ = super::take_host_log();
         g
     }
@@ -2617,5 +2908,139 @@ mod tests {
         assert!(is_handle("alice.bsky.social"));
         assert!(!is_handle("alice"));
         assert!(!is_handle("alice.b1"));
+    }
+
+    /// Discover の投稿(facets の `#tag` と `record.tags`)。
+    fn tagged_post(uri: &str, facet_tags: &[&str], record_tags: &[&str]) -> Value {
+        let mut p = post_view(uri, "c", "本文");
+        let features: Vec<Value> = facet_tags.iter().map(|t| json!({ "$type": "app.bsky.richtext.facet#tag", "tag": t })).collect();
+        p["record"]["facets"] = json!([{ "index": { "byteStart": 0, "byteEnd": 1 }, "features": features },
+            { "index": { "byteStart": 0, "byteEnd": 1 }, "features": [{ "$type": "app.bsky.richtext.facet#link", "uri": "https://example.com" }] }]);
+        p["record"]["tags"] = json!(record_tags);
+        json!({ "post": p })
+    }
+
+    fn hashtag_args(q: &str, now: &str) -> Value {
+        args(json!({ "kind": "hashtags", "q": q, "limit": 10, "now": now }))
+    }
+
+    fn tag_names(v: &Value) -> Vec<String> {
+        v["tags"].as_array().unwrap().iter().map(|t| t["tag"].as_str().unwrap().to_string()).collect()
+    }
+
+    /// ハッシュタグの候補 (D-478): トレンド(getTrends)+ Discover(getFeed 100 件)の池を前方一致で絞る。
+    /// 打ったものと同じタグが先頭、あとは点(Discover の投稿の数 + トレンドの重み)の順。全角・大文字小文字は畳む。
+    #[test]
+    fn hashtag_search_pools_trends_and_discover() {
+        let _g = test_lock();
+        mock_xrpc(Value::Null, |method, nsid, req| {
+            assert_eq!(method, "GET");
+            assert_eq!(req["headers"]["Authorization"], "Bearer access-1");
+            assert!(req["headers"]["atproto-proxy"].is_null(), "app.bsky.* は PDS の既定の代理転送に任せる");
+            match nsid {
+                "app.bsky.unspecced.getTrends" => {
+                    assert_eq!(query_of(req), "limit=25");
+                    Ok(json!({ "trends": [
+                        { "topic": "rasq", "displayName": "RASQ", "link": "/t/1", "startedAt": NOW, "postCount": 900, "actors": [] },
+                        { "topic": "taylor swift", "displayName": "Taylor Swift", "link": "/t/2", "startedAt": NOW, "postCount": 800, "actors": [] },
+                        { "topic": "打ち上げ", "link": "/t/3", "startedAt": NOW, "postCount": 700, "actors": [] },
+                    ] }))
+                }
+                "app.bsky.feed.getFeed" => {
+                    assert_eq!(query_of(req), format!("feed={}&limit=100", urlencode(DISCOVER_FEED)));
+                    Ok(json!({ "feed": [
+                        tagged_post("at://did:plc:a/app.bsky.feed.post/1", &["rasqdev", "打上会"], &[]),
+                        // 同じ投稿の同じタグ(facet と tags、大文字小文字違い)は 1 回。
+                        tagged_post("at://did:plc:b/app.bsky.feed.post/2", &["rasqdev"], &["RasqDev"]),
+                        // 全角は半角に畳んで同じタグ。数字だけ・空白入りはタグにしない。
+                        tagged_post("at://did:plc:c/app.bsky.feed.post/3", &["ＲＡＳＱｄｅｖ", "2026", "a b"], &["#rasqfan"]),
+                    ], "cursor": "x" }))
+                }
+                other => panic!("unexpected {other}"),
+            }
+        });
+        let v = dispatch("sns.search", &hashtag_args("ras", "2026-10-19T00:00:00.000Z")).unwrap();
+        // RASQ = トレンド 1 位(10 点)、rasqdev = 3 投稿、rasqfan = 1 投稿。表記はいちばん多く見たもの。
+        assert_eq!(tag_names(&v), vec!["RASQ", "rasqdev", "rasqfan"]);
+        assert!(v["tags"][0].get("count").is_none(), "Discover の標本の数は件数として出さない");
+        assert_eq!(fetches().len(), 2);
+        assert_eq!(cached_cid("at://did:plc:a/app.bsky.feed.post/1").as_deref(), Some("c"));
+
+        // 3 分以内は置いた池で答える(打つたびに引かない)。打ったものと同じタグが先頭。
+        let v = dispatch("sns.search", &hashtag_args("#RASQDEV", "2026-10-19T00:02:59.000Z")).unwrap();
+        assert_eq!(tag_names(&v), vec!["rasqdev"]);
+        let v = dispatch("sns.search", &hashtag_args("打", "2026-10-19T09:01:00+09:00")).unwrap();
+        assert_eq!(tag_names(&v), vec!["打ち上げ", "打上会"]);
+        assert_eq!(dispatch("sns.search", &hashtag_args("taylor", "2026-10-19T00:01:00Z")).unwrap(), json!({ "tags": [] }));
+        assert_eq!(fetches().len(), 0);
+
+        // 3 分を過ぎたら引き直す。limit も効く。
+        let mut a = hashtag_args("r", "2026-10-19T00:03:00.000Z");
+        a["limit"] = json!(1);
+        assert_eq!(tag_names(&dispatch("sns.search", &a).unwrap()), vec!["RASQ"]);
+        assert_eq!(fetches().len(), 2);
+
+        // 別のアカウントの池は使い回さない。now が無ければ置かない。
+        let mut other = hashtag_args("r", "2026-10-19T00:03:10.000Z");
+        other["token"] = json!(json!({ "did": "did:plc:other", "handle": "o.test", "accessJwt": "access-1", "refreshJwt": "r" }).to_string());
+        dispatch("sns.search", &other).unwrap();
+        assert_eq!(fetches().len(), 2);
+        let mut no_clock = hashtag_args("r", "");
+        no_clock["now"] = Value::Null;
+        dispatch("sns.search", &no_clock).unwrap();
+        assert_eq!(fetches().len(), 2);
+        dispatch("sns.search", &no_clock).unwrap();
+        assert_eq!(fetches().len(), 2);
+    }
+
+    /// 片方が失敗しても残りで答える。getTrends が無ければ getTrendingTopics。全部失敗したら空(池は置かない)。
+    #[test]
+    fn hashtag_search_survives_failing_sources() {
+        let _g = test_lock();
+        mock_xrpc(Value::Null, |_, nsid, _| match nsid {
+            "app.bsky.unspecced.getTrends" => Err((501, json!({ "error": "MethodNotImplemented" }))),
+            "app.bsky.unspecced.getTrendingTopics" => Ok(json!({ "topics": [{ "topic": "ロケット", "link": "/x" }], "suggested": [] })),
+            _ => Err((500, json!({ "error": "InternalServerError" }))),
+        });
+        let v = dispatch("sns.search", &hashtag_args("ろ", NOW)).unwrap();
+        assert_eq!(v, json!({ "tags": [] }), "ひらがなとカタカナは畳まない");
+        let v = dispatch("sns.search", &hashtag_args("ロケ", NOW)).unwrap();
+        assert_eq!(tag_names(&v), vec!["ロケット"]);
+        let names: Vec<String> = fetches().iter().map(|r| r["url"].as_str().unwrap().split("/xrpc/").nth(1).unwrap().split('?').next().unwrap().to_string()).collect();
+        assert_eq!(names, vec!["app.bsky.unspecced.getTrends", "app.bsky.unspecced.getTrendingTopics", "app.bsky.feed.getFeed"]);
+
+        *HASHTAG_POOL.lock().unwrap() = None;
+        mock_xrpc(Value::Null, |_, _, _| Err((502, json!({}))));
+        assert_eq!(dispatch("sns.search", &hashtag_args("ロケ", NOW)).unwrap(), json!({ "tags": [] }));
+        assert_eq!(fetches().len(), 3);
+        dispatch("sns.search", &hashtag_args("ロケ", NOW)).unwrap();
+        assert_eq!(fetches().len(), 3, "失敗した池は置かない(次はまた引く)");
+        // token が無ければほかの sns.search と同じく 401。
+        let mut no_token = hashtag_args("a", NOW);
+        no_token["token"] = Value::Null;
+        assert_eq!(dispatch("sns.search", &no_token).unwrap_err()["code"], "401");
+    }
+
+    #[test]
+    fn tag_folding_and_clock_parsing() {
+        let _g = test_lock();
+        assert_eq!(fold_tag("ＲＡＳＱ＿Dev"), "rasq_dev");
+        assert_eq!(fold_tag("ｶﾞﾝﾀﾞﾑ"), "ガンダム");
+        assert_eq!(fold_tag("ﾊﾟﾝｹｰｷ"), "パンケーキ");
+        assert_eq!(fold_tag("ｳﾞｨｰｶﾞﾝ"), "ヴィーガン");
+        assert_eq!(fold_tag("打上会"), "打上会");
+        assert_eq!(clean_tag("#rasq"), Some("rasq".into()));
+        assert_eq!(clean_tag("#ＲＡＳＱ"), Some("ＲＡＳＱ".into()));
+        assert_eq!(clean_tag("##"), None);
+        assert_eq!(clean_tag("12345"), None);
+        assert_eq!(clean_tag("2026年"), Some("2026年".into()));
+        assert_eq!(clean_tag("two words"), None);
+        assert_eq!(clean_tag(&"あ".repeat(65)), None);
+        assert_eq!(iso_to_unix("1970-01-01T00:00:00.000Z"), Some(0));
+        assert_eq!(iso_to_unix("2026-10-19T00:00:00Z"), Some(1_792_368_000));
+        assert_eq!(iso_to_unix("2026-10-19T09:00:00.123456+09:00"), Some(1_792_368_000));
+        assert_eq!(iso_to_unix("2024-02-29T12:00:00Z"), Some(1_709_208_000));
+        assert_eq!(iso_to_unix("きのう"), None);
+        assert_eq!(iso_to_unix("2026-10-19T00:00:00+0900"), None);
     }
 }

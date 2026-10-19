@@ -118,7 +118,7 @@ AccountId = { kind, instance, handle }   key = "kind:instance:handle"
 | ユーザー | `user(id)`, `userByHandle(handle,host?)`, `userPosts(id,cursor?,limit,filter)`, `users(ids)`, `relationships(ids)` | `UserProfile` / `Page<Post>` / `{id:FollowState}` | `users/show`, `users/notes`, `users/relation` |
 | 関係 | `followers/following(id)`, `relationship(id)`, `setFollowing/setMuted/setBlocked(id,bool)`, `followRequests()`, `accept/rejectFollowRequest(id)`, `mutedUsers()`, `blockedUsers()`, `reportUser(id,comment)` | | `following/*`, `mute/*`, `blocking/*`, `users/report-abuse` |
 | リアクション | `reactions(postId,type?,cursor?,limit)`, `reposters(postId)` | `Page<ReactionEntry>` / `Page<UserSummary>` | `notes/reactions`, `notes/renotes` |
-| 検索 | `searchPosts(q)`, `searchUsers(q)`, `searchHashtags(q)`, `trendingTags()` | `searchHashtags` / `trendingTags` → `TrendTag[]` | `notes/search`, `users/search`, `hashtags/search`, `hashtags/trend` |
+| 検索 | `searchPosts(q)`, `searchUsers(q)`, `searchHashtags(q)`, `trendingTags()` | `searchHashtags` / `trendingTags` → `TrendTag[]` | `notes/search`, `users/search`, `hashtags/search`, `hashtags/trend`(Bluesky の `searchHashtags` はトレンド + Discover フィードから集めた候補の前方一致、PROTOCOL §4.3) |
 | メディア/絵文字 | `uploadMedia(bytes,filename,mime?,sensitive,alt?)`→`MediaItem`, `customEmojis()`, `emojiUrl(shortcode)` | | `drive/files/create`(multipart), `emojis` |
 | プロフィール | `updateProfile(ProfileUpdate)` | `UserProfile` | `i/update` |
 | リスト/ブックマーク | `lists()`, `listInfo(id)`, `listMembers(id)`, `createList(name)`, `addToList/removeFromList`, `favorites()` | | `users/lists/*`, `i/favorites` |
