@@ -6,6 +6,7 @@
 //! - [`host_call`] でホスト関数(`rasq.hostfn/1`)を呼ぶ(native ビルドではテスト用フックに差し替え可)
 //! - [`rrl`] に RRL ノードのビルダー、[`Surface`] に FOW(拡張面)の open / patch / close
 //! - [`set_patch`] / [`tree_updated`] で本体ツリーの差分/再取得を頼む
+//! - [`i18n`] に利用者に見せる文の表(`args.locale`、無ければ `ja`。[`i18n_catalog!`] で宣言して `TEXT.t(locale, key)`)
 //!
 //! プラグイン本体は「`root()` が返す RRL」と「`call(fn, args)` の match」だけ書けばよい。
 //! 契約の正典は `docs/slots.md`(スロット契約)と `PROTOCOL.md`。plugin-sample の各リポジトリの `kit/` はこのクレートの複製(D-244i: ここが正典、`rasq init` がワークスペースへ写す)。
@@ -17,6 +18,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 pub use serde_json;
+
+pub mod i18n;
 
 // ---------------------------------------------------------------------------
 // wasm ABI: 線形メモリの受け渡し(PROTOCOL §4.1)
@@ -594,6 +597,8 @@ macro_rules! rasq_plugin {
             let fn_name = $crate::read_str(fn_ptr, fn_len);
             let args: $crate::serde_json::Value = $crate::serde_json::from_str(&$crate::read_str(args_ptr, args_len)).unwrap_or($crate::serde_json::Value::Null);
             let call_id = $crate::read_str(call_id_ptr, call_id_len);
+            // args.locale(無ければ ja)を覚えておく: args の無い snapshot() でも i18n::current() で引ける。
+            $crate::i18n::set_current(&args);
             let outcome: Result<$crate::serde_json::Value, $crate::serde_json::Value> = ($call)(fn_name.as_str(), args);
             $crate::pack($crate::result_message(&call_id, outcome).to_string().into_bytes())
         }
@@ -601,6 +606,7 @@ macro_rules! rasq_plugin {
         /// native テスト用: export と同じ経路で `call` を呼ぶ。
         pub fn call_native(fn_name: &str, args: $crate::serde_json::Value) -> Result<$crate::serde_json::Value, $crate::serde_json::Value> {
             $crate::set_scope($scope);
+            $crate::i18n::set_current(&args);
             ($call)(fn_name, args)
         }
     };

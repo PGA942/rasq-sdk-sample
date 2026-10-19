@@ -21,6 +21,10 @@ use std::mem;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 mod settings;
+mod text;
+
+use rasq_plugin_kit::i18n;
+use text::TEXT;
 
 const SCOPE: &str = "rasq.official.mixi2:mixi2:mixi.social:sample:0.1.0:sns";
 const KIND: &str = "mixi2";
@@ -375,7 +379,7 @@ fn dummy_call(fn_name: &str, args: &Value) -> Result<Value, Value> {
             let draft = &args["draft"];
             let text = str_or(&draft["text"], "").to_string();
             if text.chars().count() > MAX_POST_LENGTH {
-                return Err(err("D01", format!("本文は {MAX_POST_LENGTH} 文字まで")));
+                return Err(err("D01", TEXT.f(i18n::locale_of(args), "error.postTooLong", &[("max", &MAX_POST_LENGTH.to_string())])));
             }
             d.seq += 1;
             let id = format!("d-{}", d.seq);
@@ -469,7 +473,7 @@ fn real_call(fn_name: &str, args: &Value) -> Result<Value, Value> {
     let host = host_of(args);
     match fn_name {
         // 実モードのログインはブローカー(OAuth)の担当。資格情報では入れない。
-        "sns.login" => Err(err("A01", "mixi2 は OAuth でログインします(RASQ サーバーのブローカー経由)。動作確認はホスト「dummy」で。")),
+        "sns.login" => Err(err("A01", TEXT.t(i18n::locale_of(args), "error.loginOauthOnly"))),
         "sns.inspectServer" => Ok(json!({ "server": { "host": host, "name": host, "software": "mixi2", "registrationOpen": false } })),
         "sns.me" => Ok(json!({ "user": user_wire(&get(args, api::ME)?, &host) })),
         "sns.timeline" => {
@@ -540,33 +544,35 @@ fn real_call(fn_name: &str, args: &Value) -> Result<Value, Value> {
 
 // ── 共通の宣言と dispatch ───────────────────────────────────────
 
-fn sns_actions() -> Value {
+fn sns_actions(loc: &str) -> Value {
+    let t = |k| TEXT.t(loc, k);
     json!({ "actions": [
-        { "id": "reply",    "genreTag": "Reply",    "label": "返信",     "icon": "reply",        "confirmMode": "confirm", "fow": "interstitial", "countSource": "self" },
-        { "id": "repost",   "genreTag": "Repost",   "label": "リポスト", "icon": "repeat",       "doneIcon": "repeat_on", "countSource": "self" },
-        { "id": "favorite", "genreTag": "Reaction", "label": "いいね",   "icon": "star_border",  "doneIcon": "star",      "countSource": "self", "emoji": STAR },
-        { "id": "quote",    "genreTag": "Quote",    "label": "引用",     "icon": "format_quote", "confirmMode": "confirm", "fow": "interstitial", "countSource": "self" },
+        { "id": "reply",    "genreTag": "Reply",    "label": t("action.reply"),    "icon": "reply",        "confirmMode": "confirm", "fow": "interstitial", "countSource": "self" },
+        { "id": "repost",   "genreTag": "Repost",   "label": t("action.repost"), "icon": "repeat",       "doneIcon": "repeat_on", "countSource": "self" },
+        { "id": "favorite", "genreTag": "Reaction", "label": t("action.favorite"), "icon": "star_border",  "doneIcon": "star",      "countSource": "self", "emoji": STAR },
+        { "id": "quote",    "genreTag": "Quote",    "label": t("action.quote"),    "icon": "format_quote", "confirmMode": "confirm", "fow": "interstitial", "countSource": "self" },
     ] })
 }
 
 /// `call("sns.<fn>", args)` の本体。wasm の `call` export とテストが共用する。
 pub fn call_impl(fn_name: &str, args: &Value) -> Result<Value, Value> {
+    let loc = i18n::locale_of(args);
     match fn_name {
         "sns.capabilities" => return Ok(json!({ "maxPostLength": MAX_POST_LENGTH })),
-        "sns.timelines" => return Ok(json!({ "timelines": [{ "id": "home", "label": "ホーム" }, { "id": "local", "label": "みんな" }] })),
-        "sns.actions" => return Ok(sns_actions()),
+        "sns.timelines" => return Ok(json!({ "timelines": [{ "id": "home", "label": TEXT.t(loc, "timeline.home") }, { "id": "local", "label": TEXT.t(loc, "timeline.local") }] })),
+        "sns.actions" => return Ok(sns_actions(loc)),
         "sns.emojis" => return Ok(json!({ "emojis": [] })),
         // ハッシュタグの検索(コンポーザーの `#` の補完、rasq-client D-475)は持たない: C01 でホストは候補を出さない。
         "sns.search" if args["kind"].as_str() == Some("hashtags") => return Err(err("C01", "unsupported: sns.search kind=hashtags")),
         // 設定ページ (D-044 / rasq-client D-482)。宣言はログイン前(匿名ワーカー)にも答える。
-        "sns.settingsPages" => return Ok(settings::sns_settings_pages()),
+        "sns.settingsPages" => return Ok(settings::sns_settings_pages(args)),
         "sns.settingsRead" if args["area"].as_str() == Some("account") => {
             let me = call_impl("sns.me", args)?;
             return Ok(json!({ "values": settings::account_values(&me["user"]) }));
         }
         "sns.settingsRead" => return Err(err("C01", "no such remote settings area")),
         // account は読むだけ(書くタイルを出していない)。
-        "sns.settingsWrite" => return Err(err("C01", "mixi2 の API ではアカウントの設定を変えられません")),
+        "sns.settingsWrite" => return Err(err("C01", TEXT.t(loc, "error.accountReadOnly"))),
         _ => {}
     }
     let mut out = if is_dummy(args) { dummy_call(fn_name, args) } else { real_call(fn_name, args) };
@@ -678,6 +684,30 @@ mod tests {
         assert!(off.iter().all(|p| !p["replyToId"].is_string()));
         assert!(settings::keep_in_timeline(&json!({ "repostedBy": {} }), &json!({})));
         assert!(!settings::keep_in_timeline(&json!({ "repostedBy": {} }), &json!({ "withReposts": false })));
+    }
+
+    /// 利用者に見せる文は表から引く(`args.locale`、PROTOCOL.md §4.6)。いまは ja だけなので、どの言語でも ja と同じ文。
+    #[test]
+    fn ui_text_comes_from_the_table_and_falls_back_to_ja() {
+        assert!(TEXT.check().is_empty(), "{:?}", TEXT.check());
+        let _ = i18n::take_misses();
+        for f in ["sns.settingsPages", "sns.actions", "sns.timelines"] {
+            let base = call_impl(f, &json!({})).unwrap();
+            for loc in ["ja", "ja-JP", "en", "en-US", "zh-Hant", "", "??"] {
+                assert_eq!(call_impl(f, &json!({ "locale": loc })).unwrap(), base, "{f} locale={loc}");
+            }
+        }
+        let pages = call_impl("sns.settingsPages", &json!({ "locale": "en" })).unwrap()["pages"].clone();
+        assert_eq!(pages[0]["title"], "アカウント");
+        assert_eq!(pages[2]["root"]["c"][1]["p"]["title"], "ぼかして表示");
+        assert_eq!(pages[3]["root"]["c"][1]["p"]["value"], "RASQ サーバー経由の OAuth");
+        assert_eq!(call_impl("sns.timelines", &json!({})).unwrap()["timelines"][1]["label"], "みんな");
+        let e = call_impl("sns.login", &json!({ "host": "mixi.social", "locale": "en" })).unwrap_err();
+        assert_eq!(e["message"], "mixi2 は OAuth でログインします(RASQ サーバーのブローカー経由)。動作確認はホスト「dummy」で。");
+        let long = "あ".repeat(MAX_POST_LENGTH + 1);
+        let e = call_impl("sns.createPost", &json!({ "host": DUMMY_HOST, "draft": { "text": long } })).unwrap_err();
+        assert_eq!(e["message"], "本文は 149 文字まで");
+        assert!(i18n::take_misses().is_empty(), "表に無いキーを引いた");
     }
 
     fn dummy_err(fn_name: &str, args: Value) -> Value {

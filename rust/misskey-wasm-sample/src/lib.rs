@@ -15,6 +15,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 mod settings;
+mod text;
+
+use rasq_plugin_kit::i18n;
+use text::TEXT;
 
 const SCOPE: &str = "rasq.official.misskey:misskey:misskey.io:sample:0.1.0:tl-home";
 
@@ -126,6 +130,8 @@ pub extern "C" fn dealloc(ptr: u32, len: u32) {
 /// Initial tree (rev 1): the bind-based sample PostTile from
 /// `examples/post-tile.rrl.json` — shown until `timeline` is called.
 fn initial_root() -> Value {
+    // snapshot() に args は無いので、いちばん新しい call の args.locale(まだ無ければ ja)。
+    let loc = i18n::current();
     json!({
         "t": "Column", "k": "root", "c": [
             {
@@ -140,7 +146,7 @@ fn initial_root() -> Value {
                 ]
             },
             // D-064: FOW surface デモの入口(タップで fow.open を要求する)。
-            { "t": "Button", "k": "fow-demo", "p": { "label": "FOWデモ" }, "on": { "tap": "pickReaction" } }
+            { "t": "Button", "k": "fow-demo", "p": { "label": TEXT.t(&loc, "demo.fowButton") }, "on": { "tap": "pickReaction" } }
         ]
     })
 }
@@ -154,6 +160,7 @@ fn pick_reaction(args: &Value) -> Result<Value, Value> {
     };
     // 実物ノードへのアンカー (D-072): 呼び出し元(アクションバー)の
     // nodeId 末尾 key に張り付く。ホスト側で解決できなければ通常ドック。
+    let loc = i18n::locale_of(args);
     let anchor_key = args["nodeId"].as_str().and_then(|s| s.rsplit(':').next()).unwrap_or("");
     FOW_COUNT.store(0, Ordering::Relaxed); // surface rev は open で 1 に戻る (D-073)
     let response = host_call(
@@ -165,22 +172,22 @@ fn pick_reaction(args: &Value) -> Result<Value, Value> {
                 "type": "widget",
                 "confirmMode": "immediate",
                 "initialHeightFactor": 0.35,
-                "title": "リアクション (wasm)",
-                "cancelText": "閉じる"
+                "title": TEXT.t(loc, "fow.title"),
+                "cancelText": TEXT.t(loc, "fow.close")
             },
             "onClosed": "fowClosed",
             // ✕(閉じる)は即クローズせず確認ポップアップ (D-066)。
             "onCancel": "confirmCloseFow",
             "root": {
                 "t": "Column", "k": "fow-root", "c": [
-                    { "t": "Text", "k": "fow-prompt", "p": { "text": format!("サンプルプラグインの FOW (postId: {})", args["postId"].as_str().unwrap_or("?")) } },
+                    { "t": "Text", "k": "fow-prompt", "p": { "text": TEXT.f(loc, "fow.prompt", &[("postId", args["postId"].as_str().unwrap_or("?"))]) } },
                     { "t": "Row", "k": "fow-emoji", "c": [
                         emoji_button("emoji-like", "👍"),
                         emoji_button("emoji-heart", "❤️"),
                         emoji_button("emoji-tada", "🎉")
                     ] },
                     // surface patch のデモ (D-073): +1 でカウンターだけ差分更新。
-                    { "t": "Text", "k": "fow-count", "p": { "text": "タップ 0 回" } },
+                    { "t": "Text", "k": "fow-count", "p": { "text": TEXT.f(loc, "fow.count", &[("n", "0")]) } },
                     { "t": "Button", "k": "fow-plus", "p": { "label": "+1" }, "on": { "tap": "fowPlus" } }
                 ]
             }
@@ -247,6 +254,8 @@ fn media_type(mime: &str) -> &'static str {
 /// One Misskey note → a `PostTile` node with **literal props** (no host-store
 /// binds: the plugin owns its data; PROTOCOL §2 props are plain values).
 fn post_tile(note: &Value, fallback_instance: &str) -> Value {
+    // タイルは call("timeline") の中で組むので、その call の args.locale(i18n::set_current 済み)。
+    let loc = i18n::current();
     let user = &note["user"];
     let username = user["username"].as_str().unwrap_or("?");
     let display = match user["name"].as_str() {
@@ -296,9 +305,9 @@ fn post_tile(note: &Value, fallback_instance: &str) -> Value {
         "t": "ActionBar", "k": format!("actions-{id}"), "role": "actionBar",
         "p": {
             "actions": [
-                { "id": "reply", "label": "返信", "icon": "subdirectory_arrow_left" },
-                { "id": "renote", "label": "リノート", "icon": "repeat", "doneIcon": "repeat_on" },
-                { "id": "reaction", "label": "リアクション", "icon": "add_reaction_outlined", "doneIcon": "add_reaction", "iconPerPost": true }
+                { "id": "reply", "label": TEXT.t(&loc, "action.reply"), "icon": "subdirectory_arrow_left" },
+                { "id": "renote", "label": TEXT.t(&loc, "action.renote"), "icon": "repeat", "doneIcon": "repeat_on" },
+                { "id": "reaction", "label": TEXT.t(&loc, "action.reaction"), "icon": "add_reaction_outlined", "doneIcon": "add_reaction", "iconPerPost": true }
             ],
             "states": {
                 "reply": { "count": note["repliesCount"] },
@@ -553,12 +562,12 @@ fn sns_timeline(args: &Value) -> Result<Value, Value> {
 
 /// リアクション 1 位の置き換えタイル (D-082 デモ)。入力は Post ワイヤ。
 /// PostTile(role contentBody)を含む = V5 検証を満たす。
-fn top_reaction_tile(post: &Value) -> Value {
+fn top_reaction_tile(post: &Value, loc: &str) -> Value {
     let author = &post["author"];
     let id = post["id"].as_str().unwrap_or("x");
     json!({
         "t": "Column", "k": format!("top-{id}"), "c": [
-            { "t": "Text", "k": format!("crown-{id}"), "p": { "text": format!("👑 リアクション1位 ({}件)", post["counts"]["reaction"].as_i64().unwrap_or(0)) } },
+            { "t": "Text", "k": format!("crown-{id}"), "p": { "text": TEXT.f(loc, "tl.first", &[("n", &post["counts"]["reaction"].as_i64().unwrap_or(0).to_string())]) } },
             {
                 "t": "PostTile", "k": format!("post-{id}"), "role": "contentBody",
                 "p": {
@@ -812,13 +821,14 @@ fn sns_capabilities(args: &Value) -> Result<Value, Value> {
 /// `call("sns.timelines")`: このアカウントで出せる基本 TL の宣言。
 /// ホストはこれをタブに並べる(CONTRACT §6 の id 体系)。SNS ごとに
 /// 揃う TL が違うため、ハードコードではなくプラグインが宣言する。
-fn sns_timelines(_args: &Value) -> Result<Value, Value> {
+fn sns_timelines(args: &Value) -> Result<Value, Value> {
+    let t = |k| TEXT.t(i18n::locale_of(args), k);
     Ok(json!({ "timelines": [
-        { "id": "home",   "label": "ホーム" },
-        { "id": "social", "label": "ソーシャル" },
-        { "id": "local",  "label": "ローカル" },
-        { "id": "global", "label": "グローバル" },
-        { "id": "featured", "label": "Today" },
+        { "id": "home",   "label": t("timeline.home") },
+        { "id": "social", "label": t("timeline.social") },
+        { "id": "local",  "label": t("timeline.local") },
+        { "id": "global", "label": t("timeline.global") },
+        { "id": "featured", "label": t("timeline.featured") },
     ] }))
 }
 
@@ -1468,24 +1478,10 @@ fn timeline(args: &Value) -> Result<Value, Value> {
     Ok(json!({ "treeUpdated": true, "count": count, "rev": rev, "host": host }))
 }
 
-/// Answers a host `call { callId, fn, args }` (PROTOCOL.md §3.2) with a
-/// `result` message (§3.1).
-#[no_mangle]
-pub extern "C" fn call(
-    fn_ptr: u32,
-    fn_len: u32,
-    args_ptr: u32,
-    args_len: u32,
-    call_id_ptr: u32,
-    call_id_len: u32,
-) -> u64 {
-    let fn_name = read_str(fn_ptr, fn_len);
-    let args = read_str(args_ptr, args_len);
-    let call_id = read_str(call_id_ptr, call_id_len);
-    let args_value: Value = serde_json::from_str(&args).unwrap_or(Value::Null);
-
-    let outcome: Result<Value, Value> = match fn_name.as_str() {
-        "timeline" => timeline(&args_value),
+/// `call` の本体(export とテストが共用する)。
+fn dispatch(fn_name: &str, args_value: &Value) -> Result<Value, Value> {
+    match fn_name {
+        "timeline" => timeline(args_value),
         // Demo of the host-function boundary: storage.set → storage.get.
         "storageRoundTrip" => {
             let set = host_call("storage.set", json!({"ns": "safe", "key": args_value["key"], "value": args_value["value"]}));
@@ -1497,65 +1493,65 @@ pub extern "C" fn call(
             }
         }
         // SnsSession 契約の boundary 写像 (D-074/D-075, M5d): Post ワイヤを返す。
-        "sns.timeline" => sns_timeline(&args_value),
-        "sns.thread" => sns_thread(&args_value),
-        "sns.performAction" => sns_perform_action(&args_value),
-        "sns.createPost" => sns_create_post(&args_value),
-        "sns.deletePost" => misskey_fetch(&args_value, "notes/delete", json!({ "noteId": args_value["id"] })).map(|_| json!({})),
-        "sns.me" => misskey_fetch(&args_value, "i", json!({})).map(|me| {
+        "sns.timeline" => sns_timeline(args_value),
+        "sns.thread" => sns_thread(args_value),
+        "sns.performAction" => sns_perform_action(args_value),
+        "sns.createPost" => sns_create_post(args_value),
+        "sns.deletePost" => misskey_fetch(args_value, "notes/delete", json!({ "noteId": args_value["id"] })).map(|_| json!({})),
+        "sns.me" => misskey_fetch(args_value, "i", json!({})).map(|me| {
             let host = args_value["host"].as_str().unwrap_or("misskey.io");
             json!({ "user": user_wire(&me, host) })
         }),
-        "sns.user" => sns_user(&args_value),
-        "sns.userPosts" => sns_user_posts(&args_value),
-        "sns.reactions" => sns_reactions(&args_value),
-        "sns.reposters" => sns_renotes(&args_value, false),
-        "sns.quotes" => sns_renotes(&args_value, true),
-        "sns.emojis" => sns_emojis(&args_value),
+        "sns.user" => sns_user(args_value),
+        "sns.userPosts" => sns_user_posts(args_value),
+        "sns.reactions" => sns_reactions(args_value),
+        "sns.reposters" => sns_renotes(args_value, false),
+        "sns.quotes" => sns_renotes(args_value, true),
+        "sns.emojis" => sns_emojis(args_value),
         // 通知 / 関係 / DM / 検索 (D-134): 残りの SnsSession 契約を写した分。
-        "sns.inspectServer" => sns_inspect_server(&args_value),
-        "sns.timelines" => sns_timelines(&args_value),
-        "sns.capabilities" => sns_capabilities(&args_value),
+        "sns.inspectServer" => sns_inspect_server(args_value),
+        "sns.timelines" => sns_timelines(args_value),
+        "sns.capabilities" => sns_capabilities(args_value),
         // 設定ページ (D-044 / rasq-client D-482): ページの宣言と、remote ページ(account)の読み書き。
-        "sns.settingsPages" => settings::sns_settings_pages(&args_value),
-        "sns.settingsRead" => settings::sns_settings_read(&args_value),
-        "sns.settingsWrite" => settings::sns_settings_write(&args_value),
-        "sns.notifications" => sns_notifications(&args_value),
-        "sns.markNotificationsRead" => misskey_fetch(&args_value, "notifications/mark-all-as-read", json!({})).map(|_| json!({})),
-        "sns.relationships" => sns_relationships(&args_value),
-        "sns.setRelation" => sns_set_relation(&args_value),
-        "sns.follows" => sns_follows(&args_value),
-        "sns.userList" => sns_user_list(&args_value),
+        "sns.settingsPages" => settings::sns_settings_pages(args_value),
+        "sns.settingsRead" => settings::sns_settings_read(args_value),
+        "sns.settingsWrite" => settings::sns_settings_write(args_value),
+        "sns.notifications" => sns_notifications(args_value),
+        "sns.markNotificationsRead" => misskey_fetch(args_value, "notifications/mark-all-as-read", json!({})).map(|_| json!({})),
+        "sns.relationships" => sns_relationships(args_value),
+        "sns.setRelation" => sns_set_relation(args_value),
+        "sns.follows" => sns_follows(args_value),
+        "sns.userList" => sns_user_list(args_value),
         "sns.resolveFollowRequest" => {
             let endpoint = if args_value["accept"].as_bool().unwrap_or(false) { "following/requests/accept" } else { "following/requests/reject" };
-            misskey_fetch(&args_value, endpoint, json!({ "userId": args_value["id"] })).map(|_| json!({}))
+            misskey_fetch(args_value, endpoint, json!({ "userId": args_value["id"] })).map(|_| json!({}))
         }
-        "sns.reportUser" => sns_report_user(&args_value),
-        "sns.search" => sns_search(&args_value),
-        "sns.trendingTags" => sns_trending_tags(&args_value),
-        "sns.favorites" => sns_favorites(&args_value),
-        "sns.dmRooms" => sns_dm_rooms(&args_value),
-        "sns.sendDm" => sns_send_dm(&args_value),
+        "sns.reportUser" => sns_report_user(args_value),
+        "sns.search" => sns_search(args_value),
+        "sns.trendingTags" => sns_trending_tags(args_value),
+        "sns.favorites" => sns_favorites(args_value),
+        "sns.dmRooms" => sns_dm_rooms(args_value),
+        "sns.sendDm" => sns_send_dm(args_value),
         // メディア / プロフィール / リスト / クリップ / Play (D-136)。
-        "sns.uploadMedia" => sns_upload_media(&args_value),
-        "sns.updateProfile" => sns_update_profile(&args_value),
-        "sns.lists" => sns_lists(&args_value),
-        "sns.listInfo" => sns_list_info(&args_value),
-        "sns.listMembers" => sns_list_members(&args_value),
-        "sns.createList" => sns_create_list(&args_value),
-        "sns.updateListMember" => sns_update_list_member(&args_value),
-        "sns.users" => sns_users(&args_value),
-        "sns.reactedPosts" => sns_reacted_posts(&args_value),
-        "sns.clips" => sns_clips(&args_value),
-        "sns.clipInfo" => misskey_fetch(&args_value, "clips/show", json!({ "clipId": args_value["clipId"] })).map(|c| json!({ "clip": clip_wire(&c) })),
-        "sns.clipNotes" => sns_clip_notes(&args_value),
-        "sns.createClip" => misskey_fetch(&args_value, "clips/create", json!({ "name": args_value["name"], "description": args_value["description"], "isPublic": args_value["isPublic"] })).map(|c| json!({ "clip": clip_wire(&c) })),
-        "sns.deleteClip" => misskey_fetch(&args_value, "clips/delete", json!({ "clipId": args_value["clipId"] })).map(|_| json!({})),
+        "sns.uploadMedia" => sns_upload_media(args_value),
+        "sns.updateProfile" => sns_update_profile(args_value),
+        "sns.lists" => sns_lists(args_value),
+        "sns.listInfo" => sns_list_info(args_value),
+        "sns.listMembers" => sns_list_members(args_value),
+        "sns.createList" => sns_create_list(args_value),
+        "sns.updateListMember" => sns_update_list_member(args_value),
+        "sns.users" => sns_users(args_value),
+        "sns.reactedPosts" => sns_reacted_posts(args_value),
+        "sns.clips" => sns_clips(args_value),
+        "sns.clipInfo" => misskey_fetch(args_value, "clips/show", json!({ "clipId": args_value["clipId"] })).map(|c| json!({ "clip": clip_wire(&c) })),
+        "sns.clipNotes" => sns_clip_notes(args_value),
+        "sns.createClip" => misskey_fetch(args_value, "clips/create", json!({ "name": args_value["name"], "description": args_value["description"], "isPublic": args_value["isPublic"] })).map(|c| json!({ "clip": clip_wire(&c) })),
+        "sns.deleteClip" => misskey_fetch(args_value, "clips/delete", json!({ "clipId": args_value["clipId"] })).map(|_| json!({})),
         "sns.updateClipNote" => {
             let endpoint = if args_value["add"].as_bool().unwrap_or(false) { "clips/add-note" } else { "clips/remove-note" };
-            misskey_fetch(&args_value, endpoint, json!({ "clipId": args_value["clipId"], "noteId": args_value["postId"] })).map(|_| json!({}))
+            misskey_fetch(args_value, endpoint, json!({ "clipId": args_value["clipId"], "noteId": args_value["postId"] })).map(|_| json!({}))
         }
-        "sns.userPlays" => sns_user_plays(&args_value),
+        "sns.userPlays" => sns_user_plays(args_value),
         // gpu.compute デモ (D-081): f32 配列を GPU(WGSL compute)で 2 倍。
         // カスタム TL の重いソートやメディア編集フィルターの下地 — GPU が
         // 無い環境は E01 で返るので、その時はクラウドカルクレーター
@@ -1603,7 +1599,7 @@ pub extern "C" fn call(
         // タイムラインレンダラー契約 v1 (M5e/D-080): TL プラグイン =
         // 宣言 + ソートアルゴリズム。データ取得はホスト(基礎 TL)。
         "tl.timelines" => Ok(json!({ "timelines": [
-            { "id": "reaction-rank", "label": "リアクション順", "base": "local" }
+            { "id": "reaction-rank", "label": TEXT.t(i18n::locale_of(args_value), "tl.reactionRank"), "base": "local" }
         ] })),
         "tl.sort" => match args_value["id"].as_str() {
             Some("reaction-rank") => {
@@ -1645,7 +1641,7 @@ pub extern "C" fn call(
                 if let Some(top) = posts.first() {
                     if top["counts"]["reaction"].as_i64().unwrap_or(0) > 0 {
                         if let Some(id) = top["id"].as_str() {
-                            tiles.insert(id.to_string(), top_reaction_tile(top));
+                            tiles.insert(id.to_string(), top_reaction_tile(top, i18n::locale_of(args_value)));
                         }
                     }
                 }
@@ -1655,7 +1651,7 @@ pub extern "C" fn call(
                 if let Some(second) = posts.get(1) {
                     if let Some(id) = second["id"].as_str() {
                         let n = second["counts"]["reaction"].as_i64().unwrap_or(0);
-                        badges.insert(id.to_string(), json!({ "icon": "star", "text": format!("リアクション2位 ({n}件)") }));
+                        badges.insert(id.to_string(), json!({ "icon": "star", "text": TEXT.f(i18n::locale_of(args_value), "tl.second", &[("n", &n.to_string())]) }));
                     }
                 }
                 Ok(json!({ "tiles": tiles, "badges": badges }))
@@ -1664,11 +1660,11 @@ pub extern "C" fn call(
         },
         // アクションバー宣言(register_action と同形の JSON)。
         "sns.actions" => Ok(json!({ "actions": [
-            { "id": "reply", "genreTag": "Reply", "label": "返信", "icon": "subdirectory_arrow_left" },
-            { "id": "renote", "genreTag": "Repost", "label": "リノート", "icon": "repeat", "doneIcon": "repeat_on" },
-            { "id": "reaction", "genreTag": "Reaction", "label": "リアクション", "icon": "add_reaction_outlined", "doneIcon": "add_reaction" }
+            { "id": "reply", "genreTag": "Reply", "label": TEXT.t(i18n::locale_of(args_value), "action.reply"), "icon": "subdirectory_arrow_left" },
+            { "id": "renote", "genreTag": "Repost", "label": TEXT.t(i18n::locale_of(args_value), "action.renote"), "icon": "repeat", "doneIcon": "repeat_on" },
+            { "id": "reaction", "genreTag": "Reaction", "label": TEXT.t(i18n::locale_of(args_value), "action.reaction"), "icon": "add_reaction_outlined", "doneIcon": "add_reaction" }
         ] })),
-        "pickReaction" => pick_reaction(&args_value),
+        "pickReaction" => pick_reaction(args_value),
         // FOW surface への差分更新デモ (D-073): カウンターを setProp する
         // surface patch を積み、`patch: true` でホストに引き取らせる。
         "fowPlus" => {
@@ -1681,7 +1677,7 @@ pub extern "C" fn call(
                 "rev": n + 1,
                 "baseRev": n,
                 "ops": [
-                    { "op": "setProp", "target": format!("{SCOPE}:fow-count"), "prop": "text", "value": format!("タップ {n} 回") }
+                    { "op": "setProp", "target": format!("{SCOPE}:fow-count"), "prop": "text", "value": TEXT.f(i18n::locale_of(args_value), "fow.count", &[("n", &n.to_string())]) }
                 ]
             });
             Ok(json!({ "patch": true, "count": n }))
@@ -1713,14 +1709,14 @@ pub extern "C" fn call(
                         "type": "widget",
                         "confirmMode": "confirm",
                         "initialHeightFactor": 0.22,
-                        "title": "閉じますか?"
+                        "title": TEXT.t(i18n::locale_of(args_value), "fow.confirm.title")
                     },
                     "root": {
                         "t": "Column", "k": "confirm-root", "c": [
-                            { "t": "Text", "k": "confirm-msg", "p": { "text": "リアクションを選ばずに閉じますか?" } },
+                            { "t": "Text", "k": "confirm-msg", "p": { "text": TEXT.t(i18n::locale_of(args_value), "fow.confirm.message") } },
                             { "t": "Row", "k": "confirm-actions", "c": [
-                                { "t": "Button", "k": "confirm-discard", "p": { "label": "破棄" }, "on": { "tap": "discardFow" } },
-                                { "t": "Button", "k": "confirm-keep", "p": { "label": "続ける" }, "on": { "tap": "keepFow" } }
+                                { "t": "Button", "k": "confirm-discard", "p": { "label": TEXT.t(i18n::locale_of(args_value), "fow.confirm.discard") }, "on": { "tap": "discardFow" } },
+                                { "t": "Button", "k": "confirm-keep", "p": { "label": TEXT.t(i18n::locale_of(args_value), "fow.confirm.keep") }, "on": { "tap": "keepFow" } }
                             ] }
                         ]
                     }
@@ -1759,7 +1755,28 @@ pub extern "C" fn call(
             Ok(json!({ "echo": { "fn": fn_name, "args": args_value } }))
         }
         other => Err(json!({ "code": "C01", "message": format!("unsupported fn: {other}") })),
-    };
+    }
+}
+
+/// Answers a host `call { callId, fn, args }` (PROTOCOL.md §3.2) with a
+/// `result` message (§3.1).
+#[no_mangle]
+pub extern "C" fn call(
+    fn_ptr: u32,
+    fn_len: u32,
+    args_ptr: u32,
+    args_len: u32,
+    call_id_ptr: u32,
+    call_id_len: u32,
+) -> u64 {
+    let fn_name = read_str(fn_ptr, fn_len);
+    let args = read_str(args_ptr, args_len);
+    let call_id = read_str(call_id_ptr, call_id_len);
+    let args_value: Value = serde_json::from_str(&args).unwrap_or(Value::Null);
+
+    // args.locale(無ければ ja)を覚えておく: args の無い snapshot() / 深い所のタイル組み立ても i18n::current() で引く。
+    i18n::set_current(&args_value);
+    let outcome = dispatch(&fn_name, &args_value);
 
     let mut msg = json!({
         "schema": "rasq.boundary/1",
@@ -1786,6 +1803,43 @@ fn read_str(ptr: u32, len: u32) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// 利用者に見せる文は表から引く(`args.locale`、PROTOCOL.md §4.6)。いまは ja だけなので、どの言語でも ja と同じ文。
+    #[test]
+    fn ui_text_comes_from_the_table_and_falls_back_to_ja() {
+        assert!(TEXT.check().is_empty(), "{:?}", TEXT.check());
+        let _ = i18n::take_misses();
+        let posts = json!([{ "id": "a", "counts": { "reaction": 5 } }, { "id": "b", "counts": { "reaction": 2 } }]);
+        let calls = [
+            ("sns.settingsPages", json!({})),
+            ("sns.actions", json!({})),
+            ("sns.timelines", json!({})),
+            ("tl.timelines", json!({})),
+            ("tl.customize", json!({ "id": "reaction-rank", "posts": posts })),
+        ];
+        for (f, args) in &calls {
+            let base = dispatch(f, args).unwrap();
+            for loc in ["ja", "ja-JP", "en", "en-US", "zh-Hant", "", "??"] {
+                let mut a = args.clone();
+                a["locale"] = json!(loc);
+                assert_eq!(dispatch(f, &a).unwrap(), base, "{f} locale={loc}");
+            }
+        }
+        let pages = dispatch("sns.settingsPages", &json!({ "locale": "en" })).unwrap()["pages"].clone();
+        assert_eq!(pages[0]["title"], "アカウント");
+        assert_eq!(pages[0]["root"]["c"][1]["p"]["submitLabel"], "保存");
+        assert_eq!(pages[0]["root"]["c"][14]["p"]["title"], "公開");
+        assert_eq!(dispatch("sns.timelines", &json!({})).unwrap()["timelines"][4]["label"], "Today");
+        let cz = dispatch("tl.customize", &json!({ "id": "reaction-rank", "posts": posts })).unwrap();
+        assert_eq!(cz["tiles"]["a"]["c"][0]["p"]["text"], "👑 リアクション1位 (5件)");
+        assert_eq!(cz["badges"]["b"]["text"], "リアクション2位 (2件)");
+        // args の無い snapshot() の本体ツリーは、いちばん新しい call の言語(まだ無ければ ja)。
+        i18n::set_current(&json!({ "locale": "en" }));
+        assert_eq!(initial_root()["c"][1]["p"]["label"], "FOWデモ");
+        let e = dispatch("sns.settingsWrite", &json!({ "area": "account", "key": "birthday", "value": "31/01/2000", "locale": "en" })).unwrap_err();
+        assert_eq!(e["message"], "誕生日は 2000-01-31 の形で入れてください");
+        assert!(i18n::take_misses().is_empty(), "表に無いキーを引いた");
+    }
 
     /// D-100: 純リノートは中身のノートへ展開し repostedBy を載せる
     /// (展開しないと本文も quote も無い「内容のない投稿」になる)。

@@ -1,4 +1,4 @@
-# RASQ スロットプラグイン契約 v0.23(正典)
+# RASQ スロットプラグイン契約 v0.24(正典)
 
 > **ここが正典。** 以前は `orgate-question/plugin-sample/*/CONTRACT.md` に同じ文書が複製されていたが、v0.8 から
 > 各リポジトリの `CONTRACT.md` はこのファイルへのポインタだけになった。節番号(§2.1〜§2.9 / §3 / §4 / §5)は複製時代のまま。
@@ -19,6 +19,9 @@
 - 画像などのバイナリは JSON 内の **base64**(`bytesB64` + `mimeType`)。
 - UI はすべて **FOW**(`fow.open`、`fow.widget` 権限)か、スロットが受け取る RRL。
 - 未対応の関数は `C01` を返す(ホストは該当 UI を隠す)。
+- (v0.24)**UI の言語はすべての `call` の `args.locale`**(BCP 47、無ければ `"ja"`)。プラグインが返す文(RRL / FOW / ボタンのラベル /
+  利用者に出るエラー)はこれで引く。マニフェストの `name` / `description` / `actions[].label` などは `locales` で言語ごとに書ける。
+  詳しくは [`../PROTOCOL.md`](../PROTOCOL.md) §4.6(`rasq-plugin-kit` の `i18n`)。
 
 ## 1. マニフェスト — `call("plugin.manifest", {})`
 
@@ -600,7 +603,8 @@ tier `page`(審査済みのみ)、kinds `["view"]`、権限は `render` が必�
   (v0.22: **`now`** = いまの時刻(エポックミリ秒)。wasm32 では `SystemTime::now` がトラップするので([cli.md](cli.md) の落とし穴)、時刻はホストからもらう。
   ホストは Central の時計に合わせた値を渡す(welcome の `now` との差で端末の時計のずれを直す)。`page.event` と RRL のイベントにも毎回載る)
   (v0.23: **`contract`** = ホストが話すこの契約の版(`"0.23"`、`<major>.<minor>`)。無ければ v0.22 以前のホスト。下の `svgz` / `data:image/svg+xml;zstd`
-  のような新しい形を、**このページを見ている人のホスト**が描けるかの目安にする)
+  のような新しい形を、**このページを見ている人のホスト**が描けるかの目安にする。v0.24 のホストは `"0.24"`)
+  (v0.24: **`locale`** = UI の言語(BCP 47、無ければ `"ja"`)。`page.event` / RRL のイベントにも毎回載る。[PROTOCOL §4.6](../PROTOCOL.md))
   → 戻り **`{root: Node, title?: string}`**(ページの RRL。表示は全画面のページで、**ヘッダーと戻るはホスト**)。
   `session` は shared で、セッションに入っているときだけ載る(無い = 1 人で開いた。solo と同じに動けばよい):
   ```json

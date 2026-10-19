@@ -10,5 +10,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 serde_json = "1"
+# 利用者に見せる文の表(args.locale、PROTOCOL.md §4.6)。ABI はこのクレートのまま(kit の export マクロは使わない)。
+rasq-plugin-kit = { path = "../rasq-plugin-kit", version = "0.1.0" }
 # 投稿本文の 300 文字上限はグラフェム単位(Bluesky の `maxGraphemes`)。
 unicode-segmentation = "1"

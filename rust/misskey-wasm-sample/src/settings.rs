@@ -10,9 +10,11 @@
 //! - `safety`   … ローカル保存 — ホストが投稿タイルの閲覧注意メディア / 注釈 (CW) の表示に使う
 //! - `security` … 表示だけ — パスワードが要る操作は web 版へ(`on: {"tap": "web.open"}`)
 
+use rasq_plugin_kit::i18n;
 use serde_json::{json, Value};
 
 use crate::misskey_fetch;
+use crate::text::TEXT;
 
 // ── RRL の部品 ────────────────────────────────────────────────────
 
@@ -29,8 +31,8 @@ fn radio(k: &str, value: &str, title: &str, subtitle: Option<&str>) -> Value {
 }
 
 /// 文字の設定(名前・自己紹介など)。「保存」で `settings.set`(payload.text)。
-fn input(k: &str, label: &str, max_length: u32, multiline: bool) -> Value {
-    json!({ "t": "Input", "k": k, "p": { "label": label, "value": format!("$.settings.{k}"), "maxLength": max_length, "multiline": multiline, "submitLabel": "保存", "clearOnSubmit": false, "allowEmpty": true, "pad": 16 }, "on": { "submit": "settings.set" } })
+fn input(loc: &str, k: &str, label: &str, max_length: u32, multiline: bool) -> Value {
+    json!({ "t": "Input", "k": k, "p": { "label": label, "value": format!("$.settings.{k}"), "maxLength": max_length, "multiline": multiline, "submitLabel": TEXT.t(loc, "settings.save"), "clearOnSubmit": false, "allowEmpty": true, "pad": 16 }, "on": { "submit": "settings.set" } })
 }
 
 fn web_link(path: &str, title: &str, subtitle: Option<&str>) -> Value {
@@ -46,40 +48,43 @@ fn page(area: &str, title: &str, source: &str, defaults: Value, children: Vec<Va
 }
 
 // ── ページ ────────────────────────────────────────────────────────
+// 文は crate::text::TEXT の表から `args.locale` で引く(PROTOCOL.md §4.6)。
 
-const VISIBILITIES: [(&str, &str); 3] = [("public", "公開"), ("followers", "フォロワーだけ"), ("private", "非公開")];
+/// 公開範囲の値と、表示名のキー。
+const VISIBILITIES: [(&str, &str); 3] = [("public", "account.visibility.public"), ("followers", "account.visibility.followers"), ("private", "account.visibility.private")];
 
-fn account_page() -> Value {
+fn account_page(loc: &str) -> Value {
+    let t = |k| TEXT.t(loc, k);
     let mut c = vec![
-        header("プロフィール"),
-        input("name", "名前", 50, false),
-        input("description", "自己紹介", 1500, true),
-        input("location", "場所", 50, false),
-        input("birthday", "誕生日(例: 2000-01-31)", 10, false),
-        web_link("settings/profile", "アイコン・バナー・補足情報", Some("web 版で編集します")),
-        header("公開範囲"),
-        switch("isLocked", "フォローを承認制にする", Some("フォローされる前にあなたの承認が必要になります")),
-        switch("autoAcceptFollowed", "フォロー中の人からのフォローは自動で承認", None),
-        switch("isExplorable", "アカウントを見つけやすくする", Some("「みつける」やユーザー検索に表示されます")),
-        switch("hideOnlineStatus", "オンライン状態を隠す", None),
-        switch("publicReactions", "リアクション一覧を公開する", None),
-        switch("noCrawle", "検索エンジンに載せない", Some("検索エンジンによるインデックスを避けるよう求めます")),
-        header("フォローの一覧を見せる相手"),
+        header(t("account.profile")),
+        input(loc, "name", t("account.name"), 50, false),
+        input(loc, "description", t("account.description"), 1500, true),
+        input(loc, "location", t("account.location"), 50, false),
+        input(loc, "birthday", t("account.birthday"), 10, false),
+        web_link("settings/profile", t("account.profileOnWeb"), Some(t("settings.webOnly"))),
+        header(t("account.visibility")),
+        switch("isLocked", t("account.isLocked"), Some(t("account.isLocked.sub"))),
+        switch("autoAcceptFollowed", t("account.autoAcceptFollowed"), None),
+        switch("isExplorable", t("account.isExplorable"), Some(t("account.isExplorable.sub"))),
+        switch("hideOnlineStatus", t("account.hideOnlineStatus"), None),
+        switch("publicReactions", t("account.publicReactions"), None),
+        switch("noCrawle", t("account.noCrawle"), Some(t("account.noCrawle.sub"))),
+        header(t("account.followingVisibility")),
     ];
     for (v, label) in VISIBILITIES {
-        c.push(radio("followingVisibility", v, label, None));
+        c.push(radio("followingVisibility", v, t(label), None));
     }
-    c.push(header("フォロワーの一覧を見せる相手"));
+    c.push(header(t("account.followersVisibility")));
     for (v, label) in VISIBILITIES {
-        c.push(radio("followersVisibility", v, label, None));
+        c.push(radio("followersVisibility", v, t(label), None));
     }
     c.extend([
-        header("アカウントの種類"),
-        switch("isBot", "Botとして設定", None),
-        switch("isCat", "Catにする", Some("発言が Cat 語になり、猫耳が付きます")),
-        note("これらの設定は接続先の Misskey サーバーに保存されます。"),
+        header(t("account.kind")),
+        switch("isBot", t("account.isBot"), None),
+        switch("isCat", t("account.isCat"), Some(t("account.isCat.sub"))),
+        note(t("account.savedOnServer")),
     ]);
-    page("account", "アカウント", "remote", account_defaults(), c)
+    page("account", t("account.title"), "remote", account_defaults(), c)
 }
 
 fn account_defaults() -> Value {
@@ -91,57 +96,61 @@ fn account_defaults() -> Value {
     })
 }
 
-fn timeline_page() -> Value {
+fn timeline_page(loc: &str) -> Value {
+    let t = |k| TEXT.t(loc, k);
     page(
         "timeline",
-        "タイムライン",
+        t("timeline.title"),
         "local",
         json!({ "withRenotes": true, "withReplies": false }),
         vec![
-            header("表示する投稿"),
-            switch("withRenotes", "リノートを表示", Some("オフにすると引用のないリノートを取得しません")),
-            switch("withReplies", "他の人への返信を表示", Some("フォロー中の人が他の人へ送った返信をTLに含めます")),
+            header(t("timeline.shownPosts")),
+            switch("withRenotes", t("timeline.withRenotes"), Some(t("timeline.withRenotes.sub"))),
+            switch("withReplies", t("timeline.withReplies"), Some(t("timeline.withReplies.sub"))),
         ],
     )
 }
 
 /// 閲覧注意メディア / 注釈 (CW)。ホストが投稿タイルに当てる(どの SNS プラグインも同じキー)。
-fn safety_page() -> Value {
+fn safety_page(loc: &str) -> Value {
+    let t = |k| TEXT.t(loc, k);
     page(
         "safety",
-        "プライバシーとセーフモード",
+        t("safety.title"),
         "local",
         json!({ "sensitiveMedia": "blur", "openCw": false }),
         vec![
-            header("閲覧注意(センシティブ)メディア"),
-            radio("sensitiveMedia", "blur", "ぼかして表示", Some("タップで開きます(標準)")),
-            radio("sensitiveMedia", "show", "ぼかさず表示", None),
-            radio("sensitiveMedia", "hide", "表示しない(セーフモード)", Some("閲覧注意メディアをタイルから取り除きます")),
-            header("注釈(CW)"),
-            switch("openCw", "注釈付き投稿を自動で開く", None),
+            header(t("safety.sensitiveMedia")),
+            radio("sensitiveMedia", "blur", t("safety.blur"), Some(t("safety.blur.sub"))),
+            radio("sensitiveMedia", "show", t("safety.show"), None),
+            radio("sensitiveMedia", "hide", t("safety.hide"), Some(t("safety.hide.sub"))),
+            header(t("safety.cw")),
+            switch("openCw", t("safety.openCw"), None),
         ],
     )
 }
 
-fn security_page() -> Value {
+fn security_page(loc: &str) -> Value {
+    let t = |k| TEXT.t(loc, k);
     page(
         "security",
-        "セキュリティ",
+        t("security.title"),
         "local",
         json!({}),
         vec![
-            header("web で行う設定"),
-            web_link("settings/security", "パスワード・二要素認証・ログイン履歴", Some("パスワードが必要な操作は web 版で行います")),
-            web_link("settings/api", "アクセストークンの管理", Some("発行済みトークンの確認と失効")),
-            web_link("settings/apps", "連携しているアプリ", Some("アプリに与えた許可の確認と取り消し")),
-            note("アクセストークンは端末内の安全な領域にのみ保存されます。"),
+            header(t("security.onWeb")),
+            web_link("settings/security", t("security.password"), Some(t("security.password.sub"))),
+            web_link("settings/api", t("security.tokens"), Some(t("security.tokens.sub"))),
+            web_link("settings/apps", t("security.apps"), Some(t("security.apps.sub"))),
+            note(t("security.tokenNote")),
         ],
     )
 }
 
-/// `call("sns.settingsPages")` → `{pages}`。
-pub(crate) fn sns_settings_pages(_args: &Value) -> Result<Value, Value> {
-    Ok(json!({ "pages": [account_page(), timeline_page(), safety_page(), security_page()] }))
+/// `call("sns.settingsPages")` → `{pages}`。文は `args.locale`(無ければ ja)で引く。
+pub(crate) fn sns_settings_pages(args: &Value) -> Result<Value, Value> {
+    let loc = i18n::locale_of(args);
+    Ok(json!({ "pages": [account_page(loc), timeline_page(loc), safety_page(loc), security_page(loc)] }))
 }
 
 // ── account の読み書き ────────────────────────────────────────────
@@ -172,25 +181,25 @@ fn is_birthday(s: &str) -> bool {
 }
 
 /// 1 キーを `i/update` の本文へ。許可リストに無いキー / 形の違う値は断る。
-fn account_update_body(key: &str, value: &Value) -> Result<Value, Value> {
-    let bad = |m: &str| Err(json!({ "code": "D01", "message": m }));
+fn account_update_body(key: &str, value: &Value, loc: &str) -> Result<Value, Value> {
+    let bad = |k: &str| Err(json!({ "code": "D01", "message": TEXT.t(loc, k) }));
     let v = if BOOL_KEYS.contains(&key) {
         match value.as_bool() {
             Some(b) => json!(b),
-            None => return bad("値は true / false です"),
+            None => return bad("error.notBool"),
         }
     } else if TEXT_KEYS.contains(&key) {
         let s = value.as_str().unwrap_or("").trim();
         match key {
             // 名前と誕生日は空 = 消す(null)。
             "name" | "birthday" | "location" if s.is_empty() => Value::Null,
-            "birthday" if !is_birthday(s) => return bad("誕生日は 2000-01-31 の形で入れてください"),
+            "birthday" if !is_birthday(s) => return bad("error.birthday"),
             _ => json!(s),
         }
     } else if VISIBILITY_KEYS.contains(&key) {
         match value.as_str() {
             Some(s) if VISIBILITIES.iter().any(|(v, _)| *v == s) => json!(s),
-            _ => return bad("公開範囲は public / followers / private です"),
+            _ => return bad("error.visibility"),
         }
     } else {
         return Err(json!({ "code": "C01", "message": format!("unknown account setting: {key}") }));
@@ -217,7 +226,7 @@ pub(crate) fn sns_settings_write(args: &Value) -> Result<Value, Value> {
     let Some(key) = args["key"].as_str() else {
         return Err(json!({ "code": "D01", "message": "key required" }));
     };
-    let body = account_update_body(key, &args["value"])?;
+    let body = account_update_body(key, &args["value"], i18n::locale_of(args))?;
     // i/update は更新後の自分を返す(サーバーが弾いた変更もそのまま見える)。
     let me = misskey_fetch(args, "i/update", body)?;
     Ok(json!({ "values": account_values(&me) }))
@@ -317,7 +326,7 @@ mod tests {
 
     #[test]
     fn empty_birthday_clears_it() {
-        assert_eq!(account_update_body("birthday", &json!("")).unwrap(), json!({ "birthday": null }));
-        assert_eq!(account_update_body("description", &json!("")).unwrap(), json!({ "description": "" }));
+        assert_eq!(account_update_body("birthday", &json!(""), "ja").unwrap(), json!({ "birthday": null }));
+        assert_eq!(account_update_body("description", &json!(""), "ja").unwrap(), json!({ "description": "" }));
     }
 }

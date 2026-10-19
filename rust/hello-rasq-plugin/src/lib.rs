@@ -11,6 +11,7 @@
 //! | FOW surface | `"openPanel"` → `fow.open`、`+1` → **surface patch** |
 //! | ライフサイクル / 閉時通知 | `"lifecycle"` / `"panelClosed"`(fow.open の onClosed) |
 //! | SNS 抽象関数 | `"sns.timeline"` / `"sns.actions"` / `"sns.performAction"`(canned) |
+//! | 利用者に見せる文 (i18n) | [`TEXT`] の表を `args.locale`(無ければ `ja`)で引く(PROTOCOL.md §4.6) |
 //!
 //! ビルド: `cargo build --release --target wasm32-unknown-unknown -p hello-rasq-plugin`
 //! 試し方: rasq-client のカタログ →「WASMプラグイン試験 (dev)」で
@@ -19,6 +20,7 @@
 //!
 //! 規約の正典は [`PROTOCOL.md`](../../PROTOCOL.md) と [`schema/`](../../schema/)。
 
+use rasq_plugin_kit::i18n;
 use serde_json::{json, Value};
 use std::mem;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -86,17 +88,41 @@ static PENDING_PATCH: Mutex<Value> = Mutex::new(Value::Null);
 static LAST_NOTIFY: Mutex<Value> = Mutex::new(Value::Null);
 
 // ---------------------------------------------------------------------------
+// 0. 利用者に見せる文の表(PROTOCOL.md §4.6)。文はリテラルで書かず、キーで引く。
+//    言語を足すときは `"en": { … }` を足すだけ(無いキーは ja に落ちる)。
+// ---------------------------------------------------------------------------
+
+rasq_plugin_kit::i18n_catalog! {
+    pub static TEXT = {
+        "ja": {
+            "greeting" => "こんにちは、RASQ!",
+            "greeting.count" => "こんにちは!({n} 回目)",
+            "button.greet" => "挨拶する",
+            "button.panel" => "パネルを開く",
+            "panel.title" => "hello パネル",
+            "panel.close" => "閉じる",
+            "panel.count" => "{n} 回",
+            "action.wave" => "手を振る",
+            "action.received" => "{action} を受け取りました",
+        },
+    };
+}
+
+// ---------------------------------------------------------------------------
 // 1. RRL 画面(画面コンストラクタ): snapshot がツリー全体を返す。
 //    ノード形式は schema/rrl-node.schema.json、L2 はホスト実装(Props のみ)。
 // ---------------------------------------------------------------------------
 
 fn root() -> Value {
+    // snapshot() に args は無いので、いちばん新しい call の args.locale(まだ無ければ ja)。
+    let loc = i18n::current();
+    let t = |k| TEXT.t(&loc, k);
     json!({
         "t": "Column", "k": "root", "c": [
-            { "t": "Text", "k": "greeting", "p": { "text": "こんにちは、RASQ!" } },
+            { "t": "Text", "k": "greeting", "p": { "text": t("greeting") } },
             // on の値は call で受ける自分の関数名(イベント → call 写像)。
-            { "t": "Button", "k": "greet-btn", "p": { "label": "挨拶する" }, "on": { "tap": "greet" } },
-            { "t": "Button", "k": "panel-btn", "p": { "label": "パネルを開く" }, "on": { "tap": "openPanel" } }
+            { "t": "Button", "k": "greet-btn", "p": { "label": t("button.greet") }, "on": { "tap": "greet" } },
+            { "t": "Button", "k": "panel-btn", "p": { "label": t("button.panel") }, "on": { "tap": "openPanel" } }
         ]
     })
 }
@@ -132,6 +158,8 @@ pub extern "C" fn call(fn_ptr: u32, fn_len: u32, args_ptr: u32, args_len: u32, c
     let fn_name = read_str(fn_ptr, fn_len);
     let args: Value = serde_json::from_str(&read_str(args_ptr, args_len)).unwrap_or(Value::Null);
     let call_id = read_str(call_id_ptr, call_id_len);
+    // ホストは UI の言語を毎回 args.locale に載せる(無ければ ja)。snapshot() のために覚えておく。
+    let loc = i18n::set_current(&args);
 
     let outcome: Result<Value, Value> = match fn_name.as_str() {
         // --- ホスト関数(storage)+ 本体 patch --------------------------
@@ -146,7 +174,7 @@ pub extern "C" fn call(fn_ptr: u32, fn_len: u32, args_ptr: u32, args_len: u32, c
             *PENDING_PATCH.lock().unwrap() = json!({
                 "schema": "rasq.boundary/1", "scope": SCOPE, "type": "patch",
                 "rev": base + 1, "baseRev": base,
-                "ops": [{ "op": "setProp", "target": format!("{SCOPE}:greeting"), "prop": "text", "value": format!("こんにちは!({n} 回目)") }]
+                "ops": [{ "op": "setProp", "target": format!("{SCOPE}:greeting"), "prop": "text", "value": TEXT.f(&loc, "greeting.count", &[("n", &n.to_string())]) }]
             });
             Ok(json!({ "patch": true, "greets": n }))
         }
@@ -156,10 +184,10 @@ pub extern "C" fn call(fn_ptr: u32, fn_len: u32, args_ptr: u32, args_len: u32, c
             PANEL_COUNT.store(0, Ordering::Relaxed);
             let r = host_call("fow.open", json!({
                 "id": "hello-panel",
-                "spec": { "type": "widget", "confirmMode": "immediate", "initialHeightFactor": 0.3, "title": "hello パネル", "cancelText": "閉じる" },
+                "spec": { "type": "widget", "confirmMode": "immediate", "initialHeightFactor": 0.3, "title": TEXT.t(&loc, "panel.title"), "cancelText": TEXT.t(&loc, "panel.close") },
                 "onClosed": "panelClosed",
                 "root": { "t": "Column", "k": "panel-root", "c": [
-                    { "t": "Text", "k": "panel-count", "p": { "text": "0 回" } },
+                    { "t": "Text", "k": "panel-count", "p": { "text": TEXT.f(&loc, "panel.count", &[("n", "0")]) } },
                     { "t": "Button", "k": "panel-plus", "p": { "label": "+1" }, "on": { "tap": "panelPlus" } }
                 ] }
             }));
@@ -170,7 +198,7 @@ pub extern "C" fn call(fn_ptr: u32, fn_len: u32, args_ptr: u32, args_len: u32, c
             *PENDING_PATCH.lock().unwrap() = json!({
                 "schema": "rasq.boundary/1", "scope": SCOPE, "type": "patch",
                 "surface": "hello-panel", "rev": n + 1, "baseRev": n,
-                "ops": [{ "op": "setProp", "target": format!("{SCOPE}:panel-count"), "prop": "text", "value": format!("{n} 回") }]
+                "ops": [{ "op": "setProp", "target": format!("{SCOPE}:panel-count"), "prop": "text", "value": TEXT.f(&loc, "panel.count", &[("n", &n.to_string())]) }]
             });
             Ok(json!({ "patch": true }))
         }
@@ -189,9 +217,9 @@ pub extern "C" fn call(fn_ptr: u32, fn_len: u32, args_ptr: u32, args_len: u32, c
             wire_post("h2", "Post ワイヤ (rasq.post/1) がそのまま投稿タイルになります"),
         ], "nextCursor": null } })),
         "sns.actions" => Ok(json!({ "actions": [
-            { "id": "wave", "genreTag": "Reaction", "label": "手を振る", "icon": "favorite_border", "doneIcon": "favorite" }
+            { "id": "wave", "genreTag": "Reaction", "label": TEXT.t(&loc, "action.wave"), "icon": "favorite_border", "doneIcon": "favorite" }
         ] })),
-        "sns.performAction" => Ok(json!({ "result": { "done": true, "message": format!("{} を受け取りました", args["actionId"]) } })),
+        "sns.performAction" => Ok(json!({ "result": { "done": true, "message": TEXT.f(&loc, "action.received", &[("action", &args["actionId"].to_string())]) } })),
 
         other => Err(json!({ "code": "C01", "message": format!("unsupported fn: {other}") })),
     };
@@ -215,4 +243,23 @@ fn wire_post(id: &str, body: &str) -> Value {
         "counts": { "reply": 0, "renote": 0, "reaction": 1 },
         "reactions": { "👋": 1 },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 文は表から(PROTOCOL.md §4.6)。いまは ja だけなので、どの言語でも ja と同じ文。
+    #[test]
+    fn ui_text_comes_from_the_table_and_falls_back_to_ja() {
+        assert!(TEXT.check().is_empty(), "{:?}", TEXT.check());
+        let _ = i18n::take_misses();
+        for loc in [json!("en"), json!("zh-Hant"), Value::Null] {
+            i18n::set_current(&json!({ "locale": loc }));
+            assert_eq!(root()["c"][0]["p"]["text"], "こんにちは、RASQ!");
+            assert_eq!(root()["c"][2]["p"]["label"], "パネルを開く");
+        }
+        assert_eq!(TEXT.f("en", "action.received", &[("action", &json!("wave").to_string())]), "\"wave\" を受け取りました");
+        assert!(i18n::take_misses().is_empty());
+    }
 }

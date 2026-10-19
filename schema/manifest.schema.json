@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rasq.io/schema/plugin-manifest-0.5.json",
   "title": "RASQ PluginManifest (function.json subset, v0.5 / rasq.plugin-manifest/1)",
-  "description": "プラグインのマニフェスト。SNS プラグインは function.json(examples/misskey.function.json)、スロットプラグインは call(\"plugin.manifest\") の答え(plugin-sample/CONTRACT.md §1)。v0.3 (D-005/D-006): schema / slots / roles / actions[].tags を正式化。slots の id は schema/slots.json の登録簿にあること。",
+  "description": "プラグインのマニフェスト。SNS プラグインは function.json(examples/misskey.function.json)、スロットプラグインは call(\"plugin.manifest\") の答え(plugin-sample/CONTRACT.md §1)。v0.3 (D-005/D-006): schema / slots / roles / actions[].tags を正式化。slots の id は schema/slots.json の登録簿にあること。 v0.24 (i18n、PROTOCOL.md §4.6): defaultLocale(素の name / description などの言語、省略 = ja)と locales(BCP 47 のタグ → その言語の name / description / termsOfService / pageTitle / actions[id].label / assets[id].label)。書かなければ今までどおり(素の欄 = 日本語)。",
   "type": "object",
   "required": ["id", "name", "version", "kind"],
   "additionalProperties": false,
@@ -14,6 +14,14 @@
     "kind": { "$ref": "slot-registry.schema.json#/$defs/kind" },
     "author": { "type": "string" },
     "description": { "type": "string" },
+    "defaultLocale": { "$ref": "#/$defs/localeTag", "description": "v0.24 (PROTOCOL.md §4.6): 素の name / description / termsOfService / page.title / actions[].label / assets[].label が何語か(BCP 47)。省略 = \"ja\"" },
+    "locales": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": { "$ref": "#/$defs/localeTag" },
+      "additionalProperties": { "$ref": "#/$defs/localizedText" },
+      "description": "v0.24 (PROTOCOL.md §4.6): 言語ごとの表示文。キーは BCP 47 のタグ(\"en\" / \"zh-Hant\" …)。ホストは UI の言語のタグ → 親のタグ(zh-Hant-TW → zh-Hant → zh)の順に引き、無い欄は素の欄を使う。id / version / 権限などは言語で変わらない(ここには書けない)"
+    },
     "supportedSns": { "type": "array", "items": { "type": "string", "enum": ["bluesky", "misskey", "mastodon", "mixi2", "other"] } },
     "permissions": { "type": "array", "uniqueItems": true, "items": { "$ref": "slot-registry.schema.json#/$defs/permission" } },
     "network": { "$ref": "#/$defs/network" },
@@ -107,6 +115,36 @@
     }
   ],
   "$defs": {
+    "localeTag": {
+      "type": "string",
+      "maxLength": 35,
+      "pattern": "^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*$",
+      "description": "BCP 47 の言語タグ(\"ja\" / \"en\" / \"en-US\" / \"zh-Hant\")。大文字小文字は区別しない(ホストは比べるときに畳む)。`_` は使わない"
+    },
+    "localizedText": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "1 言語ぶんの表示文(v0.24)。書いた欄だけ素の欄を置き換える",
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "termsOfService": { "type": "string", "description": "Markdown。同意はどの言語で読んでも同じ 1 つとして記録する" },
+        "pageTitle": { "type": "string", "minLength": 1, "maxLength": 40, "description": "page.title の置き換え(page があるときだけ)" },
+        "actions": {
+          "type": "object",
+          "description": "actions[].id → そのボタンの表示文。id は manifest.actions にあること(validate.py / rasq check が照合)",
+          "propertyNames": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
+          "additionalProperties": { "type": "object", "additionalProperties": false, "required": ["label"], "properties": { "label": { "type": "string", "minLength": 1 } } }
+        },
+        "assets": {
+          "type": "object",
+          "description": "assets[].id → その画像の表示名(スタンプの名前など)。id は manifest.assets にあること",
+          "propertyNames": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
+          "additionalProperties": { "type": "object", "additionalProperties": false, "required": ["label"], "properties": { "label": { "type": "string", "minLength": 1 } } }
+        }
+      }
+    },
     "page": {
       "type": "object",
       "required": ["mode"],

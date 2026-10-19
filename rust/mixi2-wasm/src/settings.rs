@@ -8,7 +8,10 @@
 //! 見当たらないので、`account` は**読むだけ**(`sns.me` と同じもの)にし、変えるのは mixi2 のアプリと案内する。
 //! `timeline` / `safety` はローカル保存で、どの SNS でも同じように効く。
 
+use rasq_plugin_kit::i18n;
 use serde_json::{json, Value};
+
+use crate::text::TEXT;
 
 // ── RRL の部品 ────────────────────────────────────────────────────
 
@@ -41,74 +44,80 @@ fn page(area: &str, title: &str, source: &str, defaults: Value, children: Vec<Va
 }
 
 // ── ページ ────────────────────────────────────────────────────────
+// 文は crate::text::TEXT の表から `args.locale` で引く(PROTOCOL.md §4.6)。
 
-fn account_page() -> Value {
+fn account_page(loc: &str) -> Value {
+    let t = |k| TEXT.t(loc, k);
     page(
         "account",
-        "アカウント",
+        t("account.title"),
         "remote",
         json!({ "displayName": "", "handle": "", "bio": "" }),
         vec![
-            header("プロフィール"),
-            value_tile("表示名", "displayName"),
-            value_tile("ユーザー名", "handle"),
-            header("自己紹介"),
+            header(t("account.profile")),
+            value_tile(t("account.displayName"), "displayName"),
+            value_tile(t("account.handle"), "handle"),
+            header(t("account.bio")),
             json!({ "t": "Text", "p": { "text": "$.settings.bio", "pad": 16 } }),
-            notice("mixi2 の API ではプロフィールや公開範囲を変えられないため、ここでは表示だけです。変えるときは mixi2 のアプリで行ってください。"),
+            notice(t("account.readOnlyNotice")),
         ],
     )
 }
 
-fn timeline_page() -> Value {
+fn timeline_page(loc: &str) -> Value {
+    let t = |k| TEXT.t(loc, k);
     page(
         "timeline",
-        "タイムライン",
+        t("timeline.title"),
         "local",
         json!({ "withReposts": true, "withReplies": true }),
         vec![
-            header("表示する投稿"),
-            switch("withReposts", "リポストを表示", Some("オフにするとリポストをタイムラインから外します")),
-            switch("withReplies", "返信を表示", Some("オフにすると返信をタイムラインから外します")),
+            header(t("timeline.shownPosts")),
+            switch("withReposts", t("timeline.withReposts"), Some(t("timeline.withReposts.sub"))),
+            switch("withReplies", t("timeline.withReplies"), Some(t("timeline.withReplies.sub"))),
         ],
     )
 }
 
 /// 閲覧注意メディア / 注釈。ホストが投稿タイルに当てる(どの SNS プラグインも同じキー)。
-fn safety_page() -> Value {
+fn safety_page(loc: &str) -> Value {
+    let t = |k| TEXT.t(loc, k);
     page(
         "safety",
-        "プライバシーとセーフモード",
+        t("safety.title"),
         "local",
         json!({ "sensitiveMedia": "blur", "openCw": false }),
         vec![
-            header("閲覧注意(センシティブ)メディア"),
-            radio("sensitiveMedia", "blur", "ぼかして表示", Some("タップで開きます(標準)")),
-            radio("sensitiveMedia", "show", "ぼかさず表示", None),
-            radio("sensitiveMedia", "hide", "表示しない(セーフモード)", Some("閲覧注意メディアをタイルから取り除きます")),
-            header("注釈"),
-            switch("openCw", "注釈付き投稿を自動で開く", None),
+            header(t("safety.sensitiveMedia")),
+            radio("sensitiveMedia", "blur", t("safety.blur"), Some(t("safety.blur.sub"))),
+            radio("sensitiveMedia", "show", t("safety.show"), None),
+            radio("sensitiveMedia", "hide", t("safety.hide"), Some(t("safety.hide.sub"))),
+            header(t("safety.cw")),
+            switch("openCw", t("safety.openCw"), None),
         ],
     )
 }
 
-fn security_page() -> Value {
+fn security_page(loc: &str) -> Value {
+    let t = |k| TEXT.t(loc, k);
     page(
         "security",
-        "セキュリティ",
+        t("security.title"),
         "local",
         json!({}),
         vec![
-            header("ログインの方法"),
-            json!({ "t": "ValueListTile", "p": { "title": "ログインに使っているもの", "value": "RASQ サーバー経由の OAuth" } }),
-            note("RASQ が受け取るのは mixi2 が発行したアクセストークンだけで、パスワードは受け取りません。トークンは端末内の安全な領域にのみ保存されます。"),
-            notice("パスワード・二要素認証・連携しているアプリの取り消しは、mixi2 のアプリの設定で行ってください。"),
+            header(t("security.loginMethod")),
+            json!({ "t": "ValueListTile", "p": { "title": t("security.loginWith"), "value": t("security.loginWith.value") } }),
+            note(t("security.tokenNote")),
+            notice(t("security.elsewhere")),
         ],
     )
 }
 
-/// `call("sns.settingsPages")` → `{pages}`。
-pub(crate) fn sns_settings_pages() -> Value {
-    json!({ "pages": [account_page(), timeline_page(), safety_page(), security_page()] })
+/// `call("sns.settingsPages")` → `{pages}`。文は `args.locale`(無ければ ja)で引く。
+pub(crate) fn sns_settings_pages(args: &Value) -> Value {
+    let loc = i18n::locale_of(args);
+    json!({ "pages": [account_page(loc), timeline_page(loc), safety_page(loc), security_page(loc)] })
 }
 
 /// `account` の値 = 自分のユーザー(`sns.me` のワイヤ)。

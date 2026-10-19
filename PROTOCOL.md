@@ -1,7 +1,7 @@
 # RASQ Boundary Protocol(Host ⇄ WASM plugin、wire `rasq.boundary/1`)
 
 > 版の見方: この文書は**スロット契約 v0.19 まで**の内容を含む(版の正典は [`docs/slots.md`](docs/slots.md) の表題)。
-> 以前の表題「Draft v0.1」は最初の版の名残で、中身は v0.19 まで追従している。
+> 以前の表題「Draft v0.1」は最初の版の名残で、中身は v0.19 まで追従している。§4.6(i18n の `args.locale` とマニフェストの `locales`)は v0.24。
 
 最終更新: 2026-08-22 / 根拠: 決定台帳 D-001(実行境界)・D-002(4層)・D-012(FOW)・D-017〜D-020、Qwen壁打ち「転送プロトコル v0」
 対になる文書: [`CONTRACT.md`](CONTRACT.md)(操作レベルの契約) / スキーマ: [`schema/rrl-node.schema.json`](schema/rrl-node.schema.json), [`schema/boundary.schema.json`](schema/boundary.schema.json)
@@ -279,6 +279,7 @@ SNS プラグインのイベントハンドラー関数は「一定程度は抽�
     知らない area は C01。
 - 未実装関数は C01 — ホストは該当 UI を隠す(SnsSession の UnsupportedError と同じ扱い)。
   認証トークンは v1 ではホストが `args.token` で毎回渡す(サンプルは `i` に積む)。
+  UI の言語も毎回 `args.locale`(BCP 47、無ければ `"ja"`)で渡す。設定ページ・ラベル・利用者に出るエラーの文はこれで引く(§4.6、v0.24)。
 
 ## 4.4 タイムラインレンダラー契約 v1(M5e / D-080)
 
@@ -315,6 +316,75 @@ SNS プラグインが RRL の icon/body に**タグ付け必須**なのはこ�
 (§2.2 の付与先違反タグは取り込み時に剥がす)でタグの読取りを守る。SigLIP / Louvain は
 ホスト側資産のため、ML が効くときはホストが Dart エンジンを使う —
 カルクレーター統合後に wasm 側から `ml.infer` を呼ぶ形へ置換する。
+
+## 4.6 利用者に見せる文の言語(i18n、契約 v0.24)
+
+プラグインが返す**利用者に見せる文**(設定ページの RRL、`sns.actions` / `sns.timelines` / `tl.timelines` のラベル、FOW / RRL の文、
+利用者に出るエラーの `message`)は、ホストが渡す UI の言語で引く。仕組みを先に入れ、**いまの言語は日本語だけ**(言語を足すのは表を足すだけ)。
+
+**ホスト → プラグイン: `args.locale`**
+
+- 値: UI の言語の **BCP 47 タグ**(`"ja"` / `"en"` / `"en-US"` / `"zh-Hant"` …。区切りは `-`)。
+- 載せる所: wasm への**すべての `call` の args**。`args.now` / `args.token` / `args.settings` と同じく毎回ホストが注入する予約キーで
+  (`sns.*` は `WasmSnsSession` が `token` / `host` / `settings` / `now` と一緒に、スロットの call は `page.open` / `page.event` / RRL のイベント /
+  FOW の `onClosed` / `onCancel` / `lifecycle` / `post.action` / `media.*` … のどれにも)、`sns.settingsPages` を呼ぶ**匿名ワーカー**
+  (token / host が無い)と `plugin.manifest` にも載せる。args に同じ名前のキーがあっても(RRL のイベントの payload など)**ホストの値で上書き**する。
+- **無い・空・BCP 47 として読めないときは `"ja"`**(この版より前のホスト = 日本語)。プラグインは大文字小文字と `_` / `-` を区別しない。
+- wasm ABI v1 に起動時の init / config は無い(インスタンス化 → `snapshot` → `call`)ので、言語は call ごとに届くこの値だけ。
+  args の無い `snapshot()` / `patch()` は、**いちばん新しい call の `locale`**(まだ call が無ければ `ja`)で組む
+  (`rasq-plugin-kit` の `rasq_plugin!` は call のたびに `i18n::set_current` で覚え、`i18n::current()` で引ける)。
+- 言語の切り替えは**次の call から**効く。ホストは文を含む答えを持っておくとき(`sns.settingsPages` / `sns.actions` / `sns.timelines` /
+  `tl.timelines` など)は**言語もキーに入れ**、UI の言語が変わったら呼び直す。開いている FOW / ページは閉じて開き直すまで前の言語のままでよい。
+- 版: 対応したホストは `page.open` の `contract` に `"0.24"` を渡す。ただしプラグインは `contract` を見なくてよい(`locale` が無ければ `ja`)。
+
+**引き方(フォールバック)**: `zh-Hant-TW` → `zh-Hant` → `zh` → プラグインの基準の言語(同梱のプラグインはすべて `ja`)。
+表に無いキーは 1 つずつ次へ落ちるので、訳しかけの表を置いてよい。
+
+**プラグイン側の表** — `rasq-plugin-kit` の `i18n`(同梱の SNS プラグイン Misskey / Mastodon / Bluesky / mixi2 と hello はこれを使う。
+ABI を自前で持つプラグインも kit を依存に足して `i18n` だけ使える):
+
+```rust
+use rasq_plugin_kit::i18n;
+
+rasq_plugin_kit::i18n_catalog! {
+    pub(crate) static TEXT = {
+        "ja": {
+            "timeline.title" => "タイムライン",
+            "error.tooLong" => "{max} 文字までです",
+        },
+        // 言語を足すときは表を足すだけ(無いキーは ja に落ちる):
+        // "en": { "timeline.title" => "Timeline", "error.tooLong" => "Up to {max} characters" },
+    };
+}
+
+let loc = i18n::locale_of(&args);                          // args.locale、無ければ "ja"
+let title = TEXT.t(loc, "timeline.title");                 // &'static str
+let msg = TEXT.f(loc, "error.tooLong", &[("max", "300")]); // {name} の差し込み
+assert!(TEXT.check().is_empty());                          // テスト: 基準に無いキー・差し込みの食い違い
+assert!(i18n::take_misses().is_empty());                   // テスト(native): 表に無いキーを引いていない
+```
+
+- 対象: プラグインが作る文(設定ページ、ボタン / TL のラベル、FOW / RRL の文、利用者に出るエラーの `message`)。
+  対象外: SNS から来たデータ(投稿・名前)、キーや id、エラーの `code`(言語に依らない)、開発者向けのエラー(英語のままでよい)。
+- 文言は表に移すだけで変えない。キーは `<area>.<item>`(`account.title` / `safety.blur.sub` / `error.notBool`)。
+
+**マニフェストの文**([`schema/manifest.schema.json`](schema/manifest.schema.json) v0.24): 素の `name` / `description` / `termsOfService` /
+`page.title` / `actions[].label` / `assets[].label` は `defaultLocale`(省略 = `"ja"`)の文。ほかの言語は `locales` に書く:
+
+```json
+{ "id": "sample.like", "name": "いいねボタン", "description": "…", "defaultLocale": "ja",
+  "actions": [{ "id": "like", "label": "いいね", "tags": ["Reaction"] }],
+  "locales": {
+    "en": { "name": "Like button", "description": "…", "actions": { "like": { "label": "Like" } } },
+    "zh-Hant": { "name": "按讚按鈕" } } }
+```
+
+- `locales` のキー = BCP 47 のタグ、値 = その言語の `name` / `description` / `termsOfService` / `pageTitle` / `actions` (`{<actionId>: {label}}`) /
+  `assets` (`{<assetId>: {label}}`)。書いた欄だけ置き換わる。id / version / 権限は言語で変わらない(書けない)。
+- ホストは上と同じ引き方(タグ → 親のタグ)で `locales` を引き、無い欄は素の欄を使う。`plugin.manifest` の答えは言語で変えない
+  (ホストが持っておくので、すべての言語を `locales` に入れる)。
+- 照合(`schema/validate.py` と `rasq check`): `locales.*.actions` / `assets` の id が manifest にあること、`pageTitle` は `page` があるときだけ、
+  大文字小文字を畳んで同じタグが 2 つは誤り、`defaultLocale` と同じタグは警告。書かなければ今までどおり(後方互換)。
 
 ## 5. アクションと投稿ごとのアイコン(D-017)
 

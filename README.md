@@ -11,7 +11,7 @@ Misskey アダプタ(`packages/sns_misskey`)で検証したものを、ここで
 - [`docs/host-functions.md`](docs/host-functions.md) — ホスト関数(storage / net.fetch / alert / fow.* / ml.infer)
 - [`docs/fow.md`](docs/fow.md) — FOW 拡張面(open/close・anchor・親子・surface patch・ライフサイクル)
 - [`docs/sns-boundary.md`](docs/sns-boundary.md) — SNS 抽象関数(`sns.*`)と Post ワイヤ `rasq.post/1`
-- [`docs/slots.md`](docs/slots.md) — **スロットプラグイン契約(正典、v0.23)**: 10 スロット(v0.18 でページ型 `page` = カスタムプラグイン、v0.19 で Swing の surface `swing`、v0.20 で shared / 宣言なしのページ型も Swing で配れる、v0.21 で持ち主だけのホスト用ページ `profile.host`、v0.22 でサーバー変数の TTL・上限・owner の削除と SVG の落書き `media.editor.open`、v0.23 で落書きの zstd 圧縮 `svgz` と `page.open` の `contract`)の call / ホスト関数 / FOW の着き方。機械可読な登録簿は [`schema/slots.json`](schema/slots.json)。
+- [`docs/slots.md`](docs/slots.md) — **スロットプラグイン契約(正典、v0.24)**: 10 スロット(v0.18 でページ型 `page` = カスタムプラグイン、v0.19 で Swing の surface `swing`、v0.20 で shared / 宣言なしのページ型も Swing で配れる、v0.21 で持ち主だけのホスト用ページ `profile.host`、v0.22 でサーバー変数の TTL・上限・owner の削除と SVG の落書き `media.editor.open`、v0.23 で落書きの zstd 圧縮 `svgz` と `page.open` の `contract`、v0.24 で i18n = 全 call の `args.locale` とマニフェストの `locales`)の call / ホスト関数 / FOW の着き方。機械可読な登録簿は [`schema/slots.json`](schema/slots.json)。
 - [`docs/REVIEW_FEE.md`](docs/REVIEW_FEE.md) — **審査料の額の決め方**(配布物の内容のピース数 = 計測方法 `xlmr-unigram-v1` の仕様・語彙の指紋・式)。
   `rasq fee` で Central と同じ数と額を手元で出せる(クレート [`rust/rasq-review-pieces`](rust/rasq-review-pieces/)、Central はその写し)。
 - [`docs/cli.md`](docs/cli.md) — **`rasq` CLI の設計(D-244)**: ワークスペース(`rasq.toml`)、雛形、配下へのバンドル、`.rspkg` の目次 [`schema/bundle.schema.json`](schema/bundle.schema.json)、確認・ビルド・公開。

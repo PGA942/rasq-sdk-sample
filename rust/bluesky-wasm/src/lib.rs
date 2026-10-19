@@ -42,6 +42,10 @@ use std::sync::Mutex;
 use unicode_segmentation::UnicodeSegmentation;
 
 mod settings;
+mod text;
+
+use rasq_plugin_kit::i18n;
+use text::TEXT;
 
 const SCOPE: &str = "rasq.official.bluesky:bluesky:bsky.social:sample:0.1.0:sns";
 const KIND: &str = "bluesky";
@@ -898,22 +902,24 @@ fn sns_capabilities() -> Result<Value, Value> {
 }
 
 /// 基本 TL。Bluesky にローカル TL は無いので `home` と Discover だけ宣言する。
-fn sns_timelines() -> Result<Value, Value> {
+fn sns_timelines(args: &Value) -> Result<Value, Value> {
+    let t = |k| TEXT.t(i18n::locale_of(args), k);
     Ok(json!({ "timelines": [
-        { "id": "home",   "label": "フォロー中" },
-        { "id": "global", "label": "Discover" },
+        { "id": "home",   "label": t("timeline.home") },
+        { "id": "global", "label": t("timeline.global") },
     ] }))
 }
 
 /// アクションバーの宣言 (D-075)。「いいね」は Mastodon サンプルと同じく
 /// `Reaction` ジャンル(⭐)で出し、id はホストのお気に入りメニューが引く
 /// `favorite` に揃える。引用はネイティブにあるので `Quote` も出す。
-fn sns_actions() -> Result<Value, Value> {
+fn sns_actions(args: &Value) -> Result<Value, Value> {
+    let t = |k| TEXT.t(i18n::locale_of(args), k);
     Ok(json!({ "actions": [
-        { "id": "reply",    "genreTag": "Reply",    "label": "返信",     "icon": "reply",        "confirmMode": "confirm", "fow": "interstitial", "countSource": "self" },
-        { "id": "repost",   "genreTag": "Repost",   "label": "リポスト", "icon": "repeat",       "doneIcon": "repeat_on", "countSource": "self" },
-        { "id": "favorite", "genreTag": "Reaction", "label": "いいね",   "icon": "star_border",  "doneIcon": "star",      "countSource": "self", "emoji": STAR },
-        { "id": "quote",    "genreTag": "Quote",    "label": "引用",     "icon": "format_quote", "confirmMode": "confirm", "fow": "interstitial", "countSource": "self" },
+        { "id": "reply",    "genreTag": "Reply",    "label": t("action.reply"),    "icon": "reply",        "confirmMode": "confirm", "fow": "interstitial", "countSource": "self" },
+        { "id": "repost",   "genreTag": "Repost",   "label": t("action.repost"), "icon": "repeat",       "doneIcon": "repeat_on", "countSource": "self" },
+        { "id": "favorite", "genreTag": "Reaction", "label": t("action.favorite"), "icon": "star_border",  "doneIcon": "star",      "countSource": "self", "emoji": STAR },
+        { "id": "quote",    "genreTag": "Quote",    "label": t("action.quote"),    "icon": "format_quote", "confirmMode": "confirm", "fow": "interstitial", "countSource": "self" },
     ] }))
 }
 
@@ -2039,12 +2045,12 @@ pub fn dispatch(fn_name: &str, args: &Value) -> Result<Value, Value> {
         "sns.login" => return sns_login(args),
         "sns.inspectServer" => return sns_inspect_server(args),
         "sns.capabilities" => return sns_capabilities(),
-        "sns.timelines" => return sns_timelines(),
-        "sns.actions" => return sns_actions(),
+        "sns.timelines" => return sns_timelines(args),
+        "sns.actions" => return sns_actions(args),
         "sns.emojis" => return Ok(json!({ "emojis": [] })),
         "sns.trendingTags" => return sns_trending_tags(args),
         // 設定ページの宣言 (D-044 / rasq-client D-482)。ホストはアカウントを開く前(匿名ワーカー)に読む。
-        "sns.settingsPages" => return settings::sns_settings_pages(),
+        "sns.settingsPages" => return settings::sns_settings_pages(args),
         _ => {}
     }
     let ctx = Ctx::authed(args);
