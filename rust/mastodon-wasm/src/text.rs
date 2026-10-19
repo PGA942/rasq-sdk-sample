@@ -74,6 +74,8 @@ rasq_plugin_kit::i18n_catalog! {
             // 設定の書き込みのエラー(利用者に出る)
             "error.notBool" => "値は true / false です",
             "error.privacy" => "公開範囲は public / unlisted / private です",
+            // 投稿のエラー(利用者に出る、D-494)
+            "error.pollNeedsText" => "Mastodon の投票には本文が要ります",
         },
     };
 }

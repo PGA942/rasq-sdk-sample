@@ -671,7 +671,16 @@ fn sns_create_post(args: &Value) -> Result<Value, Value> {
         return Ok(json!({ "post": post_wire(&created, &host) }));
     }
 
-    let mut body = json!({ "status": draft["text"].as_str().unwrap_or("") });
+    // 本文なしの投稿 (D-494): `status` は `media_ids` があれば省ける。投票は本文が要る(無いと 422)ので、送る前に断る。
+    let text = draft["text"].as_str().unwrap_or("");
+    let blank = text.trim().is_empty();
+    if blank && draft["poll"].is_object() {
+        return Err(json!({ "code": "D01", "message": TEXT.t(i18n::locale_of(args), "error.pollNeedsText") }));
+    }
+    let mut body = json!({});
+    if !blank {
+        body["status"] = json!(text);
+    }
     if let Some(cw) = draft["cw"].as_str() {
         if !cw.is_empty() {
             body["spoiler_text"] = json!(cw);
@@ -1029,7 +1038,14 @@ fn sns_send_dm(args: &Value) -> Result<Value, Value> {
     let acct = account["acct"].as_str().unwrap_or("");
     let text = args["draft"]["text"].as_str().unwrap_or("");
     let mention = format!("@{acct}");
-    let status = if text.contains(&mention) { text.to_string() } else { format!("{mention} {text}") };
+    // 本文なし(メディアだけ)はメンションだけにする (D-494)。
+    let status = if text.contains(&mention) {
+        text.to_string()
+    } else if text.trim().is_empty() {
+        mention
+    } else {
+        format!("{mention} {text}")
+    };
 
     let mut body = json!({ "status": status, "visibility": "direct" });
     if let Some(reply) = args["draft"]["replyToId"].as_str() {
@@ -1544,5 +1560,74 @@ mod tests {
     fn multipart_body_without_a_file_is_still_terminated() {
         let body = multipart_body("B", &[("a", "1")], None);
         assert_eq!(String::from_utf8_lossy(&body), "--B\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n1\r\n--B--\r\n");
+    }
+
+    /// 本文なしの投稿 (D-494): Mastodon は `media_ids` があれば `status` を省ける。投票には本文が要る
+    /// (無ければ 422)。サーバーと同じ検査をするフェイクで、送る本文を確かめる。
+    fn strict_statuses() {
+        set_host_hook(|fn_name, a| {
+            if fn_name != "net.fetch" {
+                return json!({});
+            }
+            let url = a["url"].as_str().unwrap_or("");
+            if a["method"] == "GET" {
+                return json!({ "status": 200, "headers": {}, "bodyText": json!({ "id": "alice", "acct": "alice@remote.example", "username": "alice" }).to_string() });
+            }
+            assert!(url.ends_with("/api/v1/statuses"), "{url}");
+            let body: Value = serde_json::from_str(a["body"].as_str().unwrap_or("null")).unwrap_or(Value::Null);
+            let blank = body["status"].as_str().unwrap_or("").trim().is_empty();
+            let media = body["media_ids"].as_array().is_some_and(|m| !m.is_empty());
+            if (blank && !media) || (blank && body["poll"].is_object()) {
+                return json!({ "status": 422, "headers": {}, "bodyText": json!({ "error": "Validation failed: Text can't be blank" }).to_string() });
+            }
+            let created = json!({ "id": "s1", "created_at": "2026-10-20T00:00:00Z", "content": "", "account": { "id": "me", "acct": "me", "username": "me" }, "media_attachments": [] });
+            json!({ "status": 200, "headers": {}, "bodyText": created.to_string() })
+        });
+        let _ = take_host_log();
+    }
+
+    fn sent_bodies() -> Vec<Value> {
+        take_host_log()
+            .into_iter()
+            .filter(|(f, a)| f == "net.fetch" && a["method"] == "POST")
+            .map(|(_, a)| serde_json::from_str(a["body"].as_str().unwrap_or("null")).unwrap_or(Value::Null))
+            .collect()
+    }
+
+    #[test]
+    fn media_only_post_sends_media_without_status() {
+        strict_statuses();
+        let call = |draft: Value| sns_create_post(&json!({ "host": "mastodon.example", "token": "tok", "draft": draft }));
+        call(json!({ "text": "", "mediaIds": ["m1"] })).unwrap();
+        let b = &sent_bodies()[0];
+        assert!(b.get("status").is_none(), "{b}");
+        assert_eq!(b["media_ids"], json!(["m1"]));
+        // 返信 + メディアだけ / 注釈 + メディアだけ。
+        call(json!({ "text": "", "replyToId": "p1", "cw": "注意", "mediaIds": ["m1"] })).unwrap();
+        let b = &sent_bodies()[0];
+        assert_eq!(b["in_reply_to_id"], "p1");
+        assert_eq!(b["spoiler_text"], "注意");
+        assert!(b.get("status").is_none(), "{b}");
+        // 本文はそのまま送る。
+        call(json!({ "text": "a\n", "mediaIds": ["m1"] })).unwrap();
+        assert_eq!(sent_bodies()[0]["status"], "a\n");
+    }
+
+    #[test]
+    fn poll_without_text_is_refused_before_sending() {
+        strict_statuses();
+        let e = sns_create_post(&json!({ "host": "mastodon.example", "token": "tok", "draft": { "text": " ", "poll": { "choices": ["a", "b"] } } })).unwrap_err();
+        assert_eq!(e["code"], "D01");
+        assert_eq!(e["message"], "Mastodon の投票には本文が要ります");
+        assert!(sent_bodies().is_empty());
+    }
+
+    #[test]
+    fn media_only_dm_is_just_the_mention() {
+        strict_statuses();
+        sns_send_dm(&json!({ "host": "mastodon.example", "token": "tok", "peerId": "alice", "draft": { "text": "", "mediaIds": ["m1"] } })).unwrap();
+        let b = &sent_bodies()[0];
+        assert_eq!(b["status"], "@alice@remote.example");
+        assert_eq!(b["media_ids"], json!(["m1"]));
     }
 }
