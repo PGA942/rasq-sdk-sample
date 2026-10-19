@@ -30,6 +30,10 @@ use std::mem;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 mod settings;
+mod text;
+
+use rasq_plugin_kit::i18n;
+use text::TEXT;
 
 const SCOPE: &str = "rasq.official.mastodon:mastodon:mastodon.social:sample:0.1.0:sns";
 
@@ -563,12 +567,13 @@ fn sns_capabilities(args: &Value) -> Result<Value, Value> {
 }
 
 /// `call("sns.timelines")`: このアカウントで出せる基本 TL。
-fn sns_timelines(_args: &Value) -> Result<Value, Value> {
+fn sns_timelines(args: &Value) -> Result<Value, Value> {
+    let t = |k| TEXT.t(i18n::locale_of(args), k);
     Ok(json!({ "timelines": [
-        { "id": "home",   "label": "ホーム" },
-        { "id": "local",  "label": "ローカル" },
-        { "id": "global", "label": "連合" },
-        { "id": "featured", "label": "トレンド" },
+        { "id": "home",   "label": t("timeline.home") },
+        { "id": "local",  "label": t("timeline.local") },
+        { "id": "global", "label": t("timeline.global") },
+        { "id": "featured", "label": t("timeline.featured") },
     ] }))
 }
 
@@ -606,12 +611,13 @@ fn sns_thread(args: &Value) -> Result<Value, Value> {
 /// アクションバーの宣言 (D-075)。Mastodon にリアクションは無いので、
 /// お気に入りを `Reaction` ジャンルのボタンとして出す — 押した位置と
 /// 意味が他 SNS と揃う(同ジャンルは同スロットに束ねられる)。
-fn sns_actions(_args: &Value) -> Result<Value, Value> {
+fn sns_actions(args: &Value) -> Result<Value, Value> {
+    let t = |k| TEXT.t(i18n::locale_of(args), k);
     Ok(json!({ "actions": [
-        { "id": "reply",  "genreTag": "Reply",  "label": "返信",       "icon": "reply",        "confirmMode": "confirm", "fow": "interstitial", "countSource": "self" },
-        { "id": "reblog", "genreTag": "Repost", "label": "ブースト",   "icon": "repeat",       "doneIcon": "repeat_on",   "countSource": "self" },
-        { "id": "favourite", "genreTag": "Reaction", "label": "お気に入り", "icon": "star_border", "doneIcon": "star",    "countSource": "self" },
-        { "id": "bookmark", "genreTag": "Bookmark", "label": "ブックマーク", "icon": "bookmark_border", "doneIcon": "bookmark", "countSource": "none" }
+        { "id": "reply",  "genreTag": "Reply",  "label": t("action.reply"), "icon": "reply",        "confirmMode": "confirm", "fow": "interstitial", "countSource": "self" },
+        { "id": "reblog", "genreTag": "Repost", "label": t("action.reblog"), "icon": "repeat",       "doneIcon": "repeat_on",   "countSource": "self" },
+        { "id": "favourite", "genreTag": "Reaction", "label": t("action.favourite"), "icon": "star_border", "doneIcon": "star",    "countSource": "self" },
+        { "id": "bookmark", "genreTag": "Bookmark", "label": t("action.bookmark"), "icon": "bookmark_border", "doneIcon": "bookmark", "countSource": "none" }
     ] }))
 }
 
@@ -1292,6 +1298,28 @@ pub extern "C" fn call(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 利用者に見せる文は表から引く(`args.locale`、PROTOCOL.md §4.6)。いまは ja だけなので、どの言語でも ja と同じ文。
+    #[test]
+    fn ui_text_comes_from_the_table_and_falls_back_to_ja() {
+        assert!(TEXT.check().is_empty(), "{:?}", TEXT.check());
+        let _ = i18n::take_misses();
+        type Answer = fn(&Value) -> Result<Value, Value>;
+        let fns: [(&str, Answer); 3] = [("sns.settingsPages", settings::sns_settings_pages), ("sns.actions", sns_actions), ("sns.timelines", sns_timelines)];
+        for (name, f) in fns {
+            let base = f(&json!({})).unwrap();
+            for loc in ["ja", "ja-JP", "en", "en-US", "zh-Hant", "", "??"] {
+                assert_eq!(f(&json!({ "locale": loc })).unwrap(), base, "{name} locale={loc}");
+            }
+        }
+        let pages = settings::sns_settings_pages(&json!({ "locale": "en" })).unwrap()["pages"].clone();
+        assert_eq!(pages[0]["title"], "アカウント");
+        assert_eq!(pages[0]["root"]["c"][10]["p"]["subtitle"], "だれでも見られ、公開タイムラインにも出ます");
+        assert_eq!(pages[3]["root"]["c"][1]["p"]["title"], "読み取り・書き込み・フォロー");
+        assert_eq!(sns_timelines(&json!({})).unwrap()["timelines"][2]["label"], "連合");
+        assert_eq!(sns_actions(&json!({})).unwrap()["actions"][1]["label"], "ブースト");
+        assert!(i18n::take_misses().is_empty(), "表に無いキーを引いた");
+    }
 
     /// `/api/v2/search?type=hashtags` → `{tags: [{tag, count?}]}`(件数は直近の日の accounts)。
     #[test]

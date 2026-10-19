@@ -43,6 +43,9 @@
   "official": true
 }
 ```
+利用者に見せる `name` / `description` / `termsOfService` / `actions[].label` は `defaultLocale`(省略 = `"ja"`)の文で、ほかの言語は
+`"locales": {"en": {"name": "…", "description": "…", "actions": {"<id>": {"label": "…"}}}}` に書く(契約 v0.24、[`PROTOCOL.md`](PROTOCOL.md) §4.6)。
+ホストは UI の言語を毎回 `args.locale`(BCP 47、無ければ `"ja"`)で渡し、プラグインが返す文(設定ページ・ラベル・利用者に出るエラー)もその言語で引く。
 JSON Schema: `rasq-sdk-sample/schema/manifest.schema.json`(v0.5)。`call("plugin.manifest")` の答えは先頭に `"schema": "rasq.plugin-manifest/1"` を付ける。
 スロットの一覧と各スロットの契約(ティア / 置き場所 / call / ホスト関数 / 権限 / ライフサイクル)は **`schema/slots.json`**(D-005、`schema/slot-registry.schema.json` の形)。
 `python3 schema/validate.py` がマニフェストと登録簿を突き合わせる。

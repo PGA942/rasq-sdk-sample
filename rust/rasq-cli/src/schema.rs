@@ -147,6 +147,10 @@ pub fn check_manifest(v: &Validator, registry: &[Slot], m: &Value, declared_slot
     if m["page"]["sharedLimits"].is_object() {
         f.warnings.push("page.sharedLimits(サーバー変数の上限を広げる)は強化審査の対象です。リリース版からは審査料が割り増しになります(β は審査だけ。docs/REVIEW_FEE.md §5.1)".into());
     }
+    // i18n(v0.24、PROTOCOL.md §4.6): locales の照合(スキーマでは書けない分)。
+    let (errors, warnings) = locale_problems(m);
+    f.errors.extend(errors);
+    f.warnings.extend(warnings);
     if let (Some(cv), Some(mv)) = (cargo_version, m["version"].as_str()) {
         if cv != mv {
             f.warnings.push(format!("Cargo.toml の version {cv} と manifest の version {mv} が違います"));
@@ -155,6 +159,40 @@ pub fn check_manifest(v: &Validator, registry: &[Slot], m: &Value, declared_slot
     f
 }
 
+/// i18n(v0.24): `locales` の actions / assets の id が manifest にあること、pageTitle は page があるときだけ、
+/// タグの重複(大文字小文字を畳んで)は誤り、defaultLocale(省略 = ja)と同じタグは警告。`schema/validate.py` の locale_problems と同じ規則。
+pub fn locale_problems(m: &Value) -> (Vec<String>, Vec<String>) {
+    let (mut errors, mut warnings) = (Vec::new(), Vec::new());
+    let Some(locales) = m["locales"].as_object() else { return (errors, warnings) };
+    let ids = |key: &str| -> Vec<&str> { m[key].as_array().into_iter().flatten().filter_map(|a| a["id"].as_str()).collect() };
+    let (action_ids, asset_ids) = (ids("actions"), ids("assets"));
+    let base = m["defaultLocale"].as_str().unwrap_or("ja").to_ascii_lowercase();
+    let mut seen: Vec<(String, &str)> = Vec::new();
+    for (tag, text) in locales {
+        let folded = tag.to_ascii_lowercase();
+        if let Some((_, first)) = seen.iter().find(|(f, _)| *f == folded) {
+            errors.push(format!("locales: {first:?} と {tag:?} は同じ言語です(大文字小文字は区別しない)"));
+        }
+        if folded == base {
+            warnings.push(format!("locales.{tag} は defaultLocale({base})と同じ言語です(素の欄を書き換えるだけ)"));
+        }
+        seen.push((folded, tag));
+        for id in text["actions"].as_object().into_iter().flat_map(|o| o.keys()) {
+            if !action_ids.contains(&id.as_str()) {
+                errors.push(format!("locales.{tag}.actions.{id} が manifest.actions にありません"));
+            }
+        }
+        for id in text["assets"].as_object().into_iter().flat_map(|o| o.keys()) {
+            if !asset_ids.contains(&id.as_str()) {
+                errors.push(format!("locales.{tag}.assets.{id} が manifest.assets にありません"));
+            }
+        }
+        if !text["pageTitle"].is_null() && m["page"].is_null() {
+            errors.push(format!("locales.{tag}.pageTitle は page があるときだけ書けます"));
+        }
+    }
+    (errors, warnings)
+}
 
 #[cfg(test)]
 mod tests {
@@ -263,6 +301,41 @@ mod tests {
         assert!(!f.errors.is_empty(), "over the 256 KiB ceiling");
         let f = check_manifest(&v, &reg, &base(json!(["render", "shared.session"]), json!({"mode": "shared", "sharedLimits": {}})), Some("page"), None);
         assert!(!f.errors.is_empty(), "empty sharedLimits");
+    }
+
+    /// i18n(v0.24、PROTOCOL.md §4.6): defaultLocale / locales。書かなければ今までどおり。
+    #[test]
+    fn manifest_locales() {
+        let with = |extra: Value| {
+            let mut m = post_action(json!({"id": "like", "label": "いいね", "tags": ["Reaction"]}), &["fow.widget"]);
+            for (k, v) in extra.as_object().unwrap() {
+                m[k] = v.clone();
+            }
+            check(m)
+        };
+        let clean = |f: &Findings| f.errors.is_empty() && f.warnings.is_empty();
+        let base = with(json!({}));
+        assert!(clean(&base), "{:?} {:?}", base.errors, base.warnings);
+        let f = with(json!({"defaultLocale": "ja", "locales": {"en": {"name": "Like", "description": "d", "actions": {"like": {"label": "Like"}}}, "zh-Hant": {"name": "按讚"}}}));
+        assert!(clean(&f), "{:?} {:?}", f.errors, f.warnings);
+        // スキーマ: タグの形 / 空の言語 / 知らない欄 / 空の名前
+        for bad in [json!({"locales": {"en_US": {"name": "x"}}}), json!({"locales": {"en": {}}}), json!({"locales": {"en": {"version": "1.0.0"}}}), json!({"locales": {"en": {"name": ""}}}), json!({"defaultLocale": "日本語"})] {
+            assert!(with(bad.clone()).errors.iter().any(|e| e.starts_with("schema:")), "{bad}");
+        }
+        // 照合: 無いボタン / 無い画像 / page の無い pageTitle / 同じ言語が 2 つ
+        for bad in [
+            json!({"locales": {"en": {"actions": {"nope": {"label": "x"}}}}}),
+            json!({"locales": {"en": {"assets": {"nope": {"label": "x"}}}}}),
+            json!({"locales": {"en": {"pageTitle": "x"}}}),
+            json!({"locales": {"en": {"name": "a"}, "EN": {"name": "b"}}}),
+        ] {
+            let f = with(bad.clone());
+            assert_eq!(f.errors.len(), 1, "{bad}: {:?}", f.errors);
+            assert!(!f.errors[0].starts_with("schema:"), "{bad}: {:?}", f.errors);
+        }
+        // 基準と同じ言語は警告だけ
+        let f = with(json!({"locales": {"ja": {"name": "別名"}}}));
+        assert!(f.errors.is_empty() && f.warnings.len() == 1, "{:?} {:?}", f.errors, f.warnings);
     }
 
     #[test]

@@ -13,6 +13,8 @@
   見ず、代わりに gradient.stops が colors と同じ数で昇順であることを見る
 - ページ型(slot page、v0.18、docs/slots.md §2.13): page.mode = solo なのに shared.session / maxParticipants があれば警告
   (page が要ること、shared なら shared.session、astell は shared だけ、profile.host は profile と一緒(v0.21)、はスキーマが見る)
+- i18n(v0.24、PROTOCOL.md §4.6): locales の actions / assets の id が manifest にあること、pageTitle は page があるときだけ、
+  タグの重複(大文字小文字を畳んで)は誤り、defaultLocale と同じタグは警告。手で書いた正 / 誤の例(I18N_CASES)でこの検査そのものも確かめる
 - action-ref.schema.json の examples が自分のパターンに合うこと
 
 依存: pip install jsonschema referencing
@@ -107,6 +109,53 @@ def theme_problems(m: dict) -> list[str]:
     return out
 
 
+def locale_problems(m: dict) -> tuple[list[str], list[str]]:
+    """i18n(v0.24): スキーマでは書けない照合(rasq check の schema::locale_problems と同じ規則)。(errors, warnings) を返す。"""
+    errors: list[str] = []
+    warnings: list[str] = []
+    locales = m.get("locales") or {}
+    action_ids = {a.get("id") for a in m.get("actions", [])}
+    asset_ids = {a.get("id") for a in m.get("assets", [])}
+    base = (m.get("defaultLocale") or "ja").lower()
+    seen: dict[str, str] = {}
+    for tag, text in locales.items():
+        folded = tag.lower()
+        if folded in seen:
+            errors.append(f"locales: {seen[folded]!r} と {tag!r} は同じ言語です(大文字小文字は区別しない)")
+        seen[folded] = tag
+        if folded == base:
+            warnings.append(f"locales.{tag} は defaultLocale({base})と同じ言語です(素の欄を書き換えるだけ)")
+        if not isinstance(text, dict):
+            continue
+        for aid in text.get("actions", {}):
+            if aid not in action_ids:
+                errors.append(f"locales.{tag}.actions.{aid} が manifest.actions にありません")
+        for aid in text.get("assets", {}):
+            if aid not in asset_ids:
+                errors.append(f"locales.{tag}.assets.{aid} が manifest.assets にありません")
+        if "pageTitle" in text and "page" not in m:
+            errors.append(f"locales.{tag}.pageTitle は page があるときだけ書けます")
+    return errors, warnings
+
+
+# i18n の検査そのものの例(v0.24)。(名前, マニフェスト, スキーマに通るか, 照合の誤りの数, 照合の警告の数)。
+_I18N_BASE = {"schema": "rasq.plugin-manifest/1", "id": "sample.i18n", "name": "いいねボタン", "version": "0.1.0", "kind": "action", "description": "説明", "slots": ["post.action"], "actions": [{"id": "like", "label": "いいね", "tags": ["Reaction"]}]}
+I18N_CASES = [
+    ("素のまま(後方互換)", {}, True, 0, 0),
+    ("名前・説明・ボタン", {"defaultLocale": "ja", "locales": {"en": {"name": "Like button", "description": "desc", "actions": {"like": {"label": "Like"}}}, "zh-Hant": {"name": "按讚"}}}, True, 0, 0),
+    ("タグの形が違う", {"locales": {"en_US": {"name": "x"}}}, False, 0, 0),
+    ("空の言語", {"locales": {"en": {}}}, False, 0, 0),
+    ("知らない欄", {"locales": {"en": {"version": "1.0.0"}}}, False, 0, 0),
+    ("名前が空", {"locales": {"en": {"name": ""}}}, False, 0, 0),
+    ("defaultLocale の形", {"defaultLocale": "日本語"}, False, 0, 0),
+    ("無いボタン", {"locales": {"en": {"actions": {"nope": {"label": "x"}}}}}, True, 1, 0),
+    ("無い画像", {"locales": {"en": {"assets": {"nope": {"label": "x"}}}}}, True, 1, 0),
+    ("page が無いのに pageTitle", {"locales": {"en": {"pageTitle": "x"}}}, True, 1, 0),
+    ("同じ言語が 2 つ", {"locales": {"en": {"name": "a"}, "EN": {"name": "b"}}}, True, 1, 0),
+    ("基準と同じ言語", {"locales": {"ja": {"name": "別名"}}}, True, 0, 1),
+]
+
+
 def main() -> int:
     rep = Report()
     reg = registry()
@@ -170,8 +219,26 @@ def main() -> int:
             rep.warn(f"{label}: page.mode = solo なのに permissions に shared.session がある(solo はセッションに入らないので過剰宣言)")
         if pg.get("mode") == "solo" and "maxParticipants" in pg:
             rep.warn(f"{label}: page.maxParticipants は shared のときだけ意味がある")
+        errs, warns = locale_problems(m)
+        for e in errs:
+            rep.error(f"{label}: {e}")
+        for w in warns:
+            rep.warn(f"{label}: {w}")
         if "viewer.overlay" in m.get("slots", []) and not any(a.get("slot") == "viewer.overlay" for a in m.get("actions", [])):
             rep.warn(f"{label}: 全画面アクションバーのボタン宣言(actions[].slot = viewer.overlay)が無い(ホストが既定の見た目で出す)")
+
+    # 3b. i18n(v0.24)の検査そのもの: 正 / 誤の例が期待どおりに通る / 落ちること
+    manifest_validator = Draft202012Validator(load(os.path.join(SCHEMA_DIR, "manifest.schema.json")), registry=reg)
+    for name, extra, schema_ok, n_errors, n_warnings in I18N_CASES:
+        m = {**_I18N_BASE, **extra}
+        rep.checked += 1
+        ok = not list(manifest_validator.iter_errors(m))
+        if ok != schema_ok:
+            rep.error(f"i18n の例「{name}」: スキーマに{'通るはず' if schema_ok else '通らないはず'}が{'通りません' if schema_ok else '通りました'}")
+        if ok:
+            errs, warns = locale_problems(m)
+            if (len(errs), len(warns)) != (n_errors, n_warnings):
+                rep.error(f"i18n の例「{name}」: 照合の誤り / 警告が {len(errs)} / {len(warns)}(期待 {n_errors} / {n_warnings}): {errs + warns}")
 
     # 4. ほかの例
     for pattern, schema_name in (("*.rrl.json", "rrl-node.schema.json"), ("*.rsl.json", "rsl-span.schema.json"), ("*.model.json", "model-manifest.schema.json")):

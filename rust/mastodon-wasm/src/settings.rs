@@ -11,8 +11,10 @@
 //! - `safety`   … ローカル保存 — ホストが投稿タイルの閲覧注意メディア / CW の表示に使う
 //! - `security` … 表示だけ — パスワードが要る操作は web 版へ(`on: {"tap": "web.open"}`)
 
+use rasq_plugin_kit::i18n;
 use serde_json::{json, Value};
 
+use crate::text::TEXT;
 use crate::{fetch, get, html_to_text};
 
 // ── RRL の部品 ────────────────────────────────────────────────────
@@ -30,8 +32,8 @@ fn radio(k: &str, value: &str, title: &str, subtitle: Option<&str>) -> Value {
 }
 
 /// 文字の設定(表示名・自己紹介)。「保存」で `settings.set`(payload.text)。
-fn input(k: &str, label: &str, max_length: u32, multiline: bool) -> Value {
-    json!({ "t": "Input", "k": k, "p": { "label": label, "value": format!("$.settings.{k}"), "maxLength": max_length, "multiline": multiline, "submitLabel": "保存", "clearOnSubmit": false, "allowEmpty": true, "pad": 16 }, "on": { "submit": "settings.set" } })
+fn input(loc: &str, k: &str, label: &str, max_length: u32, multiline: bool) -> Value {
+    json!({ "t": "Input", "k": k, "p": { "label": label, "value": format!("$.settings.{k}"), "maxLength": max_length, "multiline": multiline, "submitLabel": TEXT.t(loc, "settings.save"), "clearOnSubmit": false, "allowEmpty": true, "pad": 16 }, "on": { "submit": "settings.set" } })
 }
 
 fn web_link(path: &str, title: &str, subtitle: Option<&str>) -> Value {
@@ -47,11 +49,13 @@ fn page(area: &str, title: &str, source: &str, defaults: Value, children: Vec<Va
 }
 
 // ── ページ ────────────────────────────────────────────────────────
+// 文は crate::text::TEXT の表から `args.locale` で引く(PROTOCOL.md §4.6)。
 
+/// 投稿の公開範囲の値と、表示名 / 補足のキー。
 const PRIVACIES: [(&str, &str, Option<&str>); 3] = [
-    ("public", "公開", Some("だれでも見られ、公開タイムラインにも出ます")),
-    ("unlisted", "未収載(ひかえめな公開)", Some("だれでも見られますが、公開タイムラインには出ません")),
-    ("private", "フォロワーのみ", None),
+    ("public", "account.privacy.public", Some("account.privacy.public.sub")),
+    ("unlisted", "account.privacy.unlisted", Some("account.privacy.unlisted.sub")),
+    ("private", "account.privacy.private", None),
 ];
 
 fn account_defaults() -> Value {
@@ -62,84 +66,89 @@ fn account_defaults() -> Value {
     })
 }
 
-fn account_page() -> Value {
+fn account_page(loc: &str) -> Value {
+    let t = |k| TEXT.t(loc, k);
     let mut c = vec![
-        header("プロフィール"),
-        input("displayName", "表示名", 30, false),
-        input("note", "自己紹介", 500, true),
-        web_link("settings/profile", "アイコン・ヘッダー・補足情報", Some("web 版で編集します")),
-        header("公開範囲"),
-        switch("locked", "フォローを承認制にする", Some("フォローされる前にあなたの承認が必要になります")),
-        switch("discoverable", "おすすめやディレクトリに載せる", Some("ほかの人にアカウントをすすめてもよいか")),
-        switch("indexable", "公開の投稿を検索できるようにする", None),
-        switch("hideCollections", "フォローとフォロワーの一覧を隠す", None),
-        header("投稿の既定の公開範囲"),
+        header(t("account.profile")),
+        input(loc, "displayName", t("account.displayName"), 30, false),
+        input(loc, "note", t("account.note"), 500, true),
+        web_link("settings/profile", t("account.profileOnWeb"), Some(t("settings.webOnly"))),
+        header(t("account.visibility")),
+        switch("locked", t("account.locked"), Some(t("account.locked.sub"))),
+        switch("discoverable", t("account.discoverable"), Some(t("account.discoverable.sub"))),
+        switch("indexable", t("account.indexable"), None),
+        switch("hideCollections", t("account.hideCollections"), None),
+        header(t("account.defaultPrivacy")),
     ];
     for (v, label, sub) in PRIVACIES {
-        c.push(radio("defaultPrivacy", v, label, sub));
+        c.push(radio("defaultPrivacy", v, t(label), sub.map(t)));
     }
     c.extend([
-        switch("defaultSensitive", "メディアを常に閲覧注意にする", Some("投稿する画像や動画に、既定で閲覧注意を付けます")),
-        header("アカウントの種類"),
-        switch("bot", "Botとして設定", Some("自動で投稿するアカウントであることを示します")),
-        note("これらの設定は接続先の Mastodon サーバーに保存されます。"),
+        switch("defaultSensitive", t("account.defaultSensitive"), Some(t("account.defaultSensitive.sub"))),
+        header(t("account.kind")),
+        switch("bot", t("account.bot"), Some(t("account.bot.sub"))),
+        note(t("account.savedOnServer")),
     ]);
-    page("account", "アカウント", "remote", account_defaults(), c)
+    page("account", t("account.title"), "remote", account_defaults(), c)
 }
 
-fn timeline_page() -> Value {
+fn timeline_page(loc: &str) -> Value {
+    let t = |k| TEXT.t(loc, k);
     page(
         "timeline",
-        "タイムライン",
+        t("timeline.title"),
         "local",
         json!({ "withReposts": true, "withReplies": true }),
         vec![
-            header("表示する投稿"),
-            switch("withReposts", "ブーストを表示", Some("オフにするとブーストをタイムラインから外します")),
-            switch("withReplies", "返信を表示", Some("オフにすると、ほかの人への返信をタイムラインから外します(自分の投稿へのつながりは残します)")),
+            header(t("timeline.shownPosts")),
+            switch("withReposts", t("timeline.withReposts"), Some(t("timeline.withReposts.sub"))),
+            switch("withReplies", t("timeline.withReplies"), Some(t("timeline.withReplies.sub"))),
         ],
     )
 }
 
 /// 閲覧注意メディア / CW。ホストが投稿タイルに当てる(どの SNS プラグインも同じキー)。
-fn safety_page() -> Value {
+fn safety_page(loc: &str) -> Value {
+    let t = |k| TEXT.t(loc, k);
     page(
         "safety",
-        "プライバシーとセーフモード",
+        t("safety.title"),
         "local",
         json!({ "sensitiveMedia": "blur", "openCw": false }),
         vec![
-            header("閲覧注意(センシティブ)メディア"),
-            radio("sensitiveMedia", "blur", "ぼかして表示", Some("タップで開きます(標準)")),
-            radio("sensitiveMedia", "show", "ぼかさず表示", None),
-            radio("sensitiveMedia", "hide", "表示しない(セーフモード)", Some("閲覧注意メディアをタイルから取り除きます")),
-            header("コンテンツ警告(CW)"),
-            switch("openCw", "CW 付きの投稿を自動で開く", None),
+            header(t("safety.sensitiveMedia")),
+            radio("sensitiveMedia", "blur", t("safety.blur"), Some(t("safety.blur.sub"))),
+            radio("sensitiveMedia", "show", t("safety.show"), None),
+            radio("sensitiveMedia", "hide", t("safety.hide"), Some(t("safety.hide.sub"))),
+            header(t("safety.cw")),
+            switch("openCw", t("safety.openCw"), None),
         ],
     )
 }
 
-fn security_page() -> Value {
+fn security_page(loc: &str) -> Value {
+    let t = |k| TEXT.t(loc, k);
     page(
         "security",
-        "セキュリティ",
+        t("security.title"),
         "local",
         json!({}),
         vec![
-            header("このアプリに許可した権限"),
-            json!({ "t": "ValueListTile", "p": { "title": "読み取り・書き込み・フォロー", "value": "read write follow" } }),
-            header("web で行う設定"),
-            web_link("auth/edit", "メールアドレス・パスワード・ログイン中の端末", Some("パスワードが必要な操作は web 版で行います")),
-            web_link("settings/two_factor_authentication_methods", "二要素認証", None),
-            web_link("oauth/authorized_applications", "連携しているアプリ", Some("アプリに与えた許可の確認と取り消し")),
-            note("アクセストークンは端末内の安全な領域にのみ保存されます。"),
+            header(t("security.scopes")),
+            json!({ "t": "ValueListTile", "p": { "title": t("security.scopes.value"), "value": "read write follow" } }),
+            header(t("security.onWeb")),
+            web_link("auth/edit", t("security.password"), Some(t("security.password.sub"))),
+            web_link("settings/two_factor_authentication_methods", t("security.twoFactor"), None),
+            web_link("oauth/authorized_applications", t("security.apps"), Some(t("security.apps.sub"))),
+            note(t("security.tokenNote")),
         ],
     )
 }
 
-/// `call("sns.settingsPages")` → `{pages}`。
-pub(crate) fn sns_settings_pages(_args: &Value) -> Result<Value, Value> {
-    Ok(json!({ "pages": [account_page(), timeline_page(), safety_page(), security_page()] }))
+/// `call("sns.settingsPages")` → `{pages}`。文は `args.locale`(無ければ ja)で引く。
+pub(crate) fn sns_settings_pages(args: &Value) -> Result<Value, Value> {
+    let loc = i18n::locale_of(args);
+    Ok(json!({ "pages": [account_page(loc), timeline_page(loc), safety_page(loc), security_page(loc)] }))
 }
 
 // ── timeline の当て方 ────────────────────────────────────────────
@@ -180,11 +189,11 @@ fn account_values(a: &Value) -> Value {
 }
 
 /// 1 キーを `update_credentials` の本文へ。許可リストに無いキー / 形の違う値は断る。
-fn account_update_body(key: &str, value: &Value) -> Result<Value, Value> {
-    let bad = |m: &str| Err(json!({ "code": "D01", "message": m }));
+fn account_update_body(key: &str, value: &Value, loc: &str) -> Result<Value, Value> {
+    let bad = |k: &str| Err(json!({ "code": "D01", "message": TEXT.t(loc, k) }));
     let flag = |field: &str| match value.as_bool() {
         Some(b) => Ok(json!({ field: b })),
-        None => bad("値は true / false です"),
+        None => bad("error.notBool"),
     };
     match key {
         "displayName" => Ok(json!({ "display_name": value.as_str().unwrap_or("").trim() })),
@@ -196,11 +205,11 @@ fn account_update_body(key: &str, value: &Value) -> Result<Value, Value> {
         "bot" => flag("bot"),
         "defaultSensitive" => match value.as_bool() {
             Some(b) => Ok(json!({ "source": { "sensitive": b } })),
-            None => bad("値は true / false です"),
+            None => bad("error.notBool"),
         },
         "defaultPrivacy" => match value.as_str() {
             Some(s) if PRIVACIES.iter().any(|(v, _, _)| *v == s) => Ok(json!({ "source": { "privacy": s } })),
-            _ => bad("公開範囲は public / unlisted / private です"),
+            _ => bad("error.privacy"),
         },
         other => Err(json!({ "code": "C01", "message": format!("unknown account setting: {other}") })),
     }
@@ -223,7 +232,7 @@ pub(crate) fn sns_settings_write(args: &Value) -> Result<Value, Value> {
     let Some(key) = args["key"].as_str() else {
         return Err(json!({ "code": "D01", "message": "key required" }));
     };
-    let body = account_update_body(key, &args["value"])?;
+    let body = account_update_body(key, &args["value"], i18n::locale_of(args))?;
     let account = fetch(args, "PATCH", "/api/v1/accounts/update_credentials", Some(body))?;
     Ok(json!({ "values": account_values(&account) }))
 }
@@ -268,7 +277,7 @@ mod tests {
                     assert!(p["defaults"].get(k).is_some(), "{}: {k} has no default", p["area"]);
                     if p["area"] == "account" {
                         // 画面の全キーが書ける(許可リストと揃っている)。
-                        assert_ne!(account_update_body(k, &p["defaults"][k]).map_err(|e| e["code"].clone()), Err(json!("C01")), "{k}");
+                        assert_ne!(account_update_body(k, &p["defaults"][k], "ja").map_err(|e| e["code"].clone()), Err(json!("C01")), "{k}");
                     }
                 }
             }
@@ -308,8 +317,8 @@ mod tests {
         assert_eq!((m.as_str(), path.as_str()), ("PATCH", "/api/v1/accounts/update_credentials"));
         assert_eq!(body, json!({ "source": { "privacy": "private" } }));
 
-        assert_eq!(account_update_body("hideCollections", &json!(true)).unwrap(), json!({ "hide_collections": true }));
-        assert_eq!(account_update_body("displayName", &json!(" 名前 ")).unwrap(), json!({ "display_name": "名前" }));
+        assert_eq!(account_update_body("hideCollections", &json!(true), "ja").unwrap(), json!({ "hide_collections": true }));
+        assert_eq!(account_update_body("displayName", &json!(" 名前 "), "ja").unwrap(), json!({ "display_name": "名前" }));
     }
 
     #[test]

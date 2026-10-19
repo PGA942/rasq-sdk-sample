@@ -17,8 +17,10 @@
 //! 成人向けコンテンツの表示(`adultContentPref`)は iOS のアプリでは切り替えない決まりなので、ここには置かず
 //! bsky.app の設定へのリンクだけにする。
 
+use rasq_plugin_kit::i18n;
 use serde_json::{json, Value};
 
+use crate::text::TEXT;
 use crate::{err, grapheme_count, xrpc_get, xrpc_post, Ctx};
 
 const PROFILE: &str = "app.bsky.actor.profile";
@@ -42,8 +44,8 @@ fn radio(k: &str, value: &str, title: &str, subtitle: Option<&str>) -> Value {
 }
 
 /// 文字の設定(表示名・自己紹介)。「保存」で `settings.set`(payload.text)。
-fn input(k: &str, label: &str, max_length: usize, multiline: bool) -> Value {
-    json!({ "t": "Input", "k": k, "p": { "label": label, "value": format!("$.settings.{k}"), "maxLength": max_length, "multiline": multiline, "submitLabel": "保存", "clearOnSubmit": false, "allowEmpty": true, "pad": 16 }, "on": { "submit": "settings.set" } })
+fn input(loc: &str, k: &str, label: &str, max_length: usize, multiline: bool) -> Value {
+    json!({ "t": "Input", "k": k, "p": { "label": label, "value": format!("$.settings.{k}"), "maxLength": max_length, "multiline": multiline, "submitLabel": TEXT.t(loc, "settings.save"), "clearOnSubmit": false, "allowEmpty": true, "pad": 16 }, "on": { "submit": "settings.set" } })
 }
 
 /// bsky.app を開く(アカウントの PDS の web ではないので完全な URL)。
@@ -60,85 +62,92 @@ fn page(area: &str, title: &str, source: &str, defaults: Value, children: Vec<Va
 }
 
 // ── ページ ────────────────────────────────────────────────────────
+// 文は crate::text::TEXT の表から `args.locale` で引く(PROTOCOL.md §4.6)。
 
-const ALLOW_INCOMING: [(&str, &str); 3] = [("all", "だれでも"), ("following", "フォローしている人だけ"), ("none", "受け付けない")];
+/// チャットの受け付けの値と、表示名のキー。
+const ALLOW_INCOMING: [(&str, &str); 3] = [("all", "account.allowIncoming.all"), ("following", "account.allowIncoming.following"), ("none", "account.allowIncoming.none")];
 
 fn account_defaults() -> Value {
     json!({ "displayName": "", "description": "", "noUnauthenticated": false, "allowIncoming": "following" })
 }
 
-fn account_page() -> Value {
+fn account_page(loc: &str) -> Value {
+    let t = |k| TEXT.t(loc, k);
     let mut c = vec![
-        header("プロフィール"),
-        input("displayName", "表示名", MAX_DISPLAY_NAME, false),
-        input("description", "自己紹介", MAX_DESCRIPTION, true),
-        web_link("https://bsky.app/", "アイコン・バナー", Some("bsky.app のプロフィールの「プロフィールを編集」で変えます")),
-        header("公開範囲"),
-        switch("noUnauthenticated", "ログアウト中の人に見せない", Some("Bluesky のアプリと bsky.app で、ログインしていない人にプロフィールと投稿を見せないよう求めます")),
-        header("チャットを受け付ける相手"),
+        header(t("account.profile")),
+        input(loc, "displayName", t("account.displayName"), MAX_DISPLAY_NAME, false),
+        input(loc, "description", t("account.description"), MAX_DESCRIPTION, true),
+        web_link("https://bsky.app/", t("account.avatarBanner"), Some(t("account.avatarBanner.sub"))),
+        header(t("account.visibility")),
+        switch("noUnauthenticated", t("account.noUnauthenticated"), Some(t("account.noUnauthenticated.sub"))),
+        header(t("account.allowIncoming")),
     ];
     for (v, label) in ALLOW_INCOMING {
-        c.push(radio("allowIncoming", v, label, None));
+        c.push(radio("allowIncoming", v, t(label), None));
     }
     c.extend([
-        web_link("https://bsky.app/moderation", "モデレーションと成人向けコンテンツ", Some("bsky.app で設定します")),
-        note("これらの設定はあなたの Bluesky のリポジトリ(PDS)に保存されます。"),
+        web_link("https://bsky.app/moderation", t("account.moderation"), Some(t("settings.onBskyApp"))),
+        note(t("account.savedOnPds")),
     ]);
-    page("account", "アカウント", "remote", account_defaults(), c)
+    page("account", t("account.title"), "remote", account_defaults(), c)
 }
 
-fn timeline_page() -> Value {
+fn timeline_page(loc: &str) -> Value {
+    let t = |k| TEXT.t(loc, k);
     page(
         "timeline",
-        "タイムライン",
+        t("timeline.title"),
         "local",
         json!({ "withReposts": true, "withReplies": true }),
         vec![
-            header("フォロー中のタイムラインに出す投稿"),
-            switch("withReposts", "リポストを表示", Some("オフにするとリポストを外します")),
-            switch("withReplies", "返信を表示", Some("オフにすると、ほかの人への返信を外します(自分の投稿へのつながりは残します)")),
+            header(t("timeline.shownPosts")),
+            switch("withReposts", t("timeline.withReposts"), Some(t("timeline.withReposts.sub"))),
+            switch("withReplies", t("timeline.withReplies"), Some(t("timeline.withReplies.sub"))),
         ],
     )
 }
 
 /// 閲覧注意メディア。ホストが投稿タイルに当てる(どの SNS プラグインも同じキー)。
-fn safety_page() -> Value {
+fn safety_page(loc: &str) -> Value {
+    let t = |k| TEXT.t(loc, k);
     page(
         "safety",
-        "プライバシーとセーフモード",
+        t("safety.title"),
         "local",
         json!({ "sensitiveMedia": "blur", "openCw": false }),
         vec![
-            header("閲覧注意(ラベル付き)メディア"),
-            radio("sensitiveMedia", "blur", "ぼかして表示", Some("タップで開きます(標準)")),
-            radio("sensitiveMedia", "show", "ぼかさず表示", None),
-            radio("sensitiveMedia", "hide", "表示しない(セーフモード)", Some("閲覧注意メディアをタイルから取り除きます")),
-            header("注釈"),
-            switch("openCw", "注釈付き投稿を自動で開く", None),
+            header(t("safety.sensitiveMedia")),
+            radio("sensitiveMedia", "blur", t("safety.blur"), Some(t("safety.blur.sub"))),
+            radio("sensitiveMedia", "show", t("safety.show"), None),
+            radio("sensitiveMedia", "hide", t("safety.hide"), Some(t("safety.hide.sub"))),
+            header(t("safety.cw")),
+            switch("openCw", t("safety.openCw"), None),
         ],
     )
 }
 
-fn security_page() -> Value {
+fn security_page(loc: &str) -> Value {
+    let t = |k| TEXT.t(loc, k);
     page(
         "security",
-        "セキュリティ",
+        t("security.title"),
         "local",
         json!({}),
         vec![
-            header("ログインの方法"),
-            json!({ "t": "ValueListTile", "p": { "title": "ログインに使っているもの", "value": "アプリパスワード" } }),
-            note("アプリパスワードでは、パスワードの変更やアカウントの削除はできません。使わなくなったら bsky.app で削除(失効)できます。"),
-            header("bsky.app で行う設定"),
-            web_link("https://bsky.app/settings/app-passwords", "アプリパスワードの管理", Some("発行済みアプリパスワードの確認と削除")),
-            web_link("https://bsky.app/settings/account", "メールアドレス・パスワード・二要素認証", Some("パスワードが必要な操作は bsky.app で行います")),
+            header(t("security.loginMethod")),
+            json!({ "t": "ValueListTile", "p": { "title": t("security.loginWith"), "value": t("security.loginWith.value") } }),
+            note(t("security.appPasswordNote")),
+            header(t("security.onBskyApp")),
+            web_link("https://bsky.app/settings/app-passwords", t("security.appPasswords"), Some(t("security.appPasswords.sub"))),
+            web_link("https://bsky.app/settings/account", t("security.account"), Some(t("security.account.sub"))),
         ],
     )
 }
 
-/// `call("sns.settingsPages")` → `{pages}`。
-pub(crate) fn sns_settings_pages() -> Result<Value, Value> {
-    Ok(json!({ "pages": [account_page(), timeline_page(), safety_page(), security_page()] }))
+/// `call("sns.settingsPages")` → `{pages}`。文は `args.locale`(無ければ ja)で引く。
+pub(crate) fn sns_settings_pages(args: &Value) -> Result<Value, Value> {
+    let loc = i18n::locale_of(args);
+    Ok(json!({ "pages": [account_page(loc), timeline_page(loc), safety_page(loc), security_page(loc)] }))
 }
 
 // ── timeline の当て方 ────────────────────────────────────────────
@@ -199,7 +208,7 @@ fn read_account(ctx: &Ctx) -> Result<Value, Value> {
 }
 
 /// プロフィールのレコードの 1 項目を変える(ほかの項目 = アイコン・バナー・固定投稿などはそのまま)。
-fn apply_profile_key(profile: &mut Value, key: &str, value: &Value) -> Result<(), Value> {
+fn apply_profile_key(profile: &mut Value, key: &str, value: &Value, loc: &str) -> Result<(), Value> {
     if !profile.is_object() {
         *profile = json!({});
     }
@@ -208,7 +217,7 @@ fn apply_profile_key(profile: &mut Value, key: &str, value: &Value) -> Result<()
             let s = value.as_str().unwrap_or("").trim();
             let max = if key == "displayName" { MAX_DISPLAY_NAME } else { MAX_DESCRIPTION };
             if grapheme_count(s) > max {
-                return Err(err("D01", format!("{max} 文字までです")));
+                return Err(err("D01", TEXT.f(loc, "error.tooLong", &[("max", &max.to_string())])));
             }
             if s.is_empty() {
                 profile.as_object_mut().map(|m| m.remove(key));
@@ -217,7 +226,7 @@ fn apply_profile_key(profile: &mut Value, key: &str, value: &Value) -> Result<()
             }
         }
         "noUnauthenticated" => {
-            let on = value.as_bool().ok_or_else(|| err("D01", "値は true / false です"))?;
+            let on = value.as_bool().ok_or_else(|| err("D01", TEXT.t(loc, "error.notBool")))?;
             let mut labels: Vec<String> = self_labels(profile).into_iter().filter(|l| l != NO_UNAUTHENTICATED).collect();
             if on {
                 labels.push(NO_UNAUTHENTICATED.to_string());
@@ -248,12 +257,12 @@ pub(crate) fn sns_settings_write(ctx: &Ctx) -> Result<Value, Value> {
     let key = ctx.args["key"].as_str().ok_or_else(|| err("D01", "key required"))?;
     let value = &ctx.args["value"];
     if key == "allowIncoming" {
-        let v = value.as_str().filter(|s| ALLOW_INCOMING.iter().any(|(a, _)| a == s)).ok_or_else(|| err("D01", "all / following / none のどれかです"))?;
+        let v = value.as_str().filter(|s| ALLOW_INCOMING.iter().any(|(a, _)| a == s)).ok_or_else(|| err("D01", TEXT.t(i18n::locale_of(ctx.args), "error.allowIncoming")))?;
         let (_, cid) = get_own_record(ctx, CHAT_DECLARATION)?;
         put_own_record(ctx, CHAT_DECLARATION, json!({ "allowIncoming": v }), cid)?;
     } else {
         let (mut profile, cid) = get_own_record(ctx, PROFILE)?;
-        apply_profile_key(&mut profile, key, value)?;
+        apply_profile_key(&mut profile, key, value, i18n::locale_of(ctx.args))?;
         put_own_record(ctx, PROFILE, profile, cid)?;
     }
     // 書いたあと読み直す(サーバーが受け付けた形を出す)。
@@ -306,6 +315,31 @@ mod tests {
             json!({ "status": status, "headers": {}, "bodyText": body.to_string() })
         });
         let _ = take_host_log();
+    }
+
+    /// 利用者に見せる文は表から引く(`args.locale`、PROTOCOL.md §4.6)。いまは ja だけなので、どの言語でも ja と同じ文。
+    #[test]
+    fn ui_text_comes_from_the_table_and_falls_back_to_ja() {
+        assert!(TEXT.check().is_empty(), "{:?}", TEXT.check());
+        let _ = i18n::take_misses();
+        for f in ["sns.settingsPages", "sns.actions", "sns.timelines"] {
+            let base = dispatch(f, &json!({})).unwrap();
+            for loc in ["ja", "ja-JP", "en", "en-US", "zh-Hant", "", "??"] {
+                assert_eq!(dispatch(f, &json!({ "locale": loc })).unwrap(), base, "{f} locale={loc}");
+            }
+        }
+        let pages = dispatch("sns.settingsPages", &json!({ "locale": "en" })).unwrap()["pages"].clone();
+        assert_eq!(pages[0]["title"], "アカウント");
+        assert_eq!(pages[0]["root"]["c"][7]["p"]["title"], "だれでも");
+        assert_eq!(pages[3]["root"]["c"][1]["p"]["value"], "アプリパスワード");
+        assert_eq!(dispatch("sns.timelines", &json!({})).unwrap()["timelines"][0]["label"], "フォロー中");
+        // 書き込みのエラー(サーバーに行く前に断る)
+        let mut profile = json!({});
+        let e = apply_profile_key(&mut profile, "displayName", &json!("あ".repeat(MAX_DISPLAY_NAME + 1)), "en").unwrap_err();
+        assert_eq!(e["message"], "64 文字までです");
+        let e = dispatch("sns.settingsWrite", &args(json!({ "area": "account", "key": "allowIncoming", "value": "everyone", "locale": "en" }))).unwrap_err();
+        assert_eq!(e["message"], "all / following / none のどれかです");
+        assert!(i18n::take_misses().is_empty(), "表に無いキーを引いた");
     }
 
     #[test]

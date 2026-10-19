@@ -30,7 +30,9 @@ wasm plugin sample and the native runtime that hosts it inside Flutter.
   exercises real request/response flows against a mocked `net.fetch`.
   See its [README](bluesky-wasm/README.md).
 - [`rasq-plugin-kit/`](rasq-plugin-kit) — the plugin-side boilerplate crate
-  (ABI exports, `host_call`, RRL builders, FOW `Surface`). Canonical copy of
+  (ABI exports, `host_call`, RRL builders, FOW `Surface`, and `i18n` — the
+  string tables looked up by the host's `args.locale`, PROTOCOL.md §4.6; the
+  SNS samples depend on the kit only for `i18n`). Canonical copy of
   the `kit/` that each plugin-sample repo carries (D-244i); `rasq init` copies
   it into a workspace.
 - [`rasq-cli/`](rasq-cli) — the `rasq` CLI for plugin authors

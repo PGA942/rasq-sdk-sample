@@ -90,7 +90,7 @@ fn write_dir(dir: &Dir<'_>, base: &Path, dest: &Path, vars: &[(&str, &str)], wri
 
 /// kit(`rasq-plugin-kit`)をワークスペースへ写す(D-244i)。
 pub fn write_kit(dest: &Path) -> Result<()> {
-    for rel in ["Cargo.toml", "src/lib.rs"] {
+    for rel in ["Cargo.toml", "src/lib.rs", "src/i18n.rs"] {
         let f = KIT.get_file(rel).ok_or_else(|| anyhow!("同梱 kit に {rel} がありません"))?;
         let out = dest.join(rel);
         std::fs::create_dir_all(out.parent().unwrap())?;
