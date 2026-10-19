@@ -76,6 +76,8 @@ rasq_plugin_kit::i18n_catalog! {
             "error.privacy" => "公開範囲は public / unlisted / private です",
             // 投稿のエラー(利用者に出る、D-494)
             "error.pollNeedsText" => "Mastodon の投票には本文が要ります",
+            // 引用元を引けない(消えた・見られない)ので送らない (D-495)
+            "error.quoteNotFound" => "引用元の投稿が見つからないため、送れませんでした",
         },
     };
 }
