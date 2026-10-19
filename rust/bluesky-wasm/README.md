@@ -34,13 +34,14 @@ cargo build --release --target wasm32-unknown-unknown -p bluesky-wasm # → targ
 | メディア | `uploadBlob`(生バイト) | `sns.uploadMedia` の `media.id` は **`{blob, alt, mimeType}` の JSON 文字列**、`url` は空。`sns.createPost` の `mediaIds` で戻すと `embed.images`(動画 mime なら `embed.video`)になる |
 | DM | `chat.bsky.convo.*`(`atproto-proxy: did:web:api.bsky.chat#bsky_chat`) | `dmRooms` は失敗時 C01(ホストが DM 欄を隠す)。`sendDm` は `peerId` → `getConvoForMembers` → `sendMessage` |
 | 関係 | フォロー / ブロックは `app.bsky.graph.*` **レコード**の作成・削除、ミュートは `muteActor` | フォロー申請は無い(`requested` は常に false) |
+| 設定ページ | `sns.settingsPages` → account / timeline / safety / security(rasq-client D-482) | `account` は remote: `app.bsky.actor.profile/self` の表示名・自己紹介・自己ラベル `!no-unauthenticated`、`chat.bsky.actor.declaration/self` の `allowIncoming` を `getRecord` → `putRecord`(`swapRecord`)。`timeline` の withReposts / withReplies はフォロー中 TL から外す。成人向けの表示は iOS で切り替えないので bsky.app へのリンクだけ |
 | 通知 | `listNotifications` | 同じ投稿への連続した like / repost を 1 件に畳む。対象投稿は `getPosts` 25 件ずつ |
 
 ## 未対応(C01 → ホストが UI を隠す)
 
 - `sns.favorites`(ブックマークが無い)、`sns.resolveFollowRequest`、`sns.userList {kind: followRequests}`
 - `sns.lists*`(まだ)、`sns.updateProfile`(まだ)
-- `sns.clips*` / `sns.userPlays`(Misskey 固有)、`sns.applySettings` / `sns.settingsRead` / `sns.settingsWrite`
+- `sns.clips*` / `sns.userPlays`(Misskey 固有)、`sns.applySettings`(ローカルページの値は `args.settings` に載る)
 - `sns.emojis` は `{emojis: []}`(カスタム絵文字が無い)、`sns.trendingTags` は失敗しても空配列
 
 ## `now` の制限

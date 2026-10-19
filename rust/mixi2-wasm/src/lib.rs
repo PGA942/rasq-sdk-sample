@@ -20,6 +20,8 @@ use std::collections::HashSet;
 use std::mem;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod settings;
+
 const SCOPE: &str = "rasq.official.mixi2:mixi2:mixi.social:sample:0.1.0:sns";
 const KIND: &str = "mixi2";
 const DEFAULT_HOST: &str = "mixi.social";
@@ -556,13 +558,28 @@ pub fn call_impl(fn_name: &str, args: &Value) -> Result<Value, Value> {
         "sns.emojis" => return Ok(json!({ "emojis": [] })),
         // ハッシュタグの検索(コンポーザーの `#` の補完、rasq-client D-475)は持たない: C01 でホストは候補を出さない。
         "sns.search" if args["kind"].as_str() == Some("hashtags") => return Err(err("C01", "unsupported: sns.search kind=hashtags")),
+        // 設定ページ (D-044 / rasq-client D-482)。宣言はログイン前(匿名ワーカー)にも答える。
+        "sns.settingsPages" => return Ok(settings::sns_settings_pages()),
+        "sns.settingsRead" if args["area"].as_str() == Some("account") => {
+            let me = call_impl("sns.me", args)?;
+            return Ok(json!({ "values": settings::account_values(&me["user"]) }));
+        }
+        "sns.settingsRead" => return Err(err("C01", "no such remote settings area")),
+        // account は読むだけ(書くタイルを出していない)。
+        "sns.settingsWrite" => return Err(err("C01", "mixi2 の API ではアカウントの設定を変えられません")),
         _ => {}
     }
-    if is_dummy(args) {
-        dummy_call(fn_name, args)
-    } else {
-        real_call(fn_name, args)
+    let mut out = if is_dummy(args) { dummy_call(fn_name, args) } else { real_call(fn_name, args) };
+    // TL 設定 (D-482): リポスト / 返信を外す。カーソルは外す前のもの(次のページはずれない)。
+    if fn_name == "sns.timeline" {
+        if let Ok(v) = out.as_mut() {
+            let tl_settings = &args["settings"]["timeline"];
+            if let Some(items) = v["page"]["items"].as_array_mut() {
+                items.retain(|p| settings::keep_in_timeline(p, tl_settings));
+            }
+        }
     }
+    out
 }
 
 #[no_mangle]
@@ -629,6 +646,45 @@ mod tests {
         assert_eq!(dummy("sns.search", json!({ "q": "天気" }))["page"]["items"][0]["id"], json!("d-7"));
         let long = "あ".repeat(MAX_POST_LENGTH + 1);
         assert!(call_impl("sns.createPost", &json!({ "host": DUMMY_HOST, "draft": { "text": long } })).is_err());
+    }
+
+    /// 設定ページ (D-482): 4 ページを宣言し、account は sns.me を読むだけ(書けない)。
+    #[test]
+    fn settings_pages_account_is_read_only_and_timeline_filters_apply() {
+        let pages = call_impl("sns.settingsPages", &json!({})).unwrap()["pages"].as_array().unwrap().clone();
+        let areas: Vec<&str> = pages.iter().map(|p| p["area"].as_str().unwrap()).collect();
+        assert_eq!(areas, ["account", "timeline", "safety", "security"]);
+        for p in &pages {
+            for node in p["root"]["c"].as_array().unwrap() {
+                if let Some(k) = node["k"].as_str() {
+                    assert!(p["defaults"].get(k).is_some(), "{}: {k} has no default", p["area"]);
+                }
+                if p["area"] == "account" {
+                    assert!(node["on"].is_null(), "account は書くタイルを持たない");
+                }
+            }
+        }
+        let v = dummy("sns.settingsRead", json!({ "area": "account" }))["values"].clone();
+        assert_eq!(v, json!({ "displayName": "わたし(ダミー)", "handle": "@me", "bio": "わたし(ダミー)(ダミー)" }));
+        let a = json!({ "host": DUMMY_HOST, "token": "dummy:me", "area": "account", "key": "displayName", "value": "x" });
+        assert_eq!(call_impl("sns.settingsWrite", &a).unwrap_err()["code"], json!("C01"));
+        assert_eq!(dummy_err("sns.settingsRead", json!({ "area": "timeline" }))["code"], json!("C01"));
+
+        // 返信を外す(ダミーの TL に返信を 1 件足してから)。
+        dummy("sns.createPost", json!({ "draft": { "text": "返信です", "replyToId": "d-8" } }));
+        let all = dummy("sns.timeline", json!({ "limit": 50 }))["page"]["items"].as_array().unwrap().len();
+        let off = dummy("sns.timeline", json!({ "limit": 50, "settings": { "timeline": { "withReplies": false } } }))["page"]["items"].as_array().unwrap().clone();
+        assert_eq!(off.len(), all - 1);
+        assert!(off.iter().all(|p| !p["replyToId"].is_string()));
+        assert!(settings::keep_in_timeline(&json!({ "repostedBy": {} }), &json!({})));
+        assert!(!settings::keep_in_timeline(&json!({ "repostedBy": {} }), &json!({ "withReposts": false })));
+    }
+
+    fn dummy_err(fn_name: &str, args: Value) -> Value {
+        let mut a = args;
+        a["host"] = json!(DUMMY_HOST);
+        a["token"] = json!("dummy:me");
+        call_impl(fn_name, &a).unwrap_err()
     }
 
     #[test]
