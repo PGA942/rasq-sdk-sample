@@ -37,7 +37,7 @@ RRL(画面)とは別の**データの形**。投稿は:
 | `sns.thread` | `{id}` | `{thread: {post, ancestors(古い順), descendants}}` |
 | `sns.actions` | `{}` | `{actions: [ActionDescriptor JSON]}`(アクションバー宣言) |
 | `sns.performAction` | `{actionId, postId, args}` | `{result: {done, count?, message?}}` — 短押しの中身はプラグインが決める |
-| `sns.createPost` | `{draft}`(下記) | `{post}` |
+| `sns.createPost` | `{draft}`(下記) | `{post, notice?: {code, message}}` — `notice` は投稿できたが利用者に知らせたいこと(v0.25、PROTOCOL §4.3) |
 | `sns.deletePost` | `{id}` | `{}` |
 | `sns.me` | `{}` | `{user}` |
 | `sns.user` | `{id}` または `{handle, userHost?}` | `{profile}` |

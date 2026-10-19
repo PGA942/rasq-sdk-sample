@@ -115,7 +115,7 @@ AccountId = { kind, instance, handle }   key = "kind:instance:handle"
 | 基本 | `account`, `pluginId`, `timelines: TimelineKind[]`, `actions: ActionDescriptor[]`, `maxPostLength` | — | 3000 |
 | 自分 | `me()` | `UserSummary` | `i` |
 | TL | `timeline(kind, cursor?, limit)` | `Page<Post>` | §6 動的ID |
-| 投稿 | `post(id)`, `thread(id)`→`Thread{post,ancestors,descendants}`, `createPost(NewPost)`, `deletePost(id)` | | `notes/show`,`notes/conversation`,`notes/children`,`notes/create`,`notes/delete` |
+| 投稿 | `post(id)`, `thread(id)`→`Thread{post,ancestors,descendants}`, `createPost(NewPost)`→`{post, notice?: {code, message}}`(v0.25: 投稿できたが利用者に知らせたいこと。PROTOCOL §4.3), `deletePost(id)` | | `notes/show`,`notes/conversation`,`notes/children`,`notes/create`,`notes/delete` |
 | アクション | `performAction(actionId, postId, args)`, `actionStates(posts)` | `ActionResult` / `{postId:{actionId:ActionResult}}` | reactions/create|delete, notes/create(renoteId), favorites |
 | 通知 | `notifications(cursor?,limit)`, `markNotificationsRead()` | `Page<NotificationItem>` | `i/notifications-grouped`(404→`i/notifications`) |
 | ユーザー | `user(id)`, `userByHandle(handle,host?)`, `userPosts(id,cursor?,limit,filter)`, `users(ids)`, `relationships(ids)` | `UserProfile` / `Page<Post>` / `{id:FollowState}` | `users/show`, `users/notes`, `users/relation` |
@@ -125,7 +125,7 @@ AccountId = { kind, instance, handle }   key = "kind:instance:handle"
 | メディア/絵文字 | `uploadMedia(bytes,filename,mime?,sensitive,alt?)`→`MediaItem`, `customEmojis()`, `emojiUrl(shortcode)` | | `drive/files/create`(multipart), `emojis` |
 | プロフィール | `updateProfile(ProfileUpdate)` | `UserProfile` | `i/update` |
 | リスト/ブックマーク | `lists()`, `listInfo(id)`, `listMembers(id)`, `createList(name)`, `addToList/removeFromList`, `favorites()` | | `users/lists/*`, `i/favorites` |
-| DM | `dmRooms()`→`DmRoom[]{id,kind:direct|chat,peer,lastPost?,unreadCount}`, `sendDm(room, NewPost)` | | §7 |
+| DM | `dmRooms()`→`DmRoom[]{id,kind:direct|chat,peer,lastPost?,unreadCount}`, `sendDm(room, NewPost)`→`{post, notice?}`(createPost と同じ) | | §7 |
 | ライフサイクル | `close()` | | |
 
 未対応の操作は `UnsupportedError` を投げる(ホストは該当 UI を隠す)。エラーは `SnsApiException{code: ErrorCode}`(§9)。
