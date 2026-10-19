@@ -2,6 +2,7 @@
 
 > 版の見方: この文書は**スロット契約 v0.19 まで**の内容を含む(版の正典は [`docs/slots.md`](docs/slots.md) の表題)。
 > 以前の表題「Draft v0.1」は最初の版の名残で、中身は v0.19 まで追従している。§4.6(i18n の `args.locale` とマニフェストの `locales`)は v0.24。
+> §4.3 の `sns.createPost` / `sns.sendDm` の答えの `notice`(投稿はできたが利用者に知らせたいこと)は v0.25。
 
 最終更新: 2026-08-22 / 根拠: 決定台帳 D-001(実行境界)・D-002(4層)・D-012(FOW)・D-017〜D-020、Qwen壁打ち「転送プロトコル v0」
 対になる文書: [`CONTRACT.md`](CONTRACT.md)(操作レベルの契約) / スキーマ: [`schema/rrl-node.schema.json`](schema/rrl-node.schema.json), [`schema/boundary.schema.json`](schema/boundary.schema.json)
@@ -170,11 +171,24 @@ SNS プラグインのイベントハンドラー関数は「一定程度は抽�
   - `sns.thread {id}` → `{thread: {post, ancestors: [Post](古い順), descendants: [Post]}}` (D-075)
   - `sns.performAction {actionId, postId, args}` → `{result: {done, count?, message?}}` — 短押しの中身はプラグインが決める(CONTRACT §5)。未対応アクションは C01 (D-075)
   - `sns.actions {}` → `{actions: [ActionDescriptor JSON(register_action と同形)]}` — アクションバー宣言 (D-075)
-  - `sns.createPost {draft: NewPost ワイヤ}` → `{post}` — draft = `{text, cw?, replyToId?, quoteOfId?, repostOfId?, visibility?, localOnly?, reactionAcceptance?, directToIds?, mediaIds?, poll?: {choices, multiple?, expiresAfterSec?}}` (D-076)。
+  - `sns.createPost {draft: NewPost ワイヤ}` → `{post, notice?}` — draft = `{text, cw?, replyToId?, quoteOfId?, repostOfId?, visibility?, localOnly?, reactionAcceptance?, directToIds?, mediaIds?, poll?: {choices, multiple?, expiresAfterSec?}}` (D-076)。
     **`text` は空文字のことがある**(メディア / 投票 / 引用だけの投稿。ホストは本文なしでも送る)。空の本文 / 注釈を
     そのまま API に載せない(Misskey は `text: ""` / `cw: ""` / `fileIds: []` を 400 で断る。Mastodon は `media_ids` があれば
     `status` を省ける)。その SNS で本文なしにできない組み合わせ(Mastodon の投票だけ等)は、送る前に `D01` と理由の文で断る(D-494)。
     `sns.sendDm` の `draft` も同じ
+  - **`notice`(契約 v0.25、rasq-client D-500)** = 投稿は**できた**が、利用者に知らせたいこと。形は `{code, message}`:
+    - `code` — 言語に依らない機械向けの id(`<area>.<item>`、例: `quote.fallbackUrl` = 引用の代わりに引用元の URL を本文に付けて送った)。
+      ホストは知らない `code` でも `message` を出す(`code` はログ・テスト・将来の出し分けのため)。
+    - `message` — 利用者に見せる 1 文(短く。目安 100 字まで)。`args.locale` の言語で引く(§4.6、kit の `i18n` の表)。
+    - 付けるのは、送った中身が利用者の意図と変わったときなど、**知らせないと気づけないことだけ**(普通の成功には付けない)。
+      送れなかったときは今までどおり `error`(`notice` ではない)。
+    - ホスト: 送った後に、アプリのいつもの短い通知(スナックバー)で `message` を出す。複数のアカウントへ同時に送ったときは、
+      どのアカウントの話かが分かるようにアカウント名を添える。`notice` が無い・`message` が空 = 何も出さない(v0.24 以前のプラグインは
+      付けないので今までどおり)。v0.24 以前のホストは `notice` を読まずに捨てる(プラグインは `contract` を見ずに付けてよい)。
+    - 対応したホストは `page.open` の `contract` に `"0.25"` を渡す。
+    - 例: Mastodon(同梱)は、引用を持たないサーバー(4.4 以前)か引用を断られたときに URL で送り、
+      `{"code": "quote.fallbackUrl", "message": "引用に対応していないサーバーなので、引用元の URL を付けて投稿しました"}`
+      (断られたときは「引用が許可されていなかったため、…」)を返す。
   - `sns.deletePost {id}` → `{}` (D-076)
   - `sns.me {}` → `{user}` / `sns.user {id | handle+userHost?}` → `{profile: {user, bannerUrl?, description?, followersCount?, followingCount?, postsCount?, fields?, createdAt?, location?, isLocked?, isBot?, isSuspended?, pinnedPosts?, profileUrl?}}`(`host` は接続先と衝突するため、ユーザーの所属ホストは `userHost`)(D-076)
   - `sns.userPosts {id, filter: posts|withReplies|replies|media|quotes, limit, cursor?}` → `{page}` — 返信/引用の振り分け規約 (D-069) はプラグイン側で適用 (D-076)
@@ -231,7 +245,7 @@ SNS プラグインのイベントハンドラー関数は「一定程度は抽�
     unreadCount?, title?}]}` — CONTRACT §7 のとおり、`visibility == specified|direct` の
     投稿を**相手ユーザー単位**に束ねて `direct` ルームにし、ネイティブ Chat があれば
     `chat` ルームを足す(404/403 のインスタンスでは足さない)。
-  - `sns.sendDm {roomKind: direct|chat, peerId, draft: NewPost}` → `{post}`
+  - `sns.sendDm {roomKind: direct|chat, peerId, draft: NewPost}` → `{post, notice?}`(`notice` は `sns.createPost` と同じ、v0.25)
 - v1 追加分 (D-136) — メディア / プロフィール / リスト / クリップ:
   - `sns.uploadMedia {bytesB64, filename, mimeType?, sensitive?, alt?}` → `{media}` —
     **バイト列は base64 で境界を渡り、multipart の組み立てはプラグインの仕事**。

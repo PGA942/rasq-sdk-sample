@@ -78,6 +78,9 @@ rasq_plugin_kit::i18n_catalog! {
             "error.pollNeedsText" => "Mastodon の投票には本文が要ります",
             // 引用元を引けない(消えた・見られない)ので送らない (D-495)
             "error.quoteNotFound" => "引用元の投稿が見つからないため、送れませんでした",
+            // 投稿できたが、引用の代わりに引用元の URL を付けた(sns.createPost の notice、契約 v0.25、D-500)
+            "notice.quoteUnsupported" => "引用に対応していないサーバーなので、引用元の URL を付けて投稿しました",
+            "notice.quoteRefused" => "引用が許可されていなかったため、引用元の URL を付けて投稿しました",
         },
     };
 }

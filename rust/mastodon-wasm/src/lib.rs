@@ -22,7 +22,8 @@
 //!
 //! 引用は Mastodon 4.5(API version 7)から。書くときは `quoted_status_id` を
 //! 付け、持たないサーバー(または引用を断られたとき)は引用元の URL を本文の
-//! 末尾の行に足す(D-495、[`sns_create_post`])。読むときは承認済みの `quote` を
+//! 末尾の行に足す(D-495、[`sns_create_post`])。URL で送ったときは答えの `notice` で
+//! 利用者に知らせる(契約 v0.25、D-500)。読むときは承認済みの `quote` を
 //! Misskey の引用リノートと同じ `quote` に写す([`post_wire`])。`sns.quotes`
 //! (引用した投稿の一覧)はまだ無いので C01 を返し、ホストが欄を隠す。
 //!
@@ -838,6 +839,7 @@ fn sns_create_post(args: &Value) -> Result<Value, Value> {
 ///    (ブーストの引用は 4.4.8 / 4.5.0-beta.2 から断られる。CVE-2025-62605)。
 /// 3. それでも断られた・サーバーが引用を持たないときは、引用元の URL を本文の末尾の行に足して送る。
 ///    引用元が引けなければ(消えた・見られない)送らずに、利用者に出る文で断る — 引用を黙って落とさない。
+///    URL で送ったときは答えに `notice`(契約 v0.25、[`quote_fallback_notice`])を付け、ホストが利用者に知らせる (D-500)。
 fn create_quote_post(args: &Value, host: &str, body: Value, text: &str, quote_of: &str) -> Result<Value, Value> {
     let blank = text.trim().is_empty();
     let send_quote = |id: &str| {
@@ -875,7 +877,15 @@ fn create_quote_post(args: &Value, host: &str, body: Value, text: &str, quote_of
     let mut b = body;
     b["status"] = json!(text_with_quote_url(text, url));
     let created = post(args, "/api/v1/statuses", b)?;
-    Ok(json!({ "post": post_wire(&created, host) }))
+    Ok(json!({ "post": post_wire(&created, host), "notice": quote_fallback_notice(args, supported) }))
+}
+
+/// 引用の代わりに URL で送ったことの知らせ(契約 v0.25 の `sns.createPost` の `notice`、D-500)。
+/// `code` は言語に依らない `quote.fallbackUrl`、`message` は `args.locale` の文。`supported` = サーバーは引用を
+/// 持つ(= 断られた)か、持たない(4.4 以前・互換実装、能力が引けなかったときも含む)か。
+fn quote_fallback_notice(args: &Value, supported: bool) -> Value {
+    let key = if supported { "notice.quoteRefused" } else { "notice.quoteUnsupported" };
+    json!({ "code": "quote.fallbackUrl", "message": TEXT.t(i18n::locale_of(args), key) })
 }
 
 fn sns_me(args: &Value) -> Result<Value, Value> {
@@ -1870,6 +1880,7 @@ mod tests {
         assert_eq!(bodies[0]["quoted_status_id"], "q1");
         assert_eq!(bodies[0]["status"], "これ見て", "URL は足さない");
         assert_eq!(out["post"]["quote"]["id"], "q1");
+        assert!(out.get("notice").is_none(), "引用できたら知らせない (D-500): {out}");
         // 能力は接続先ごとに覚える: 2 回目は /api/v2/instance を引かない。
         quote_call(json!({ "text": "もう一回", "quoteOfId": "q1" })).unwrap();
         let log = take_host_log();
@@ -1887,11 +1898,14 @@ mod tests {
     #[test]
     fn quote_on_an_older_server_falls_back_to_the_url() {
         quote_server(None, &[]);
-        quote_call(json!({ "text": "これ見て\n", "quoteOfId": "q1" })).unwrap();
+        let out = quote_call(json!({ "text": "これ見て\n", "quoteOfId": "q1" })).unwrap();
         let bodies = sent_bodies();
         assert_eq!(bodies.len(), 1);
         assert!(bodies[0].get("quoted_status_id").is_none(), "{}", bodies[0]);
         assert_eq!(bodies[0]["status"], "これ見て\nhttps://remote.example/@author/1");
+        // URL で送ったことを利用者に知らせる(契約 v0.25 の notice、D-500)。
+        assert_eq!(out["notice"], json!({ "code": "quote.fallbackUrl", "message": "引用に対応していないサーバーなので、引用元の URL を付けて投稿しました" }));
+        assert_eq!(out["post"]["id"], "s1");
         // 本文なし(メディアだけ)の引用は URL だけ。
         quote_call(json!({ "text": "", "quoteOfId": "q1", "mediaIds": ["m1"] })).unwrap();
         let b = &sent_bodies()[0];
@@ -1906,12 +1920,18 @@ mod tests {
     #[test]
     fn refused_quote_falls_back_to_the_url_or_fails_loudly() {
         quote_server(Some(7), &["q1"]);
-        quote_call(json!({ "text": "これ見て", "quoteOfId": "q1" })).unwrap();
+        let out = quote_call(json!({ "text": "これ見て", "quoteOfId": "q1" })).unwrap();
         let bodies = sent_bodies();
         assert_eq!(bodies.len(), 2);
         assert_eq!(bodies[0]["quoted_status_id"], "q1");
         assert!(bodies[1].get("quoted_status_id").is_none());
         assert_eq!(bodies[1]["status"], "これ見て\nhttps://remote.example/@author/1");
+        // 断られたので URL で送ったことを知らせる (D-500)。文は args.locale で引く(いまは ja だけ。en も ja に落ちる)。
+        assert_eq!(out["notice"], json!({ "code": "quote.fallbackUrl", "message": "引用が許可されていなかったため、引用元の URL を付けて投稿しました" }));
+        quote_server(Some(7), &["q1"]);
+        let en = sns_create_post(&json!({ "host": "mastodon.example", "locale": "en-US", "draft": { "text": "x", "quoteOfId": "q1" } })).unwrap();
+        assert_eq!(en["notice"], out["notice"]);
+        assert!(i18n::take_misses().is_empty());
 
         // ブーストの外側の id は断られる → 中身の id で引用し直す。
         quote_server(Some(7), &["boost1"]);
@@ -1919,6 +1939,7 @@ mod tests {
         let bodies = sent_bodies();
         assert_eq!(bodies.iter().map(|b| b["quoted_status_id"].clone()).collect::<Vec<_>>(), vec![json!("boost1"), json!("q1")]);
         assert_eq!(out["post"]["quote"]["id"], "q1");
+        assert!(out.get("notice").is_none(), "中身で引用できたら知らせない: {out}");
 
         // 引用元が消えた / 見られない: 何も送らず、利用者に出る文で断る(引用を黙って落とさない)。
         quote_server(Some(7), &["gone"]);
