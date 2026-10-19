@@ -29,6 +29,7 @@ cargo build --release --target wasm32-unknown-unknown -p bluesky-wasm # → targ
 | リアクション | 「いいね」のみ、⭐ 固定 | アクション id は `favorite`(ホストのお気に入りメニューと同じ)、`genreTag: Reaction`。`counts` はアクション id キー(`reply/repost/favorite/quote`) |
 | リポスト | feed の `reasonRepost` を中身へ展開 (D-100/D-112) | 外側 id `<uri>#repost-by-<did>`、`repostedBy`、`repostTargetId` |
 | TL | `home`=`getTimeline` / `global`=Discover フィード(`getFeed`) | `local`/`social` はホームに倒す。`tag:` は `searchPosts`、`chat:<did>` はチャット履歴 |
+| ハッシュタグの候補 | `sns.search {kind: hashtags}`(コンポーザーの `#` の補完、rasq-client D-478) | タグの検索 API が無いので、トレンド(`getTrends`、失敗なら `getTrendingTopics`)+ Discover(`getFeed` 100 件の facets の `#tag` / `record.tags`)の池を前方一致(全角・半角カナ・大文字小文字を畳む)で絞る。同じタグ → 点(投稿の数 + トレンドの重み)の順、`count` 無し。池は `args.now` で 3 分メモリに置く。片方の失敗は無視、両方失敗で `{tags: []}` |
 | 引用 | ネイティブ(`app.bsky.embed.record`) | `sns.quotes` = `getQuotes` |
 | メディア | `uploadBlob`(生バイト) | `sns.uploadMedia` の `media.id` は **`{blob, alt, mimeType}` の JSON 文字列**、`url` は空。`sns.createPost` の `mediaIds` で戻すと `embed.images`(動画 mime なら `embed.video`)になる |
 | DM | `chat.bsky.convo.*`(`atproto-proxy: did:web:api.bsky.chat#bsky_chat`) | `dmRooms` は失敗時 C01(ホストが DM 欄を隠す)。`sendDm` は `peerId` → `getConvoForMembers` → `sendMessage` |

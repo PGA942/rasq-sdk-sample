@@ -213,7 +213,11 @@ SNS プラグインのイベントハンドラー関数は「一定程度は抽�
   - `sns.search {kind: hashtags, q, limit}` → `{tags: [{tag, count?}]}`(`sns.trendingTags` と同じ形。`tag` に `#` は付けない)
     — **コンポーザーの `#` の補完** (rasq-client D-475。`@` の補完が `kind: users` を使うのと同じ口)。`q` は打っている途中の
     タグ(`#` 無し)で、前方一致の候補を返す。Misskey は `hashtags/search`、Mastodon は `/api/v2/search?type=hashtags`。
-    **持たない SNS は C01**(Bluesky / mixi2)。ホストは C01 / 失敗 / `tags` の無い答え(この kind を知らない古いプラグインは
+    **Bluesky はタグの検索 API が無いので、候補の池を手元で絞る** (rasq-client D-478): トレンド(`app.bsky.unspecced.getTrends`、
+    無ければ `getTrendingTopics`。空白を含む話題は除く)+ Discover フィード(`whats-hot` を `getFeed` で 100 件、facets の `#tag` と
+    レコードの `tags`)。照合は全角 → 半角・半角カナ → 全角・小文字に畳んだ前方一致、並びは同じタグ → 点(Discover で使った投稿の数 +
+    トレンドの重み)の順。池は `args.now` で 3 分置く。片方が失敗しても残りで答え、両方失敗なら `{tags: []}`。`count` は付けない
+    (標本の数なので)。**持たない SNS は C01**(mixi2)。ホストは C01 / 失敗 / `tags` の無い答え(この kind を知らない古いプラグインは
     posts の `{page}` を返す)のどれでも候補を出さないだけ。
   - `sns.trendingTags {}` → `{tags: [{tag, count?}]}`
   - `sns.favorites {limit, cursor?}` → `{page}` — ブックマーク(お気に入り)。
