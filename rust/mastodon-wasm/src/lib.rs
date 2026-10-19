@@ -18,14 +18,20 @@
 //!    認証は `Authorization: Bearer`([`fetch`])。
 //! 3. **ページングが `max_id`**。Misskey の `untilId` に相当する。
 //! 4. **リアクションが無い**。お気に入り(favourite)を唯一の「リアクション」
-//!    として `sns.reactions` に写し、絵文字は ⭐ 固定にする。引用は
-//!    ネイティブに存在しないので `sns.quotes` は C01 を返し、ホストが
-//!    「共有(引用ノート)」欄を隠す。
+//!    として `sns.reactions` に写し、絵文字は ⭐ 固定にする。
+//!
+//! 引用は Mastodon 4.5(API version 7)から。書くときは `quoted_status_id` を
+//! 付け、持たないサーバー(または引用を断られたとき)は引用元の URL を本文の
+//! 末尾の行に足す(D-495、[`sns_create_post`])。読むときは承認済みの `quote` を
+//! Misskey の引用リノートと同じ `quote` に写す([`post_wire`])。`sns.quotes`
+//! (引用した投稿の一覧)はまだ無いので C01 を返し、ホストが欄を隠す。
 //!
 //! ブースト(reblog)は Misskey の純リノートと同じ規則で中身へ展開し、
 //! `repostedBy` と `repostTargetId` を載せる (D-100 / D-112)。
 
 use serde_json::{json, Value};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::mem;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -46,6 +52,13 @@ extern "C" {
 }
 
 static HOST_CALL_SEQ: AtomicU64 = AtomicU64::new(0);
+
+thread_local! {
+    /// 接続先ごとの「引用投稿を書けるか」(D-495)。サーバーのバージョンは
+    /// セッションの間は変わらないので、`/api/v2/instance` を一度見たら覚える。
+    /// キーは [`instance_key`](wasm は 1 スレッドなので thread_local で足りる)。
+    static QUOTE_SUPPORT: RefCell<HashMap<String, bool>> = RefCell::new(HashMap::new());
+}
 
 // ── wasm ABI (PROTOCOL §4.1) ──────────────────────────────────────
 
@@ -411,6 +424,29 @@ fn post_wire(status: &Value, fallback_instance: &str) -> Value {
     post_wire_at(status, fallback_instance, 0)
 }
 
+/// 承認済みの引用の中身(D-495)。Mastodon 4.5 の Status は `quote: {state, quoted_status}`
+/// を持つ。`accepted` 以外(承認待ち・拒否・削除・ブロック…)と、中身の無い ShallowQuote
+/// (`quoted_status_id` だけ)は引用として出さない。
+fn accepted_quote(status: &Value) -> Option<&Value> {
+    let quote = &status["quote"];
+    (quote["state"].as_str() == Some("accepted") && quote["quoted_status"].is_object()).then(|| &quote["quoted_status"])
+}
+
+/// 引用投稿の本文 HTML から、古いクライアント向けの `<p class="quote-inline">RE: …</p>` を外す。
+/// 引用はタイルの中に出すので、本文に残すと同じリンクが二重になる(Mastodon の web も隠す)。
+fn strip_quote_inline(html: &str) -> String {
+    let mut out = html.to_string();
+    while let Some(at) = out.find("class=\"quote-inline\"") {
+        let Some(start) = out[..at].rfind("<p") else { break };
+        let end = match out[at..].find("</p>") {
+            Some(e) => at + e + "</p>".len(),
+            None => out.len(),
+        };
+        out.replace_range(start..end, "");
+    }
+    out
+}
+
 fn post_wire_at(status: &Value, fallback_instance: &str, depth: usize) -> Value {
     // ブーストの展開は 1 段だけ(Mastodon も入れ子ブーストは作らない)。
     if depth == 0 && status["reblog"].is_object() {
@@ -433,11 +469,16 @@ fn post_wire_at(status: &Value, fallback_instance: &str, depth: usize) -> Value 
         })
         .collect();
 
+    // 引用 (D-495): 入れ子は 1 段だけ(引用の中の引用は出さない。Misskey サンプルと同じ深さ)。
+    // ブーストの中身(depth 1)の引用は出す。
+    let quoted = if depth < 2 { accepted_quote(status) } else { None };
+    let content = status["content"].as_str().unwrap_or("");
+    let body = if quoted.is_some() { html_to_text(&strip_quote_inline(content)) } else { html_to_text(content) };
     let mut wire = json!({
         "id": status["id"],
         "author": user_wire(&status["account"], fallback_instance),
         "createdAt": status["created_at"],
-        "body": html_to_text(status["content"].as_str().unwrap_or("")),
+        "body": body,
         // HTML はここで潰したので、ホストから見ればただの平文。
         "bodyFormat": "plain",
         "media": media,
@@ -459,6 +500,9 @@ fn post_wire_at(status: &Value, fallback_instance: &str, depth: usize) -> Value 
     }
     if status["poll"].is_object() {
         wire["poll"] = poll_wire(&status["poll"]);
+    }
+    if let Some(q) = quoted {
+        wire["quote"] = post_wire_at(q, fallback_instance, 2);
     }
     // お気に入り済みは「⭐ でリアクション済み」として見せる。
     if status["favourited"].as_bool().unwrap_or(false) {
@@ -559,11 +603,78 @@ fn sns_inspect_server(args: &Value) -> Result<Value, Value> {
 /// `call("sns.capabilities")`: セッション単位の能力値。投稿の文字数上限は
 /// インスタンス設定で変わる(既定 500)。
 fn sns_capabilities(args: &Value) -> Result<Value, Value> {
-    let max = get(args, "/api/v2/instance")
-        .ok()
-        .and_then(|i| i["configuration"]["statuses"]["max_characters"].as_u64())
-        .unwrap_or(500);
+    let instance = get(args, "/api/v2/instance").ok();
+    // 同じ答えから引用の可否も覚えておく(投稿のたびに引き直さない、D-495)。
+    if let Some(i) = &instance {
+        remember_quote_support(args, i);
+    }
+    let max = instance.and_then(|i| i["configuration"]["statuses"]["max_characters"].as_u64()).unwrap_or(500);
     Ok(json!({ "maxPostLength": max }))
+}
+
+// ── 引用投稿 (D-495) ─────────────────────────────────────────────
+
+/// 能力の覚え先のキー = 実際に叩く接続先(`baseUrl` の上書きがあればそちら)。
+fn instance_key(args: &Value) -> String {
+    match args["baseUrl"].as_str() {
+        Some(b) => b.trim_end_matches('/').to_string(),
+        None => args["host"].as_str().unwrap_or("mastodon.social").to_string(),
+    }
+}
+
+/// `/api/v2/instance` → 引用投稿を書けるか。
+///
+/// 正は `api_versions.mastodon`(4.3+ の機械向けの版。引用の `quoted_status_id` は 7 = 4.5.0 から)。
+/// 無いサーバー(4.2 以前・互換実装)は `version` の先頭の `major.minor` を見る(`4.5.0+glitch` も 4.5)。
+/// Pleroma 系の `2.7.2 (compatible; …)` は 2.7 なので引用なし。どちらも読めなければ `None`。
+fn quote_support_of(instance: &Value) -> Option<bool> {
+    if let Some(v) = instance["api_versions"]["mastodon"].as_u64() {
+        return Some(v >= 7);
+    }
+    let version = instance["version"].as_str()?;
+    let mut parts = version.split(|c: char| !c.is_ascii_digit());
+    let major: u32 = parts.next()?.parse().ok()?;
+    let minor: u32 = parts.next()?.parse().ok()?;
+    Some((major, minor) >= (4, 5))
+}
+
+fn remember_quote_support(args: &Value, instance: &Value) {
+    let supported = quote_support_of(instance).unwrap_or(false);
+    QUOTE_SUPPORT.with(|c| c.borrow_mut().insert(instance_key(args), supported));
+}
+
+/// 接続先が引用投稿を書けるか。覚えていなければ `/api/v2/instance` を引いて覚える。
+/// 引けなかった(一時的な失敗)ときは覚えずに「書けない」とする — URL を足す側に倒れるだけで、引用は落ちない。
+fn quotes_supported(args: &Value) -> bool {
+    if let Some(known) = QUOTE_SUPPORT.with(|c| c.borrow().get(&instance_key(args)).copied()) {
+        return known;
+    }
+    match get(args, "/api/v2/instance") {
+        Ok(instance) if instance.is_object() => {
+            remember_quote_support(args, &instance);
+            quote_support_of(&instance).unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
+/// `quoted_status_id` を付けた投稿をサーバーが断ったか。Mastodon は見られない・引用を
+/// 許されていない投稿を 404(区別しない)、方針で断るものを 403、ダイレクトでの引用の
+/// 条件違反などを 422 で返す。
+fn is_quote_refusal(error: &Value) -> bool {
+    matches!(error["code"].as_str(), Some("403" | "404" | "422"))
+}
+
+/// 引用元の URL を本文の末尾の行に足す(引用を持たないサーバー向けの慣習)。本文が空なら URL だけ、
+/// 既に URL を書いていれば足さない。
+fn text_with_quote_url(text: &str, url: &str) -> String {
+    if text.trim().is_empty() {
+        url.to_string()
+    } else if text.contains(url) {
+        text.to_string()
+    } else {
+        format!("{}\n{url}", text.trim_end())
+    }
 }
 
 /// `call("sns.timelines")`: このアカウントで出せる基本 TL。
@@ -678,9 +789,6 @@ fn sns_create_post(args: &Value) -> Result<Value, Value> {
         return Err(json!({ "code": "D01", "message": TEXT.t(i18n::locale_of(args), "error.pollNeedsText") }));
     }
     let mut body = json!({});
-    if !blank {
-        body["status"] = json!(text);
-    }
     if let Some(cw) = draft["cw"].as_str() {
         if !cw.is_empty() {
             body["spoiler_text"] = json!(cw);
@@ -711,8 +819,63 @@ fn sns_create_post(args: &Value) -> Result<Value, Value> {
             "multiple": poll.get("multiple").and_then(Value::as_bool).unwrap_or(false),
         });
     }
-    let created = post(args, "/api/v1/statuses", body)?;
-    Ok(json!({ "post": post_wire(&created, &host) }))
+    let quote_of = draft["quoteOfId"].as_str().filter(|id| !id.is_empty());
+    let Some(quote_of) = quote_of else {
+        if !blank {
+            body["status"] = json!(text);
+        }
+        let created = post(args, "/api/v1/statuses", body)?;
+        return Ok(json!({ "post": post_wire(&created, &host) }));
+    };
+    create_quote_post(args, &host, body, text, quote_of)
+}
+
+/// 引用投稿 (D-495)。以前は `quoteOfId` を読まず、引用がただの投稿になっていた。
+///
+/// 1. 4.5+ のサーバーは `quoted_status_id` を付けて送る(引用の可否の方針 `quote_approval_policy` は
+///    送らない — 利用者の既定の設定のまま)。
+/// 2. 断られたら(404/403/422)引用元を引き、ブーストの外側だったら中身の id でもう一度だけ引用する
+///    (ブーストの引用は 4.4.8 / 4.5.0-beta.2 から断られる。CVE-2025-62605)。
+/// 3. それでも断られた・サーバーが引用を持たないときは、引用元の URL を本文の末尾の行に足して送る。
+///    引用元が引けなければ(消えた・見られない)送らずに、利用者に出る文で断る — 引用を黙って落とさない。
+fn create_quote_post(args: &Value, host: &str, body: Value, text: &str, quote_of: &str) -> Result<Value, Value> {
+    let blank = text.trim().is_empty();
+    let send_quote = |id: &str| {
+        let mut b = body.clone();
+        if !blank {
+            b["status"] = json!(text);
+        }
+        b["quoted_status_id"] = json!(id);
+        post(args, "/api/v1/statuses", b)
+    };
+    let supported = quotes_supported(args);
+    if supported {
+        match send_quote(quote_of) {
+            Ok(created) => return Ok(json!({ "post": post_wire(&created, host) })),
+            Err(e) if is_quote_refusal(&e) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    let quoted = get(args, &format!("/api/v1/statuses/{}", urlencode(quote_of)))
+        .map_err(|_| json!({ "code": "D01", "message": TEXT.t(i18n::locale_of(args), "error.quoteNotFound") }))?;
+    let is_boost = quoted["reblog"].is_object();
+    let target = if is_boost { &quoted["reblog"] } else { &quoted };
+    if supported && is_boost {
+        if let Some(inner) = target["id"].as_str() {
+            match send_quote(inner) {
+                Ok(created) => return Ok(json!({ "post": post_wire(&created, host) })),
+                Err(e) if is_quote_refusal(&e) => {}
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    let Some(url) = target["url"].as_str().or(target["uri"].as_str()).filter(|u| !u.is_empty()) else {
+        return Err(json!({ "code": "D01", "message": TEXT.t(i18n::locale_of(args), "error.quoteNotFound") }));
+    };
+    let mut b = body;
+    b["status"] = json!(text_with_quote_url(text, url));
+    let created = post(args, "/api/v1/statuses", b)?;
+    Ok(json!({ "post": post_wire(&created, host) }))
 }
 
 fn sns_me(args: &Value) -> Result<Value, Value> {
@@ -739,7 +902,7 @@ fn sns_user(args: &Value) -> Result<Value, Value> {
 }
 
 /// `call("sns.userPosts", {id, filter, limit, cursor?})` (D-076)。
-/// 返信/引用の振り分け (D-069): Mastodon に引用は無いので `quotes` は空。
+/// 返信/引用の振り分け (D-069): `quotes` は空のまま(引用の一覧はまだ写していない)。
 fn sns_user_posts(args: &Value) -> Result<Value, Value> {
     let host = args["host"].as_str().unwrap_or("mastodon.social").to_string();
     let filter = args["filter"].as_str().unwrap_or("posts");
@@ -816,6 +979,8 @@ fn notification_kind(t: &str) -> &'static str {
         "poll" => "pollEnded",
         // 「フォロー中の人が投稿した」通知。投稿タイルとして出す。
         "status" | "update" => "quote",
+        // 自分の投稿が引用された (4.5+、D-495)。
+        "quote" => "quote",
         "admin.sign_up" | "admin.report" | "severed_relationships" => "system",
         _ => "other",
     }
@@ -1293,7 +1458,7 @@ pub extern "C" fn call(
         // クリップ (D-032) と Play (D-039) は Misskey 固有。未実装 = C01 で
         // 落ちるので、ホストが該当タブ/メニューを隠す。
         // 未対応は C01 — ホストが該当 UI を隠す (PROTOCOL §4.3)。
-        // Mastodon に引用投稿はネイティブに存在しない。
+        // 引用の一覧 (`sns.quotes`) はまだ写していない(引用そのものは 4.5+ で書ける・読める、D-495)。
         other => Err(json!({ "code": "C01", "message": format!("unsupported fn: {other}") })),
     };
 
@@ -1629,5 +1794,173 @@ mod tests {
         let b = &sent_bodies()[0];
         assert_eq!(b["status"], "@alice@remote.example");
         assert_eq!(b["media_ids"], json!(["m1"]));
+    }
+
+    // ── 引用投稿 (D-495) ──────────────────────────────────────────
+
+    /// 引用を書けるかの判定: `api_versions.mastodon` >= 7 が正。無ければ `version` の major.minor。
+    #[test]
+    fn quote_support_comes_from_api_versions_then_version() {
+        assert_eq!(quote_support_of(&json!({ "version": "4.5.0", "api_versions": { "mastodon": 7 } })), Some(true));
+        assert_eq!(quote_support_of(&json!({ "version": "4.5.0-nightly", "api_versions": { "mastodon": 6 } })), Some(false), "api_versions が正");
+        assert_eq!(quote_support_of(&json!({ "version": "4.4.3", "api_versions": { "mastodon": 6 } })), Some(false));
+        assert_eq!(quote_support_of(&json!({ "version": "4.5.1+glitch" })), Some(true));
+        assert_eq!(quote_support_of(&json!({ "version": "4.10.0" })), Some(true));
+        assert_eq!(quote_support_of(&json!({ "version": "4.2.10" })), Some(false));
+        assert_eq!(quote_support_of(&json!({ "version": "2.7.2 (compatible; Pleroma 2.5.0)" })), Some(false));
+        assert_eq!(quote_support_of(&json!({})), None);
+    }
+
+    /// 引用のフェイクサーバー。`api` = `api_versions.mastodon`(None は 4.4 の版の文字列だけ)、
+    /// `refuse` は `quoted_status_id` を断る id(Mastodon は見られない・許されない引用を 404 で返す)。
+    fn quote_server(api: Option<u64>, refuse: &'static [&'static str]) {
+        // 能力の覚えは接続先ごと(テストのスレッドごと)。サーバーを差し替えたら忘れる。
+        QUOTE_SUPPORT.with(|c| c.borrow_mut().clear());
+        set_host_hook(move |fn_name, a| {
+            if fn_name != "net.fetch" {
+                return json!({});
+            }
+            let url = a["url"].as_str().unwrap_or("").to_string();
+            let ok = |v: Value| json!({ "status": 200, "headers": {}, "bodyText": v.to_string() });
+            let account = json!({ "id": "u1", "acct": "author@remote.example", "username": "author" });
+            if a["method"] == "GET" {
+                if url.ends_with("/api/v2/instance") {
+                    return ok(match api {
+                        Some(v) => json!({ "domain": "mastodon.example", "version": "4.5.0", "api_versions": { "mastodon": v } }),
+                        None => json!({ "domain": "mastodon.example", "version": "4.4.3" }),
+                    });
+                }
+                if url.ends_with("/api/v1/statuses/q1") {
+                    return ok(json!({ "id": "q1", "url": "https://remote.example/@author/1", "content": "<p>元</p>", "account": account }));
+                }
+                if url.ends_with("/api/v1/statuses/boost1") {
+                    return ok(json!({ "id": "boost1", "content": "", "account": { "id": "u2", "acct": "booster" },
+                        "reblog": { "id": "q1", "url": "https://remote.example/@author/1", "content": "<p>元</p>", "account": account } }));
+                }
+                return json!({ "status": 404, "headers": {}, "bodyText": "{\"error\":\"Record not found\"}" });
+            }
+            assert!(url.ends_with("/api/v1/statuses"), "{url}");
+            let body: Value = serde_json::from_str(a["body"].as_str().unwrap_or("null")).unwrap_or(Value::Null);
+            if let Some(q) = body["quoted_status_id"].as_str() {
+                if refuse.contains(&q) {
+                    return json!({ "status": 404, "headers": {}, "bodyText": "{\"error\":\"The post you are trying to quote does not appear to exist.\"}" });
+                }
+            }
+            let mut created = json!({ "id": "s1", "created_at": "2026-10-20T00:00:00Z", "content": format!("<p>{}</p>", body["status"].as_str().unwrap_or("")),
+                "account": { "id": "me", "acct": "me", "username": "me" }, "media_attachments": [] });
+            if let Some(q) = body["quoted_status_id"].as_str() {
+                created["quote"] = json!({ "state": "accepted", "quoted_status": { "id": q, "content": "<p>元</p>", "account": account } });
+            }
+            ok(created)
+        });
+        let _ = take_host_log();
+    }
+
+    fn quote_call(draft: Value) -> Result<Value, Value> {
+        sns_create_post(&json!({ "host": "mastodon.example", "token": "tok", "draft": draft }))
+    }
+
+    /// 4.5+ のサーバーは `quoted_status_id` で引用する(以前は `quoteOfId` を読まず、ただの投稿になった)。
+    #[test]
+    fn quote_on_a_4_5_server_sends_quoted_status_id() {
+        quote_server(Some(7), &[]);
+        let out = quote_call(json!({ "text": "これ見て", "quoteOfId": "q1", "visibility": "public" })).unwrap();
+        let bodies = sent_bodies();
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(bodies[0]["quoted_status_id"], "q1");
+        assert_eq!(bodies[0]["status"], "これ見て", "URL は足さない");
+        assert_eq!(out["post"]["quote"]["id"], "q1");
+        // 能力は接続先ごとに覚える: 2 回目は /api/v2/instance を引かない。
+        quote_call(json!({ "text": "もう一回", "quoteOfId": "q1" })).unwrap();
+        let log = take_host_log();
+        assert!(!log.iter().any(|(_, a)| a["url"].as_str().unwrap_or("").ends_with("/api/v2/instance")), "{log:?}");
+        // sns.capabilities の答えからも覚える(別の接続先)。
+        quote_server(Some(7), &[]);
+        sns_capabilities(&json!({ "host": "other.example" })).unwrap();
+        let _ = take_host_log();
+        sns_create_post(&json!({ "host": "other.example", "draft": { "text": "a", "quoteOfId": "q1" } })).unwrap();
+        let log = take_host_log();
+        assert_eq!(log.len(), 1, "{log:?}");
+    }
+
+    /// 引用を持たないサーバー(4.4 以前)は、引用元の URL を本文の末尾の行に足す。
+    #[test]
+    fn quote_on_an_older_server_falls_back_to_the_url() {
+        quote_server(None, &[]);
+        quote_call(json!({ "text": "これ見て\n", "quoteOfId": "q1" })).unwrap();
+        let bodies = sent_bodies();
+        assert_eq!(bodies.len(), 1);
+        assert!(bodies[0].get("quoted_status_id").is_none(), "{}", bodies[0]);
+        assert_eq!(bodies[0]["status"], "これ見て\nhttps://remote.example/@author/1");
+        // 本文なし(メディアだけ)の引用は URL だけ。
+        quote_call(json!({ "text": "", "quoteOfId": "q1", "mediaIds": ["m1"] })).unwrap();
+        let b = &sent_bodies()[0];
+        assert_eq!(b["status"], "https://remote.example/@author/1");
+        assert_eq!(b["media_ids"], json!(["m1"]));
+        // 既に URL を書いていれば足さない。
+        quote_call(json!({ "text": "https://remote.example/@author/1 だって", "quoteOfId": "q1" })).unwrap();
+        assert_eq!(sent_bodies()[0]["status"], "https://remote.example/@author/1 だって");
+    }
+
+    /// 断られた引用: URL を足して送り直す。引用元が引けなければ送らずに利用者に出る文で断る。
+    #[test]
+    fn refused_quote_falls_back_to_the_url_or_fails_loudly() {
+        quote_server(Some(7), &["q1"]);
+        quote_call(json!({ "text": "これ見て", "quoteOfId": "q1" })).unwrap();
+        let bodies = sent_bodies();
+        assert_eq!(bodies.len(), 2);
+        assert_eq!(bodies[0]["quoted_status_id"], "q1");
+        assert!(bodies[1].get("quoted_status_id").is_none());
+        assert_eq!(bodies[1]["status"], "これ見て\nhttps://remote.example/@author/1");
+
+        // ブーストの外側の id は断られる → 中身の id で引用し直す。
+        quote_server(Some(7), &["boost1"]);
+        let out = quote_call(json!({ "text": "これ見て", "quoteOfId": "boost1" })).unwrap();
+        let bodies = sent_bodies();
+        assert_eq!(bodies.iter().map(|b| b["quoted_status_id"].clone()).collect::<Vec<_>>(), vec![json!("boost1"), json!("q1")]);
+        assert_eq!(out["post"]["quote"]["id"], "q1");
+
+        // 引用元が消えた / 見られない: 何も送らず、利用者に出る文で断る(引用を黙って落とさない)。
+        quote_server(Some(7), &["gone"]);
+        let e = quote_call(json!({ "text": "これ見て", "quoteOfId": "gone" })).unwrap_err();
+        assert_eq!(e["code"], "D01");
+        assert_eq!(e["message"], "引用元の投稿が見つからないため、送れませんでした");
+        assert_eq!(sent_bodies().len(), 1, "断られた引用の 1 回だけ");
+        quote_server(None, &[]);
+        assert!(quote_call(json!({ "text": "x", "quoteOfId": "gone" })).is_err());
+        assert!(sent_bodies().is_empty());
+    }
+
+    /// 読む側: 承認済みの `quote` を Post の `quote` に写す。本文の `quote-inline`(古いクライアント向けの
+    /// `RE: URL`)は外す。承認済みでない引用・ShallowQuote は出さない。
+    #[test]
+    fn incoming_accepted_quote_maps_onto_the_post_quote() {
+        let quoted = json!({ "id": "q1", "content": "<p>元の投稿</p>", "created_at": "2026-10-01T00:00:00Z",
+            "account": { "id": "u1", "acct": "author@remote.example", "display_name": "書いた人" }, "media_attachments": [],
+            "quote": { "state": "accepted", "quoted_status": { "id": "q0", "content": "<p>さらに元</p>", "account": { "id": "u0", "acct": "x" } } } });
+        let status = json!({ "id": "s1", "created_at": "2026-10-02T00:00:00Z",
+            "content": "<p class=\"quote-inline\">RE: <a href=\"https://remote.example/@author/1\">remote.example/@author/1</a></p><p>これ見て</p>",
+            "account": { "id": "me", "acct": "me" }, "media_attachments": [],
+            "quote": { "state": "accepted", "quoted_status": quoted } });
+        let wire = post_wire(&status, "mastodon.example");
+        assert_eq!(wire["body"], "これ見て");
+        assert_eq!(wire["quote"]["id"], "q1");
+        assert_eq!(wire["quote"]["body"], "元の投稿");
+        assert_eq!(wire["quote"]["author"]["instance"], "remote.example");
+        assert!(wire["quote"].get("quote").is_none(), "引用の中の引用は出さない");
+
+        // ブーストされた引用投稿も中身の引用を持つ。
+        let boost = json!({ "id": "b1", "content": "", "account": { "id": "u9", "acct": "booster" }, "reblog": status });
+        assert_eq!(post_wire(&boost, "mastodon.example")["quote"]["id"], "q1");
+
+        // 承認待ち・拒否・ShallowQuote は引用として出さず、本文の RE: も残す(読み手がリンクで辿れる)。
+        for q in [json!({ "state": "pending", "quoted_status": null }), json!({ "state": "rejected", "quoted_status": null }), json!({ "state": "accepted", "quoted_status_id": "q1" })] {
+            let mut s = status.clone();
+            s["quote"] = q;
+            let w = post_wire(&s, "mastodon.example");
+            assert!(w.get("quote").is_none(), "{w}");
+            assert!(w["body"].as_str().unwrap().starts_with("RE: remote.example/@author/1"), "{w}");
+        }
+        assert_eq!(notification_kind("quote"), "quote");
     }
 }
