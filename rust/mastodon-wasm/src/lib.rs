@@ -878,8 +878,18 @@ fn sns_user_list(args: &Value) -> Result<Value, Value> {
     Ok(json!({ "page": { "items": items, "nextCursor": next_cursor(&list) } }))
 }
 
+/// `call("sns.search", {kind: posts|users|hashtags, q, limit, cursor?})`。
+/// hashtags は `{tags: [{tag, count?}]}`(コンポーザーの `#` の補完、rasq-client D-475)。
 fn sns_search(args: &Value) -> Result<Value, Value> {
     let host = args["host"].as_str().unwrap_or("mastodon.social").to_string();
+    if args["kind"].as_str() == Some("hashtags") {
+        let q = query_string(&[
+            ("q", args["q"].as_str().unwrap_or("").trim_start_matches('#').to_string()),
+            ("type", "hashtags".into()),
+            ("limit", args["limit"].as_u64().unwrap_or(10).min(40).to_string()),
+        ]);
+        return Ok(hashtags_wire(&get(args, &format!("/api/v2/search{q}"))?));
+    }
     let users = args["kind"].as_str() == Some("users");
     let q = query_string(&[
         ("q", args["q"].as_str().unwrap_or("").to_string()),
@@ -898,6 +908,19 @@ fn sns_search(args: &Value) -> Result<Value, Value> {
     let list = as_list(res["statuses"].clone());
     let items: Vec<Value> = list.iter().map(|s| post_wire(s, &host)).collect();
     Ok(json!({ "page": { "items": items, "nextCursor": next_cursor(&list) } }))
+}
+
+/// `/api/v2/search?type=hashtags` の答え → `{tags: [{tag, count?}]}`(件数は直近の日の accounts。無ければ省く)。
+fn hashtags_wire(res: &Value) -> Value {
+    let tags: Vec<Value> = as_list(res["hashtags"].clone())
+        .iter()
+        .filter(|t| t["name"].is_string())
+        .map(|t| {
+            let count = t["history"].as_array().and_then(|h| h.first()).and_then(|d| d["accounts"].as_str()).and_then(|s| s.parse::<u64>().ok());
+            json!({ "tag": t["name"], "count": count })
+        })
+        .collect();
+    json!({ "tags": tags })
 }
 
 fn sns_trending_tags(args: &Value) -> Result<Value, Value> {
@@ -1228,6 +1251,18 @@ pub extern "C" fn call(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `/api/v2/search?type=hashtags` → `{tags: [{tag, count?}]}`(件数は直近の日の accounts)。
+    #[test]
+    fn hashtag_search_maps_name_and_recent_accounts() {
+        let res = json!({ "hashtags": [
+            { "name": "rocket", "history": [{ "day": "1", "uses": "9", "accounts": "4" }] },
+            { "name": "launch", "history": [] },
+            { "history": [] },
+        ] });
+        assert_eq!(hashtags_wire(&res), json!({ "tags": [{ "tag": "rocket", "count": 4 }, { "tag": "launch", "count": null }] }));
+        assert_eq!(hashtags_wire(&json!({})), json!({ "tags": [] }));
+    }
 
     #[test]
     fn html_bodies_flatten_to_text_the_host_can_parse() {

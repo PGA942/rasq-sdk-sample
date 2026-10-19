@@ -1000,11 +1000,17 @@ fn sns_user_list(args: &Value) -> Result<Value, Value> {
     Ok(json!({ "page": { "items": items, "nextCursor": next } }))
 }
 
-/// `call("sns.search", {kind: posts|users, q, limit, cursor?})`。
+/// `call("sns.search", {kind: posts|users|hashtags, q, limit, cursor?})`。
+/// hashtags は `{tags: [{tag}]}`(コンポーザーの `#` の補完、rasq-client D-475)。
 fn sns_search(args: &Value) -> Result<Value, Value> {
     let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
     let q = args["q"].as_str().unwrap_or("");
     let limit = args["limit"].as_u64().unwrap_or(20).min(100);
+    if args["kind"].as_str() == Some("hashtags") {
+        // hashtags/search は前方一致のタグ名(文字列)の配列。`#` は付けずに渡す。
+        let list = misskey_fetch(args, "hashtags/search", json!({ "query": q.trim_start_matches('#'), "limit": limit }))?;
+        return Ok(hashtags_wire(&list));
+    }
     if args["kind"].as_str() == Some("users") {
         let list = misskey_fetch(args, "users/search", json!({ "query": q, "limit": limit }))?;
         let rows: Vec<Value> = list.as_array().cloned().unwrap_or_default();
@@ -1020,6 +1026,12 @@ fn sns_search(args: &Value) -> Result<Value, Value> {
     let notes: Vec<Value> = list.as_array().cloned().unwrap_or_default();
     let next = notes.last().and_then(|n| n["id"].as_str());
     Ok(json!({ "page": { "items": notes.iter().map(|n| post_wire(n, &host)).collect::<Vec<Value>>(), "nextCursor": next } }))
+}
+
+/// `hashtags/search` の答え(タグ名の配列)→ `{tags: [{tag}]}`(`sns.trendingTags` と同じ形)。
+fn hashtags_wire(list: &Value) -> Value {
+    let tags: Vec<Value> = list.as_array().map(|a| a.iter().filter_map(|t| t.as_str()).map(|t| json!({ "tag": t })).collect()).unwrap_or_default();
+    json!({ "tags": tags })
 }
 
 /// `call("sns.trendingTags")` → `{tags: [{tag, count?}]}`。
@@ -1794,6 +1806,14 @@ mod tests {
         assert_eq!(wire["body"], "中身の本文");
         assert_eq!(wire["author"]["handle"], "author");
         assert_eq!(wire["repostedBy"]["handle"], "renoter");
+    }
+
+    /// hashtags/search(タグ名の配列)→ `{tags: [{tag}]}`。文字列でないものは捨てる。
+    #[test]
+    fn hashtag_search_maps_names() {
+        let wire = hashtags_wire(&json!(["打上会", "打ち上げ", 3]));
+        assert_eq!(wire, json!({ "tags": [{ "tag": "打上会" }, { "tag": "打ち上げ" }] }));
+        assert_eq!(hashtags_wire(&Value::Null), json!({ "tags": [] }));
     }
 
     /// 引用リノート(text あり)は従来どおり body + quote。
