@@ -625,16 +625,27 @@ fn sns_perform_action(args: &Value) -> Result<Value, Value> {
     }
 }
 
+/// 空白だけの文字列は「無し」(D-494)。Misskey の `text` / `cw` は minLength 1。
+fn non_blank(v: &Value) -> Option<&str> {
+    v.as_str().filter(|s| !s.trim().is_empty())
+}
+
 /// `call("sns.createPost", {draft, host?, token?})` (D-076): NewPost ワイヤ →
 /// notes/create → 作成された Post ワイヤ。
 fn sns_create_post(args: &Value) -> Result<Value, Value> {
     let host = args["host"].as_str().unwrap_or("misskey.io").to_string();
     let d = &args["draft"];
     let mut body = json!({});
+    // 本文なし(メディア / 投票 / 引用だけ)は `text` を送らない (D-494): 空文字は minLength 1 に当たって 400 になる。注釈も同じ。
     if d["repostOfId"].is_null() {
-        body["text"] = d["text"].clone();
+        if let Some(text) = non_blank(&d["text"]) {
+            body["text"] = json!(text);
+        }
     }
-    for (wire, api) in [("cw", "cw"), ("replyToId", "replyId"), ("visibility", "visibility"), ("reactionAcceptance", "reactionAcceptance")] {
+    if let Some(cw) = non_blank(&d["cw"]) {
+        body["cw"] = json!(cw);
+    }
+    for (wire, api) in [("replyToId", "replyId"), ("visibility", "visibility"), ("reactionAcceptance", "reactionAcceptance")] {
         if !d[wire].is_null() {
             body[api] = d[wire].clone();
         }
@@ -648,7 +659,8 @@ fn sns_create_post(args: &Value) -> Result<Value, Value> {
     if let Some(ids) = d["directToIds"].as_array() {
         body["visibleUserIds"] = json!(ids);
     }
-    if let Some(ids) = d["mediaIds"].as_array() {
+    // 空の添付も送らない(`fileIds` は minItems 1)。
+    if let Some(ids) = d["mediaIds"].as_array().filter(|ids| !ids.is_empty()) {
         body["fileIds"] = json!(ids);
     }
     if d["poll"].is_object() {
@@ -1154,7 +1166,10 @@ fn sns_send_dm(args: &Value) -> Result<Value, Value> {
     let peer = args["peerId"].as_str().unwrap_or("");
     let draft = &args["draft"];
     if args["roomKind"].as_str() == Some("chat") {
-        let mut body = json!({ "toUserId": peer, "text": draft["text"] });
+        let mut body = json!({ "toUserId": peer });
+        if let Some(text) = non_blank(&draft["text"]) {
+            body["text"] = json!(text); // 画像だけのメッセージは text を送らない (D-494)
+        }
         // Chat は画像 1 枚まで (CONTRACT §7)。
         if let Some(first) = draft["mediaIds"].as_array().and_then(|a| a.first()) {
             body["fileId"] = first.clone();
@@ -1171,11 +1186,14 @@ fn sns_send_dm(args: &Value) -> Result<Value, Value> {
         } }));
     }
     let mut body = json!({
-        "text": draft["text"],
         "visibility": "specified",
         "visibleUserIds": [peer],
     });
-    if let Some(cw) = draft["cw"].as_str() {
+    // 本文 / 注釈が空なら送らない (D-494)。
+    if let Some(text) = non_blank(&draft["text"]) {
+        body["text"] = json!(text);
+    }
+    if let Some(cw) = non_blank(&draft["cw"]) {
         body["cw"] = json!(cw);
     }
     if let Some(ids) = draft["mediaIds"].as_array() {
@@ -2050,5 +2068,84 @@ mod tests {
     fn multipart_body_without_a_file_is_still_terminated() {
         let body = multipart_body("B", &[("a", "1")], None);
         assert_eq!(String::from_utf8_lossy(&body), "--B\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n1\r\n--B--\r\n");
+    }
+
+    /// 本文なしの投稿 (D-494): Misskey の notes/create は `text` / `cw` が minLength 1、`fileIds` が minItems 1 で、
+    /// 本文 / 添付 / 投票 / リノートのどれかが要る。サーバーと同じ検査をするフェイク(破れば 400)で送り先の本文を確かめる。
+    fn strict_notes_create() {
+        set_host_hook(|fn_name, a| {
+            if fn_name != "net.fetch" {
+                return json!({});
+            }
+            let body: Value = serde_json::from_str(a["body"].as_str().unwrap_or("null")).unwrap_or(Value::Null);
+            let endpoint = a["url"].as_str().unwrap_or("").split("/api/").nth(1).unwrap_or("").to_string();
+            let empty_str = |k: &str| body[k].as_str() == Some("");
+            let invalid = empty_str("text") || empty_str("cw") || body["fileIds"].as_array().is_some_and(|a| a.is_empty());
+            let content = body["text"].is_string() || body["fileIds"].is_array() || body["fileId"].is_string() || body["poll"].is_object() || body["renoteId"].is_string();
+            if invalid || !content {
+                return json!({ "status": 400, "headers": {}, "bodyText": json!({ "error": { "code": "INVALID_PARAM" } }).to_string() });
+            }
+            let created = json!({ "id": "n1", "createdAt": "2026-10-20T00:00:00Z", "text": body["text"], "user": { "id": "me", "username": "me" }, "fromUser": { "id": "me", "username": "me" } });
+            let reply = if endpoint == "notes/create" { json!({ "createdNote": created }) } else { created };
+            json!({ "status": 200, "headers": {}, "bodyText": reply.to_string() })
+        });
+        let _ = take_host_log();
+    }
+
+    fn sent_bodies() -> Vec<Value> {
+        take_host_log()
+            .into_iter()
+            .filter(|(f, _)| f == "net.fetch")
+            .map(|(_, a)| serde_json::from_str(a["body"].as_str().unwrap_or("null")).unwrap_or(Value::Null))
+            .collect()
+    }
+
+    #[test]
+    fn media_only_post_omits_empty_text_and_cw() {
+        strict_notes_create();
+        let base = json!({ "host": "misskey.example", "token": "tok" });
+        let call = |draft: Value| {
+            let mut a = base.clone();
+            a["draft"] = draft;
+            dispatch("sns.createPost", &a)
+        };
+        call(json!({ "text": "", "mediaIds": ["f1", "f2"] })).unwrap();
+        let b = &sent_bodies()[0];
+        assert!(b.get("text").is_none(), "{b}");
+        assert_eq!(b["fileIds"], json!(["f1", "f2"]));
+        // 空白だけの本文 / 空の注釈も送らない。注釈が入っていれば送る。
+        call(json!({ "text": " \n", "cw": "", "mediaIds": ["f1"] })).unwrap();
+        let b = &sent_bodies()[0];
+        assert!(b.get("text").is_none() && b.get("cw").is_none(), "{b}");
+        call(json!({ "text": "", "cw": "注意", "mediaIds": ["f1"] })).unwrap();
+        assert_eq!(sent_bodies()[0]["cw"], "注意");
+        // 返信 / 引用 + メディアだけ、投票だけ。空の添付は送らない。
+        call(json!({ "text": "", "replyToId": "p1", "mediaIds": ["f1"] })).unwrap();
+        assert_eq!(sent_bodies()[0]["replyId"], "p1");
+        call(json!({ "text": "", "quoteOfId": "q1", "mediaIds": ["f1"] })).unwrap();
+        let b = &sent_bodies()[0];
+        assert_eq!(b["renoteId"], "q1");
+        assert!(b.get("text").is_none(), "{b}");
+        call(json!({ "text": "", "mediaIds": [], "poll": { "choices": ["a", "b"] } })).unwrap();
+        let b = &sent_bodies()[0];
+        assert!(b.get("text").is_none() && b.get("fileIds").is_none(), "{b}");
+        // 本文はそのまま(前後を削らない)。
+        call(json!({ "text": "a\n", "mediaIds": ["f1"] })).unwrap();
+        assert_eq!(sent_bodies()[0]["text"], "a\n");
+    }
+
+    #[test]
+    fn media_only_dm_omits_empty_text() {
+        strict_notes_create();
+        let direct = json!({ "host": "misskey.example", "token": "tok", "roomKind": "direct", "peerId": "alice", "draft": { "text": "", "cw": "", "mediaIds": ["f1"] } });
+        dispatch("sns.sendDm", &direct).unwrap();
+        let b = &sent_bodies()[0];
+        assert!(b.get("text").is_none() && b.get("cw").is_none(), "{b}");
+        assert_eq!(b["fileIds"], json!(["f1"]));
+        let chat = json!({ "host": "misskey.example", "token": "tok", "roomKind": "chat", "peerId": "alice", "draft": { "text": "", "mediaIds": ["f1"] } });
+        dispatch("sns.sendDm", &chat).unwrap();
+        let b = &sent_bodies()[0];
+        assert!(b.get("text").is_none(), "{b}");
+        assert_eq!(b["fileId"], "f1");
     }
 }

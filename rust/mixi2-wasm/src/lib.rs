@@ -378,6 +378,7 @@ fn dummy_call(fn_name: &str, args: &Value) -> Result<Value, Value> {
         "sns.createPost" => with_dummy(|d| {
             let draft = &args["draft"];
             let text = str_or(&draft["text"], "").to_string();
+            empty_post(args, &text)?;
             if text.chars().count() > MAX_POST_LENGTH {
                 return Err(err("D01", TEXT.f(i18n::locale_of(args), "error.postTooLong", &[("max", &MAX_POST_LENGTH.to_string())])));
             }
@@ -503,6 +504,7 @@ fn real_call(fn_name: &str, args: &Value) -> Result<Value, Value> {
         }
         "sns.createPost" => {
             let draft = &args["draft"];
+            empty_post(args, str_or(&draft["text"], ""))?;
             let mut body = json!({ "status": str_or(&draft["text"], "") });
             if let Some(r) = draft["replyToId"].as_str() {
                 body["in_reply_to_id"] = json!(r);
@@ -555,6 +557,14 @@ fn sns_actions(loc: &str) -> Value {
 }
 
 /// `call("sns.<fn>", args)` の本体。wasm の `call` export とテストが共用する。
+/// 本文なしの投稿 (D-494): このサンプルは添付 / 投票を送れない(`sns.uploadMedia` が無い)ので、本文が空なら空の投稿を作らずに断る。
+fn empty_post(args: &Value, text: &str) -> Result<(), Value> {
+    if text.trim().is_empty() {
+        return Err(err("D01", TEXT.t(i18n::locale_of(args), "error.emptyPost")));
+    }
+    Ok(())
+}
+
 pub fn call_impl(fn_name: &str, args: &Value) -> Result<Value, Value> {
     let loc = i18n::locale_of(args);
     match fn_name {
@@ -725,5 +735,16 @@ mod tests {
         assert_eq!(a["actions"].as_array().unwrap().len(), 4);
         // ネイティブテストにはホストが無いので実モードの fetch は B01。
         assert_eq!(call_impl("sns.me", &json!({ "host": "mixi.social", "token": "t" })).unwrap_err()["code"], json!("B01"));
+    }
+
+    /// 本文なしの投稿 (D-494): このサンプルは添付 / 投票を送れない(`sns.uploadMedia` が無い)ので、本文が空なら
+    /// 空の投稿を送らずに断る(実モードも、通信の前に)。
+    #[test]
+    fn empty_text_is_refused_in_both_modes() {
+        let e = dummy_err("sns.createPost", json!({ "draft": { "text": " \n", "poll": { "choices": ["a", "b"] } } }));
+        assert_eq!(e["code"], json!("D01"));
+        assert_eq!(e["message"], "本文を入れてください(mixi2 には添付 / 投票を送れません)");
+        let e = call_impl("sns.createPost", &json!({ "host": "mixi.social", "token": "t", "draft": { "text": "", "mediaIds": ["m1"] } })).unwrap_err();
+        assert_eq!(e["code"], json!("D01"));
     }
 }

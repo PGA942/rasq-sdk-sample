@@ -64,6 +64,7 @@ rasq_plugin_kit::i18n_catalog! {
             "error.tooLong" => "{max} 文字までです",
             "error.notBool" => "値は true / false です",
             "error.allowIncoming" => "all / following / none のどれかです",
+            "error.emptyPost" => "本文か添付が要ります(Bluesky に投票はありません)",
         },
     };
 }

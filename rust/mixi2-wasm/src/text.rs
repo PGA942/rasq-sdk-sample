@@ -14,6 +14,7 @@ rasq_plugin_kit::i18n_catalog! {
             "action.quote" => "引用",
             // エラー(利用者に出る)
             "error.postTooLong" => "本文は {max} 文字まで",
+            "error.emptyPost" => "本文を入れてください(mixi2 には添付 / 投票を送れません)",
             "error.loginOauthOnly" => "mixi2 は OAuth でログインします(RASQ サーバーのブローカー経由)。動作確認はホスト「dummy」で。",
             "error.accountReadOnly" => "mixi2 の API ではアカウントの設定を変えられません",
             // 設定ページ: account

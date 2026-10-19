@@ -170,7 +170,11 @@ SNS プラグインのイベントハンドラー関数は「一定程度は抽�
   - `sns.thread {id}` → `{thread: {post, ancestors: [Post](古い順), descendants: [Post]}}` (D-075)
   - `sns.performAction {actionId, postId, args}` → `{result: {done, count?, message?}}` — 短押しの中身はプラグインが決める(CONTRACT §5)。未対応アクションは C01 (D-075)
   - `sns.actions {}` → `{actions: [ActionDescriptor JSON(register_action と同形)]}` — アクションバー宣言 (D-075)
-  - `sns.createPost {draft: NewPost ワイヤ}` → `{post}` — draft = `{text, cw?, replyToId?, quoteOfId?, repostOfId?, visibility?, localOnly?, reactionAcceptance?, directToIds?, mediaIds?, poll?: {choices, multiple?, expiresAfterSec?}}` (D-076)
+  - `sns.createPost {draft: NewPost ワイヤ}` → `{post}` — draft = `{text, cw?, replyToId?, quoteOfId?, repostOfId?, visibility?, localOnly?, reactionAcceptance?, directToIds?, mediaIds?, poll?: {choices, multiple?, expiresAfterSec?}}` (D-076)。
+    **`text` は空文字のことがある**(メディア / 投票 / 引用だけの投稿。ホストは本文なしでも送る)。空の本文 / 注釈を
+    そのまま API に載せない(Misskey は `text: ""` / `cw: ""` / `fileIds: []` を 400 で断る。Mastodon は `media_ids` があれば
+    `status` を省ける)。その SNS で本文なしにできない組み合わせ(Mastodon の投票だけ等)は、送る前に `D01` と理由の文で断る(D-494)。
+    `sns.sendDm` の `draft` も同じ
   - `sns.deletePost {id}` → `{}` (D-076)
   - `sns.me {}` → `{user}` / `sns.user {id | handle+userHost?}` → `{profile: {user, bannerUrl?, description?, followersCount?, followingCount?, postsCount?, fields?, createdAt?, location?, isLocked?, isBot?, isSuspended?, pinnedPosts?, profileUrl?}}`(`host` は接続先と衝突するため、ユーザーの所属ホストは `userHost`)(D-076)
   - `sns.userPosts {id, filter: posts|withReplies|replies|media|quotes, limit, cursor?}` → `{page}` — 返信/引用の振り分け規約 (D-069) はプラグイン側で適用 (D-076)

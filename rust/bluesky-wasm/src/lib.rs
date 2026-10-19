@@ -1294,6 +1294,8 @@ fn sns_create_post(ctx: &Ctx) -> Result<Value, Value> {
         (Some(m), Some(q)) => record["embed"] = json!({ "$type": "app.bsky.embed.recordWithMedia", "record": q, "media": m }),
         (Some(m), None) => record["embed"] = m,
         (None, Some(q)) => record["embed"] = q,
+        // 本文も埋め込みも無い(投票だけ等。Bluesky に投票は無い)なら、空の投稿を作らずに断る (D-494)。
+        (None, None) if text.trim().is_empty() => return Err(err("D01", TEXT.t(i18n::locale_of(ctx.args), "error.emptyPost"))),
         (None, None) => {}
     }
     if let Some(cw) = draft["cw"].as_str() {
@@ -3059,5 +3061,48 @@ mod tests {
         assert_eq!(iso_to_unix("2024-02-29T12:00:00Z"), Some(1_709_208_000));
         assert_eq!(iso_to_unix("きのう"), None);
         assert_eq!(iso_to_unix("2026-10-19T00:00:00+0900"), None);
+    }
+
+    /// 本文なしの投稿 (D-494): Bluesky は `text` が空でも埋め込み(画像 / 引用)があれば投稿になる。
+    /// 空の本文から facets は作らない。何も無い(投票だけ等。Bluesky に投票は無い)ときは送らずに断る。
+    #[test]
+    fn media_only_post_sends_empty_text_with_embed() {
+        let _g = test_lock();
+        let quote_uri = "at://did:plc:carol/app.bsky.feed.post/3kquote";
+        let quoted = post_view(quote_uri, "cidquote", "引用先");
+        let records = std::rc::Rc::new(std::cell::RefCell::new(Vec::<Value>::new()));
+        let seen = records.clone();
+        mock_xrpc(Value::Null, move |method, nsid, req| match (method, nsid) {
+            ("GET", "app.bsky.feed.getPosts") if query_of(req).contains("3kquote") => Ok(json!({ "posts": [quoted.clone()] })),
+            ("GET", "app.bsky.feed.getPosts") => Ok(json!({ "posts": [] })),
+            ("POST", "com.atproto.repo.createRecord") => {
+                seen.borrow_mut().push(body_of(req)["record"].clone());
+                Ok(json!({ "uri": "at://did:plc:alice/app.bsky.feed.post/3kmedia", "cid": "c" }))
+            }
+            other => panic!("unexpected {other:?}"),
+        });
+        let media_id = json!({ "blob": { "$type": "blob", "ref": { "$link": "bafyimg" }, "mimeType": "image/jpeg", "size": 3 }, "alt": "", "mimeType": "image/jpeg" }).to_string();
+        dispatch("sns.createPost", &args(json!({ "draft": { "text": "", "mediaIds": [media_id.clone()] } }))).unwrap();
+        dispatch("sns.createPost", &args(json!({ "draft": { "text": "", "quoteOfId": quote_uri, "mediaIds": [media_id] } }))).unwrap();
+        dispatch("sns.createPost", &args(json!({ "draft": { "text": "", "quoteOfId": quote_uri } }))).unwrap();
+        let r = records.borrow();
+        assert_eq!(r.len(), 3);
+        for rec in r.iter() {
+            assert_eq!(rec["text"], "");
+            assert!(rec.get("facets").is_none(), "{rec}");
+            assert_eq!(rec["langs"], json!(["ja"]));
+        }
+        assert_eq!(r[0]["embed"]["$type"], "app.bsky.embed.images");
+        assert_eq!(r[1]["embed"]["$type"], "app.bsky.embed.recordWithMedia");
+        assert_eq!(r[2]["embed"]["$type"], "app.bsky.embed.record");
+    }
+
+    #[test]
+    fn empty_post_without_embed_is_refused_before_sending() {
+        let _g = test_lock();
+        mock_xrpc(Value::Null, |_, nsid, _| panic!("must not call {nsid}"));
+        let e = dispatch("sns.createPost", &args(json!({ "draft": { "text": " \n", "poll": { "choices": ["a", "b"] } } }))).unwrap_err();
+        assert_eq!(e["code"], "D01");
+        assert_eq!(e["message"], "本文か添付が要ります(Bluesky に投票はありません)");
     }
 }
