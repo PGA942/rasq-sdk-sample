@@ -554,6 +554,8 @@ pub fn call_impl(fn_name: &str, args: &Value) -> Result<Value, Value> {
         "sns.timelines" => return Ok(json!({ "timelines": [{ "id": "home", "label": "ホーム" }, { "id": "local", "label": "みんな" }] })),
         "sns.actions" => return Ok(sns_actions()),
         "sns.emojis" => return Ok(json!({ "emojis": [] })),
+        // ハッシュタグの検索(コンポーザーの `#` の補完、rasq-client D-475)は持たない: C01 でホストは候補を出さない。
+        "sns.search" if args["kind"].as_str() == Some("hashtags") => return Err(err("C01", "unsupported: sns.search kind=hashtags")),
         _ => {}
     }
     if is_dummy(args) {
@@ -587,6 +589,15 @@ mod tests {
         a["host"] = json!(DUMMY_HOST);
         a["token"] = json!("dummy:me");
         call_impl(fn_name, &a).unwrap_or_else(|e| panic!("{fn_name}: {e}"))
+    }
+
+    /// ハッシュタグの検索は持たない(C01 → ホストは候補を出さない、rasq-client D-475)。
+    #[test]
+    fn hashtag_search_is_unsupported() {
+        let mut a = json!({ "kind": "hashtags", "q": "打", "host": DUMMY_HOST, "token": "dummy:me" });
+        assert_eq!(call_impl("sns.search", &a).unwrap_err()["code"], json!("C01"));
+        a["token"] = json!("real-token");
+        assert_eq!(call_impl("sns.search", &a).unwrap_err()["code"], json!("C01"));
     }
 
     #[test]

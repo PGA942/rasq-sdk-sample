@@ -210,6 +210,11 @@ SNS プラグインのイベントハンドラー関数は「一定程度は抽�
   - `sns.resolveFollowRequest {id, accept}` → `{}`
   - `sns.reportUser {id, comment}` → `{}`
   - `sns.search {kind: posts|users, q, limit, cursor?}` → `{page}`(posts は Post、users は user)
+  - `sns.search {kind: hashtags, q, limit}` → `{tags: [{tag, count?}]}`(`sns.trendingTags` と同じ形。`tag` に `#` は付けない)
+    — **コンポーザーの `#` の補完** (rasq-client D-475。`@` の補完が `kind: users` を使うのと同じ口)。`q` は打っている途中の
+    タグ(`#` 無し)で、前方一致の候補を返す。Misskey は `hashtags/search`、Mastodon は `/api/v2/search?type=hashtags`。
+    **持たない SNS は C01**(Bluesky / mixi2)。ホストは C01 / 失敗 / `tags` の無い答え(この kind を知らない古いプラグインは
+    posts の `{page}` を返す)のどれでも候補を出さないだけ。
   - `sns.trendingTags {}` → `{tags: [{tag, count?}]}`
   - `sns.favorites {limit, cursor?}` → `{page}` — ブックマーク(お気に入り)。
   - `sns.dmRooms {}` → `{rooms: [{id, kind: direct|chat, peer: user, lastPost?: Post,

@@ -1611,6 +1611,10 @@ fn sns_report_user(ctx: &Ctx) -> Result<Value, Value> {
 
 fn sns_search(ctx: &Ctx) -> Result<Value, Value> {
     let args = ctx.args;
+    // ハッシュタグの検索(コンポーザーの `#` の補完、rasq-client D-475)は Bluesky の API に無い。C01 でホストは候補を出さない。
+    if args["kind"].as_str() == Some("hashtags") {
+        return Err(unsupported("sns.search kind=hashtags"));
+    }
     let params = [("q", str_or(&args["q"], "").to_string()), ("limit", limit_arg(args, 25, 100)), ("cursor", cursor_arg(args))];
     if args["kind"].as_str() == Some("users") {
         let res = xrpc_get(ctx, "app.bsky.actor.searchActors", &params)?;

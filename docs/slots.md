@@ -229,9 +229,13 @@
   プラグインは条件(例: `#` で始まるトークン)を見て `fow.open`(候補一覧)し、そうでなければ `fow.close`。戻り `{}`。
 - `composer.text.replace {token, start, end, text}` — 本文の `[start, end)` を `text` に置き換える(UTF-16 code unit オフセット、Dart の `String` と同じ)。
 - ホストは FOW をコンポーザーの子(`parentId` 無しでも同じカラム)として開くので入力は隠れない。
-- **ON / OFF(v0.14, §2.11)**: ホストは入力欄の上に、`composer.text` のプラグインごとの ON / OFF チップを出す(キーは
-  `slot:<pluginId>:composer.text`)。見た目は `actions` に `slot: "composer.text"` の項目があればそれ(`label` / `icon`)、無ければ
-  `name`。初期状態は `auto`(省略 = `true`)。オフのあいだ `text.changed` は呼ばれない。
+- **ON / OFF(v0.14, §2.11)**: ホストはコンポーザーのアクションバー(絵文字 / 画像 / 投票の行。rasq-client D-474 までは入力欄の上の
+  チップ)に、`composer.text` のプラグインごとの ON / OFF ボタンを出す(キーは
+  `slot:<pluginId>:composer.text`)。見た目は `actions` に `slot: "composer.text"` の項目があればそれ(`icon` / `label` はツールチップ)、無ければ
+  既定のアイコンと `name`。初期状態は `auto`(省略 = `true`)。オフのあいだ `text.changed` は呼ばれない。長押しはホストのパネル
+  (このコンポーザーでの ON / OFF と「次からも自動でオン」)で、プラグインには届かない。
+- `#` の補完はホストもする(rasq-client D-475): 候補は投稿するアカウントの SNS プラグインの `sns.search {kind: hashtags}`
+  (PROTOCOL §4.3)。`composer.text` のプラグインはそれと並んで、自分の候補(最近使ったタグなど)を出してよい。
 
 ### 2.4 `viewer.overlay` — 全画面ビューワーの重ね
 
