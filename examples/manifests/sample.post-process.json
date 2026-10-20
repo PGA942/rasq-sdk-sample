@@ -5,6 +5,24 @@
   "version": "0.1.0",
   "kind": "postProcessor",
   "description": "本文の「今日」「昨日」「明日」を投稿日基準の日付に置き換える",
+  "locales": {
+    "en": {
+      "name": "Relative date replacement (sample)",
+      "description": "Replaces the Japanese words 「今日」「昨日」「明日」 (today, yesterday, tomorrow) in post text with dates based on the post date"
+    },
+    "zh-Hans": {
+      "name": "相对日期替换（示例）",
+      "description": "将正文中的日语词「今日」「昨日」「明日」（今天、昨天、明天）替换为以发布日期为准的日期"
+    },
+    "zh-Hant": {
+      "name": "相對日期替換（範例）",
+      "description": "將內文中的日文詞「今日」「昨日」「明日」（今天、昨天、明天）替換為以發文日期為準的日期"
+    },
+    "ko": {
+      "name": "상대 날짜 바꾸기(샘플)",
+      "description": "본문의 일본어 「今日」「昨日」「明日」(오늘, 어제, 내일)를 게시 날짜 기준의 날짜로 바꿉니다"
+    }
+  },
   "slots": [
     "post.transform"
   ],

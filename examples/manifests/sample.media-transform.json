@@ -5,6 +5,44 @@
   "version": "0.1.0",
   "kind": "action",
   "description": "回転 / クロップのハンドルを画像の上に重ねて編集",
+  "locales": {
+    "en": {
+      "name": "Transform handles (sample)",
+      "description": "Edit with rotate / crop handles overlaid on the image",
+      "actions": {
+        "transform": {
+          "label": "Transform"
+        }
+      }
+    },
+    "zh-Hans": {
+      "name": "变换手柄（示例）",
+      "description": "在图片上叠加旋转 / 裁剪手柄进行编辑",
+      "actions": {
+        "transform": {
+          "label": "变换"
+        }
+      }
+    },
+    "zh-Hant": {
+      "name": "變形控點（範例）",
+      "description": "在圖片上疊加旋轉 / 裁切控點進行編輯",
+      "actions": {
+        "transform": {
+          "label": "變形"
+        }
+      }
+    },
+    "ko": {
+      "name": "변형 핸들(샘플)",
+      "description": "이미지 위에 회전 / 자르기 핸들을 겹쳐 편집합니다",
+      "actions": {
+        "transform": {
+          "label": "변형"
+        }
+      }
+    }
+  },
   "slots": [
     "composer.media"
   ],

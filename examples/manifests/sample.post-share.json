@@ -4,7 +4,25 @@
   "name": "共有テンプレート(サンプル)",
   "version": "0.1.0",
   "kind": "action",
-  "description": "投稿をテンプレート(リンクのみ / 引用 / 作者に言及)で整えてコンポーザー・コピー・AsTell へ",
+  "description": "投稿をテンプレート(リンクのみ / 引用 / 作者に言及)で整えてコンポーザー・コピー・ASTell へ",
+  "locales": {
+    "en": {
+      "name": "Share templates (sample)",
+      "description": "Format a post with a template (link only / quote / mention the author) and send it to the composer, the clipboard or ASTell"
+    },
+    "zh-Hans": {
+      "name": "分享模板（示例）",
+      "description": "用模板（仅链接 / 引用 / 提及作者）整理帖子，再发送到编辑器、复制或分享到 ASTell"
+    },
+    "zh-Hant": {
+      "name": "分享範本（範例）",
+      "description": "用範本（僅連結 / 引用 / 提及作者）整理貼文，再傳送到編輯器、複製或分享到 ASTell"
+    },
+    "ko": {
+      "name": "공유 템플릿(샘플)",
+      "description": "게시물을 템플릿(링크만 / 인용 / 작성자 언급)으로 다듬어 작성 화면·복사·ASTell로 보냅니다"
+    }
+  },
   "slots": [
     "post.share"
   ],

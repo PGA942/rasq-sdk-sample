@@ -5,6 +5,68 @@
   "version": "0.1.0",
   "kind": "action",
   "description": "後で読む / 本文をコピー / 引用の下書き — タグで既存ボタンのバンドルに入る",
+  "locales": {
+    "en": {
+      "name": "Post buttons (sample)",
+      "description": "Read later / Copy text / Draft a quote — tags put them in the bundles of existing buttons",
+      "actions": {
+        "later": {
+          "label": "Read later"
+        },
+        "copy": {
+          "label": "Copy text"
+        },
+        "quoteDraft": {
+          "label": "Draft a quote"
+        }
+      }
+    },
+    "zh-Hans": {
+      "name": "帖子按钮（示例）",
+      "description": "稍后阅读 / 复制正文 / 引用草稿 — 通过标签归入已有按钮的分组",
+      "actions": {
+        "later": {
+          "label": "稍后阅读"
+        },
+        "copy": {
+          "label": "复制正文"
+        },
+        "quoteDraft": {
+          "label": "引用草稿"
+        }
+      }
+    },
+    "zh-Hant": {
+      "name": "貼文按鈕（範例）",
+      "description": "稍後閱讀 / 複製內文 / 引用草稿 — 透過標籤歸入既有按鈕的群組",
+      "actions": {
+        "later": {
+          "label": "稍後閱讀"
+        },
+        "copy": {
+          "label": "複製內文"
+        },
+        "quoteDraft": {
+          "label": "引用草稿"
+        }
+      }
+    },
+    "ko": {
+      "name": "게시물 버튼(샘플)",
+      "description": "나중에 읽기 / 본문 복사 / 인용 초안 — 태그로 기존 버튼 묶음에 들어갑니다",
+      "actions": {
+        "later": {
+          "label": "나중에 읽기"
+        },
+        "copy": {
+          "label": "본문 복사"
+        },
+        "quoteDraft": {
+          "label": "인용 초안"
+        }
+      }
+    }
+  },
   "slots": [
     "post.action"
   ],

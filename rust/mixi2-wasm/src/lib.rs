@@ -696,27 +696,39 @@ mod tests {
         assert!(!settings::keep_in_timeline(&json!({ "repostedBy": {} }), &json!({ "withReposts": false })));
     }
 
-    /// 利用者に見せる文は表から引く(`args.locale`、PROTOCOL.md §4.6)。いまは ja だけなので、どの言語でも ja と同じ文。
+    /// 利用者に見せる文は表から引く(`args.locale`、PROTOCOL.md §4.6)。表の無い言語・読めないタグは ja。
     #[test]
     fn ui_text_comes_from_the_table_and_falls_back_to_ja() {
-        assert!(TEXT.check().is_empty(), "{:?}", TEXT.check());
         let _ = i18n::take_misses();
         for f in ["sns.settingsPages", "sns.actions", "sns.timelines"] {
             let base = call_impl(f, &json!({})).unwrap();
-            for loc in ["ja", "ja-JP", "en", "en-US", "zh-Hant", "", "??"] {
+            for loc in ["ja", "ja-JP", "fr", "", "??"] {
                 assert_eq!(call_impl(f, &json!({ "locale": loc })).unwrap(), base, "{f} locale={loc}");
             }
+            for loc in ["en", "en-US", "zh-Hans", "zh-Hant-TW", "ko"] {
+                assert_ne!(call_impl(f, &json!({ "locale": loc })).unwrap(), base, "{f} locale={loc}");
+            }
         }
-        let pages = call_impl("sns.settingsPages", &json!({ "locale": "en" })).unwrap()["pages"].clone();
+        let pages = call_impl("sns.settingsPages", &json!({})).unwrap()["pages"].clone();
         assert_eq!(pages[0]["title"], "アカウント");
         assert_eq!(pages[2]["root"]["c"][1]["p"]["title"], "ぼかして表示");
         assert_eq!(pages[3]["root"]["c"][1]["p"]["value"], "RASQ サーバー経由の OAuth");
+        let pages = call_impl("sns.settingsPages", &json!({ "locale": "en" })).unwrap()["pages"].clone();
+        assert_eq!(pages[0]["title"], "Account");
+        assert_eq!(pages[2]["root"]["c"][1]["p"]["title"], "Blur");
+        assert_eq!(pages[3]["root"]["c"][1]["p"]["value"], "OAuth via the RASQ server");
         assert_eq!(call_impl("sns.timelines", &json!({})).unwrap()["timelines"][1]["label"], "みんな");
-        let e = call_impl("sns.login", &json!({ "host": "mixi.social", "locale": "en" })).unwrap_err();
+        assert_eq!(call_impl("sns.timelines", &json!({ "locale": "zh-Hans" })).unwrap()["timelines"][1]["label"], "大家");
+        assert_eq!(call_impl("sns.actions", &json!({ "locale": "zh-Hant" })).unwrap()["actions"][1]["label"], "轉發");
+        let e = call_impl("sns.login", &json!({ "host": "mixi.social" })).unwrap_err();
         assert_eq!(e["message"], "mixi2 は OAuth でログインします(RASQ サーバーのブローカー経由)。動作確認はホスト「dummy」で。");
+        let e = call_impl("sns.login", &json!({ "host": "mixi.social", "locale": "ko" })).unwrap_err();
+        assert_eq!(e["message"], "mixi2는 OAuth로 로그인합니다(RASQ 서버의 브로커 경유). 동작 확인은 호스트 'dummy'로 하세요.");
         let long = "あ".repeat(MAX_POST_LENGTH + 1);
         let e = call_impl("sns.createPost", &json!({ "host": DUMMY_HOST, "draft": { "text": long } })).unwrap_err();
         assert_eq!(e["message"], "本文は 149 文字まで");
+        let e = call_impl("sns.createPost", &json!({ "host": DUMMY_HOST, "locale": "en", "draft": { "text": long } })).unwrap_err();
+        assert_eq!(e["message"], "Text can be up to 149 characters");
         assert!(i18n::take_misses().is_empty(), "表に無いキーを引いた");
     }
 

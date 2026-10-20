@@ -89,7 +89,7 @@ static LAST_NOTIFY: Mutex<Value> = Mutex::new(Value::Null);
 
 // ---------------------------------------------------------------------------
 // 0. 利用者に見せる文の表(PROTOCOL.md §4.6)。文はリテラルで書かず、キーで引く。
-//    言語を足すときは `"en": { … }` を足すだけ(無いキーは ja に落ちる)。
+//    基準は ja。en / zh-Hans / zh-Hant / ko は同じキーを全部持つ(テストで確かめる)。表に無い言語は ja に落ちる。
 // ---------------------------------------------------------------------------
 
 rasq_plugin_kit::i18n_catalog! {
@@ -104,6 +104,50 @@ rasq_plugin_kit::i18n_catalog! {
             "panel.count" => "{n} 回",
             "action.wave" => "手を振る",
             "action.received" => "{action} を受け取りました",
+        },
+        "en": {
+            "greeting" => "Hello, RASQ!",
+            "greeting.count" => "Hello! (#{n})",
+            "button.greet" => "Say hello",
+            "button.panel" => "Open panel",
+            "panel.title" => "hello panel",
+            "panel.close" => "Close",
+            "panel.count" => "{n} times",
+            "action.wave" => "Wave",
+            "action.received" => "Received {action}",
+        },
+        "zh-Hans": {
+            "greeting" => "你好，RASQ！",
+            "greeting.count" => "你好！（第 {n} 次）",
+            "button.greet" => "打招呼",
+            "button.panel" => "打开面板",
+            "panel.title" => "hello 面板",
+            "panel.close" => "关闭",
+            "panel.count" => "{n} 次",
+            "action.wave" => "挥手",
+            "action.received" => "已收到 {action}",
+        },
+        "zh-Hant": {
+            "greeting" => "你好，RASQ！",
+            "greeting.count" => "你好！（第 {n} 次）",
+            "button.greet" => "打招呼",
+            "button.panel" => "開啟面板",
+            "panel.title" => "hello 面板",
+            "panel.close" => "關閉",
+            "panel.count" => "{n} 次",
+            "action.wave" => "揮手",
+            "action.received" => "已收到 {action}",
+        },
+        "ko": {
+            "greeting" => "안녕하세요, RASQ!",
+            "greeting.count" => "안녕하세요! ({n}번째)",
+            "button.greet" => "인사하기",
+            "button.panel" => "패널 열기",
+            "panel.title" => "hello 패널",
+            "panel.close" => "닫기",
+            "panel.count" => "{n}번",
+            "action.wave" => "손 흔들기",
+            "action.received" => "{action}을(를) 받았습니다",
         },
     };
 }
@@ -249,17 +293,53 @@ fn wire_post(id: &str, body: &str) -> Value {
 mod tests {
     use super::*;
 
-    /// 文は表から(PROTOCOL.md §4.6)。いまは ja だけなので、どの言語でも ja と同じ文。
+    /// 文は表から(PROTOCOL.md §4.6)。表の無い言語は ja。
     #[test]
     fn ui_text_comes_from_the_table_and_falls_back_to_ja() {
-        assert!(TEXT.check().is_empty(), "{:?}", TEXT.check());
         let _ = i18n::take_misses();
-        for loc in [json!("en"), json!("zh-Hant"), Value::Null] {
+        for (loc, greeting, panel) in [
+            (json!("ja"), "こんにちは、RASQ!", "パネルを開く"),
+            (Value::Null, "こんにちは、RASQ!", "パネルを開く"),
+            (json!("fr"), "こんにちは、RASQ!", "パネルを開く"),
+            (json!("en-US"), "Hello, RASQ!", "Open panel"),
+            (json!("zh-Hans"), "你好，RASQ！", "打开面板"),
+            (json!("zh-Hant-TW"), "你好，RASQ！", "開啟面板"),
+            (json!("ko"), "안녕하세요, RASQ!", "패널 열기"),
+        ] {
             i18n::set_current(&json!({ "locale": loc }));
-            assert_eq!(root()["c"][0]["p"]["text"], "こんにちは、RASQ!");
-            assert_eq!(root()["c"][2]["p"]["label"], "パネルを開く");
+            assert_eq!(root()["c"][0]["p"]["text"], greeting, "{loc}");
+            assert_eq!(root()["c"][2]["p"]["label"], panel, "{loc}");
         }
-        assert_eq!(TEXT.f("en", "action.received", &[("action", &json!("wave").to_string())]), "\"wave\" を受け取りました");
+        assert_eq!(TEXT.f("ja", "action.received", &[("action", &json!("wave").to_string())]), "\"wave\" を受け取りました");
+        assert_eq!(TEXT.f("en", "action.received", &[("action", &json!("wave").to_string())]), "Received \"wave\"");
         assert!(i18n::take_misses().is_empty());
+    }
+
+    /// 表の言語ごとのキー(`Catalog::check` は「基準に無いキー」と差し込みの食い違いしか見ないので、訳の抜けはここで見る)。
+    fn table_keys() -> Vec<(String, std::collections::BTreeSet<String>)> {
+        let src = include_str!("lib.rs");
+        let body = src.split("i18n_catalog! {").nth(1).and_then(|s| s.split("\n}").next()).expect("i18n_catalog!");
+        let mut out: Vec<(String, std::collections::BTreeSet<String>)> = Vec::new();
+        for line in body.lines().map(str::trim) {
+            if let Some(tag) = line.strip_prefix('"').and_then(|l| l.strip_suffix("\": {")) {
+                out.push((tag.to_string(), Default::default()));
+            } else if let Some((key, _)) = line.strip_prefix('"').and_then(|l| l.split_once("\" =>")) {
+                out.last_mut().expect("表の外のキー").1.insert(key.to_string());
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn every_locale_has_every_key() {
+        assert!(TEXT.check().is_empty(), "{:?}", TEXT.check());
+        let tables = table_keys();
+        let tags: Vec<&str> = tables.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(tags, TEXT.locales());
+        assert_eq!(tags, ["ja", "en", "zh-Hans", "zh-Hant", "ko"]);
+        for (tag, keys) in &tables[1..] {
+            let missing: Vec<_> = tables[0].1.difference(keys).collect();
+            assert!(missing.is_empty(), "{tag} に訳が無いキー: {missing:?}");
+        }
     }
 }

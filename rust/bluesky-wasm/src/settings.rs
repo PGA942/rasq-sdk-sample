@@ -317,28 +317,39 @@ mod tests {
         let _ = take_host_log();
     }
 
-    /// 利用者に見せる文は表から引く(`args.locale`、PROTOCOL.md §4.6)。いまは ja だけなので、どの言語でも ja と同じ文。
+    /// 利用者に見せる文は表から引く(`args.locale`、PROTOCOL.md §4.6)。表の無い言語・読めないタグは ja。
     #[test]
     fn ui_text_comes_from_the_table_and_falls_back_to_ja() {
-        assert!(TEXT.check().is_empty(), "{:?}", TEXT.check());
         let _ = i18n::take_misses();
         for f in ["sns.settingsPages", "sns.actions", "sns.timelines"] {
             let base = dispatch(f, &json!({})).unwrap();
-            for loc in ["ja", "ja-JP", "en", "en-US", "zh-Hant", "", "??"] {
+            for loc in ["ja", "ja-JP", "fr", "", "??"] {
                 assert_eq!(dispatch(f, &json!({ "locale": loc })).unwrap(), base, "{f} locale={loc}");
             }
+            for loc in ["en", "en-US", "zh-Hans", "zh-Hant-TW", "ko"] {
+                assert_ne!(dispatch(f, &json!({ "locale": loc })).unwrap(), base, "{f} locale={loc}");
+            }
         }
-        let pages = dispatch("sns.settingsPages", &json!({ "locale": "en" })).unwrap()["pages"].clone();
+        let pages = dispatch("sns.settingsPages", &json!({})).unwrap()["pages"].clone();
         assert_eq!(pages[0]["title"], "アカウント");
         assert_eq!(pages[0]["root"]["c"][7]["p"]["title"], "だれでも");
         assert_eq!(pages[3]["root"]["c"][1]["p"]["value"], "アプリパスワード");
+        let pages = dispatch("sns.settingsPages", &json!({ "locale": "en" })).unwrap()["pages"].clone();
+        assert_eq!(pages[0]["title"], "Account");
+        assert_eq!(pages[0]["root"]["c"][7]["p"]["title"], "Everyone");
+        assert_eq!(pages[3]["root"]["c"][1]["p"]["value"], "App password");
+        assert_eq!(dispatch("sns.settingsPages", &json!({ "locale": "zh-Hant" })).unwrap()["pages"][3]["root"]["c"][1]["p"]["value"], "應用程式密碼");
         assert_eq!(dispatch("sns.timelines", &json!({})).unwrap()["timelines"][0]["label"], "フォロー中");
+        assert_eq!(dispatch("sns.timelines", &json!({ "locale": "ko" })).unwrap()["timelines"][0]["label"], "팔로우 중");
+        assert_eq!(dispatch("sns.actions", &json!({ "locale": "zh-Hans" })).unwrap()["actions"][1]["label"], "转发");
         // 書き込みのエラー(サーバーに行く前に断る)
         let mut profile = json!({});
-        let e = apply_profile_key(&mut profile, "displayName", &json!("あ".repeat(MAX_DISPLAY_NAME + 1)), "en").unwrap_err();
+        let e = apply_profile_key(&mut profile, "displayName", &json!("あ".repeat(MAX_DISPLAY_NAME + 1)), "ja").unwrap_err();
         assert_eq!(e["message"], "64 文字までです");
+        let e = apply_profile_key(&mut profile, "displayName", &json!("あ".repeat(MAX_DISPLAY_NAME + 1)), "en").unwrap_err();
+        assert_eq!(e["message"], "Up to 64 characters");
         let e = dispatch("sns.settingsWrite", &args(json!({ "area": "account", "key": "allowIncoming", "value": "everyone", "locale": "en" }))).unwrap_err();
-        assert_eq!(e["message"], "all / following / none のどれかです");
+        assert_eq!(e["message"], "Must be all, following or none");
         assert!(i18n::take_misses().is_empty(), "表に無いキーを引いた");
     }
 

@@ -1822,10 +1822,9 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// 利用者に見せる文は表から引く(`args.locale`、PROTOCOL.md §4.6)。いまは ja だけなので、どの言語でも ja と同じ文。
+    /// 利用者に見せる文は表から引く(`args.locale`、PROTOCOL.md §4.6)。表の無い言語・読めないタグは ja。
     #[test]
     fn ui_text_comes_from_the_table_and_falls_back_to_ja() {
-        assert!(TEXT.check().is_empty(), "{:?}", TEXT.check());
         let _ = i18n::take_misses();
         let posts = json!([{ "id": "a", "counts": { "reaction": 5 } }, { "id": "b", "counts": { "reaction": 2 } }]);
         let calls = [
@@ -1837,24 +1836,42 @@ mod tests {
         ];
         for (f, args) in &calls {
             let base = dispatch(f, args).unwrap();
-            for loc in ["ja", "ja-JP", "en", "en-US", "zh-Hant", "", "??"] {
+            for loc in ["ja", "ja-JP", "fr", "", "??"] {
                 let mut a = args.clone();
                 a["locale"] = json!(loc);
                 assert_eq!(dispatch(f, &a).unwrap(), base, "{f} locale={loc}");
             }
+            for loc in ["en", "en-US", "zh-Hans", "zh-Hant-TW", "ko"] {
+                let mut a = args.clone();
+                a["locale"] = json!(loc);
+                assert_ne!(dispatch(f, &a).unwrap(), base, "{f} locale={loc}");
+            }
         }
-        let pages = dispatch("sns.settingsPages", &json!({ "locale": "en" })).unwrap()["pages"].clone();
+        let pages = dispatch("sns.settingsPages", &json!({})).unwrap()["pages"].clone();
         assert_eq!(pages[0]["title"], "アカウント");
         assert_eq!(pages[0]["root"]["c"][1]["p"]["submitLabel"], "保存");
         assert_eq!(pages[0]["root"]["c"][14]["p"]["title"], "公開");
+        let pages = dispatch("sns.settingsPages", &json!({ "locale": "en" })).unwrap()["pages"].clone();
+        assert_eq!(pages[0]["title"], "Account");
+        assert_eq!(pages[0]["root"]["c"][1]["p"]["submitLabel"], "Save");
+        assert_eq!(pages[0]["root"]["c"][14]["p"]["title"], "Public");
+        assert_eq!(dispatch("sns.settingsPages", &json!({ "locale": "zh-Hans" })).unwrap()["pages"][0]["title"], "账号");
+        assert_eq!(dispatch("sns.settingsPages", &json!({ "locale": "zh-Hant" })).unwrap()["pages"][0]["title"], "帳號");
         assert_eq!(dispatch("sns.timelines", &json!({})).unwrap()["timelines"][4]["label"], "Today");
+        assert_eq!(dispatch("sns.actions", &json!({ "locale": "ko" })).unwrap()["actions"][1]["label"], "리노트");
         let cz = dispatch("tl.customize", &json!({ "id": "reaction-rank", "posts": posts })).unwrap();
         assert_eq!(cz["tiles"]["a"]["c"][0]["p"]["text"], "👑 リアクション1位 (5件)");
         assert_eq!(cz["badges"]["b"]["text"], "リアクション2位 (2件)");
+        let cz = dispatch("tl.customize", &json!({ "id": "reaction-rank", "posts": posts, "locale": "zh-Hant" })).unwrap();
+        assert_eq!(cz["tiles"]["a"]["c"][0]["p"]["text"], "👑 反應數第 1 名（5 個）");
         // args の無い snapshot() の本体ツリーは、いちばん新しい call の言語(まだ無ければ ja)。
         i18n::set_current(&json!({ "locale": "en" }));
+        assert_eq!(initial_root()["c"][1]["p"]["label"], "FOW demo");
+        i18n::set_current(&json!({}));
         assert_eq!(initial_root()["c"][1]["p"]["label"], "FOWデモ");
         let e = dispatch("sns.settingsWrite", &json!({ "area": "account", "key": "birthday", "value": "31/01/2000", "locale": "en" })).unwrap_err();
+        assert_eq!(e["message"], "Enter your birthday as 2000-01-31");
+        let e = dispatch("sns.settingsWrite", &json!({ "area": "account", "key": "birthday", "value": "31/01/2000" })).unwrap_err();
         assert_eq!(e["message"], "誕生日は 2000-01-31 の形で入れてください");
         assert!(i18n::take_misses().is_empty(), "表に無いキーを引いた");
     }

@@ -5,6 +5,44 @@
   "version": "0.3.0",
   "kind": "action",
   "description": "ガンマ / 色相 / グレースケール / ネガ反転 / 回転 / クロップ",
+  "locales": {
+    "en": {
+      "name": "Media editing (sample)",
+      "description": "Gamma / hue / grayscale / invert / rotate / crop",
+      "actions": {
+        "edit": {
+          "label": "Edit media"
+        }
+      }
+    },
+    "zh-Hans": {
+      "name": "媒体编辑（示例）",
+      "description": "伽马 / 色相 / 灰度 / 反相 / 旋转 / 裁剪",
+      "actions": {
+        "edit": {
+          "label": "编辑媒体"
+        }
+      }
+    },
+    "zh-Hant": {
+      "name": "媒體編輯（範例）",
+      "description": "伽瑪 / 色相 / 灰階 / 反相 / 旋轉 / 裁切",
+      "actions": {
+        "edit": {
+          "label": "編輯媒體"
+        }
+      }
+    },
+    "ko": {
+      "name": "미디어 편집(샘플)",
+      "description": "감마 / 색조 / 흑백 / 색상 반전 / 회전 / 자르기",
+      "actions": {
+        "edit": {
+          "label": "미디어 편집"
+        }
+      }
+    }
+  },
   "slots": [
     "composer.media"
   ],
