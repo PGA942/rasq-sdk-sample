@@ -1490,25 +1490,36 @@ pub extern "C" fn call(
 mod tests {
     use super::*;
 
-    /// 利用者に見せる文は表から引く(`args.locale`、PROTOCOL.md §4.6)。いまは ja だけなので、どの言語でも ja と同じ文。
+    /// 利用者に見せる文は表から引く(`args.locale`、PROTOCOL.md §4.6)。表の無い言語・読めないタグは ja。
     #[test]
     fn ui_text_comes_from_the_table_and_falls_back_to_ja() {
-        assert!(TEXT.check().is_empty(), "{:?}", TEXT.check());
         let _ = i18n::take_misses();
         type Answer = fn(&Value) -> Result<Value, Value>;
         let fns: [(&str, Answer); 3] = [("sns.settingsPages", settings::sns_settings_pages), ("sns.actions", sns_actions), ("sns.timelines", sns_timelines)];
         for (name, f) in fns {
             let base = f(&json!({})).unwrap();
-            for loc in ["ja", "ja-JP", "en", "en-US", "zh-Hant", "", "??"] {
+            for loc in ["ja", "ja-JP", "fr", "", "??"] {
                 assert_eq!(f(&json!({ "locale": loc })).unwrap(), base, "{name} locale={loc}");
             }
+            for loc in ["en", "en-US", "zh-Hans", "zh-Hant-TW", "ko"] {
+                assert_ne!(f(&json!({ "locale": loc })).unwrap(), base, "{name} locale={loc}");
+            }
         }
+        let ja = settings::sns_settings_pages(&json!({})).unwrap()["pages"].clone();
+        assert_eq!(ja[0]["title"], "アカウント");
+        assert_eq!(ja[0]["root"]["c"][10]["p"]["subtitle"], "だれでも見られ、公開タイムラインにも出ます");
         let pages = settings::sns_settings_pages(&json!({ "locale": "en" })).unwrap()["pages"].clone();
-        assert_eq!(pages[0]["title"], "アカウント");
-        assert_eq!(pages[0]["root"]["c"][10]["p"]["subtitle"], "だれでも見られ、公開タイムラインにも出ます");
-        assert_eq!(pages[3]["root"]["c"][1]["p"]["title"], "読み取り・書き込み・フォロー");
+        assert_eq!(pages[0]["title"], "Account");
+        assert_eq!(pages[0]["root"]["c"][10]["p"]["subtitle"], "Anyone can see it, and it appears on public timelines");
+        assert_eq!(pages[3]["root"]["c"][1]["p"]["title"], "Read, write, follow");
+        assert_eq!(settings::sns_settings_pages(&json!({ "locale": "zh-Hant" })).unwrap()["pages"][0]["title"], "帳號");
+        assert_eq!(settings::sns_settings_pages(&json!({ "locale": "zh-Hans" })).unwrap()["pages"][0]["title"], "账号");
         assert_eq!(sns_timelines(&json!({})).unwrap()["timelines"][2]["label"], "連合");
+        assert_eq!(sns_timelines(&json!({ "locale": "en-US" })).unwrap()["timelines"][2]["label"], "Federated");
         assert_eq!(sns_actions(&json!({})).unwrap()["actions"][1]["label"], "ブースト");
+        assert_eq!(sns_actions(&json!({ "locale": "zh-Hans" })).unwrap()["actions"][1]["label"], "转嘟");
+        assert_eq!(sns_actions(&json!({ "locale": "zh-Hant-TW" })).unwrap()["actions"][1]["label"], "轉嘟");
+        assert_eq!(sns_actions(&json!({ "locale": "ko" })).unwrap()["actions"][1]["label"], "부스트");
         assert!(i18n::take_misses().is_empty(), "表に無いキーを引いた");
     }
 
@@ -1926,11 +1937,11 @@ mod tests {
         assert_eq!(bodies[0]["quoted_status_id"], "q1");
         assert!(bodies[1].get("quoted_status_id").is_none());
         assert_eq!(bodies[1]["status"], "これ見て\nhttps://remote.example/@author/1");
-        // 断られたので URL で送ったことを知らせる (D-500)。文は args.locale で引く(いまは ja だけ。en も ja に落ちる)。
+        // 断られたので URL で送ったことを知らせる (D-500)。文は args.locale で引く。
         assert_eq!(out["notice"], json!({ "code": "quote.fallbackUrl", "message": "引用が許可されていなかったため、引用元の URL を付けて投稿しました" }));
         quote_server(Some(7), &["q1"]);
         let en = sns_create_post(&json!({ "host": "mastodon.example", "locale": "en-US", "draft": { "text": "x", "quoteOfId": "q1" } })).unwrap();
-        assert_eq!(en["notice"], out["notice"]);
+        assert_eq!(en["notice"], json!({ "code": "quote.fallbackUrl", "message": "Quoting wasn't allowed, so the post was sent with the quoted post's URL" }));
         assert!(i18n::take_misses().is_empty());
 
         // ブーストの外側の id は断られる → 中身の id で引用し直す。

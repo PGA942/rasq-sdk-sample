@@ -5,6 +5,24 @@
   "version": "0.1.0",
   "kind": "action",
   "description": "# を打つと最近使ったタグと辞書から候補を出し、タップで本文に挿入",
+  "locales": {
+    "en": {
+      "name": "Hashtag suggestions (sample)",
+      "description": "Type # to get suggestions from your recent tags and a dictionary; tap one to insert it into your text"
+    },
+    "zh-Hans": {
+      "name": "话题标签建议（示例）",
+      "description": "输入 # 后，从最近使用的标签和词典中给出建议，点按即可插入正文"
+    },
+    "zh-Hant": {
+      "name": "主題標籤建議（範例）",
+      "description": "輸入 # 後，從最近使用的標籤和字典中提供建議，點按即可插入內文"
+    },
+    "ko": {
+      "name": "해시태그 추천(샘플)",
+      "description": "#을 입력하면 최근 사용한 태그와 사전에서 추천을 보여 주고, 탭하면 본문에 삽입합니다"
+    }
+  },
   "slots": [
     "composer.text"
   ],

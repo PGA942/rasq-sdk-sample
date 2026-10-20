@@ -5,6 +5,44 @@
   "version": "0.1.0",
   "kind": "mediaViewer",
   "description": "全画面ビューワーの画像から QR コードを見つけて枠を重ね、タップでコピー / 開く / ミュート",
+  "locales": {
+    "en": {
+      "name": "QR code detection (sample)",
+      "description": "Finds QR codes in images in the full-screen viewer and outlines them; tap to copy, open, or mute",
+      "actions": {
+        "toggle": {
+          "label": "QR code detection"
+        }
+      }
+    },
+    "zh-Hans": {
+      "name": "二维码检测（示例）",
+      "description": "在全屏查看器的图片中查找二维码并加上边框，点按即可复制、打开或屏蔽",
+      "actions": {
+        "toggle": {
+          "label": "二维码检测"
+        }
+      }
+    },
+    "zh-Hant": {
+      "name": "QR 碼偵測（範例）",
+      "description": "在全螢幕檢視器的圖片中尋找 QR 碼並加上邊框，點按即可複製、開啟或靜音",
+      "actions": {
+        "toggle": {
+          "label": "QR 碼偵測"
+        }
+      }
+    },
+    "ko": {
+      "name": "QR 코드 감지(샘플)",
+      "description": "전체 화면 뷰어의 이미지에서 QR 코드를 찾아 테두리를 표시하고, 탭하면 복사 / 열기 / 뮤트할 수 있습니다",
+      "actions": {
+        "toggle": {
+          "label": "QR 코드 감지"
+        }
+      }
+    }
+  },
   "slots": [
     "viewer.overlay"
   ],

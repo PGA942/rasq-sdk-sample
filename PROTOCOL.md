@@ -338,7 +338,8 @@ SNS プラグインが RRL の icon/body に**タグ付け必須**なのはこ�
 ## 4.6 利用者に見せる文の言語(i18n、契約 v0.24)
 
 プラグインが返す**利用者に見せる文**(設定ページの RRL、`sns.actions` / `sns.timelines` / `tl.timelines` のラベル、FOW / RRL の文、
-利用者に出るエラーの `message`)は、ホストが渡す UI の言語で引く。仕組みを先に入れ、**いまの言語は日本語だけ**(言語を足すのは表を足すだけ)。
+利用者に出るエラーの `message`)は、ホストが渡す UI の言語で引く。同梱のプラグイン(Misskey / Mastodon / Bluesky / mixi2 / hello、plugin-sample)は
+`ja`(基準)/ `en` / `zh-Hans` / `zh-Hant` / `ko` の表を持つ(言語を足すのは表を足すだけ)。
 
 **ホスト → プラグイン: `args.locale`**
 

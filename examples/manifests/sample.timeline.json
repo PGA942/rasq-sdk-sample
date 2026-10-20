@@ -5,6 +5,24 @@
   "version": "0.2.0",
   "kind": "view",
   "description": "本文/表示名/ハンドルを Unicode コードポイント順で並べるソートノード",
+  "locales": {
+    "en": {
+      "name": "Unicode order sort (sample)",
+      "description": "A sort node that orders posts by text, display name or handle in Unicode code point order"
+    },
+    "zh-Hans": {
+      "name": "Unicode 顺序排序（示例）",
+      "description": "按 Unicode 码位顺序排列正文、昵称或用户名的排序节点"
+    },
+    "zh-Hant": {
+      "name": "Unicode 順序排序（範例）",
+      "description": "依 Unicode 碼位順序排列內文、顯示名稱或使用者名稱的排序節點"
+    },
+    "ko": {
+      "name": "Unicode 순 정렬(샘플)",
+      "description": "본문·표시 이름·핸들을 Unicode 코드 포인트 순으로 정렬하는 정렬 노드"
+    }
+  },
   "slots": [
     "tl"
   ],

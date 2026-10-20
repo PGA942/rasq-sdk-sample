@@ -5,6 +5,44 @@
   "version": "0.1.0",
   "kind": "action",
   "description": "ペンの軌跡をスプラインで描く、四角 / 丸のオブジェクトを追加して編集",
+  "locales": {
+    "en": {
+      "name": "Draw (pen / shapes) (sample)",
+      "description": "Draw smooth pen strokes with splines, and add and edit rectangle / ellipse objects",
+      "actions": {
+        "draw": {
+          "label": "Draw"
+        }
+      }
+    },
+    "zh-Hans": {
+      "name": "绘图（画笔 / 图形）（示例）",
+      "description": "用样条曲线绘制笔迹，并可添加、编辑矩形 / 椭圆对象",
+      "actions": {
+        "draw": {
+          "label": "绘图"
+        }
+      }
+    },
+    "zh-Hant": {
+      "name": "繪圖（畫筆 / 圖形）（範例）",
+      "description": "以樣條曲線繪製筆跡，並可新增、編輯矩形 / 橢圓物件",
+      "actions": {
+        "draw": {
+          "label": "繪圖"
+        }
+      }
+    },
+    "ko": {
+      "name": "그리기(펜 / 도형)(샘플)",
+      "description": "펜의 궤적을 스플라인으로 그리고, 사각형 / 타원 오브젝트를 추가해 편집합니다",
+      "actions": {
+        "draw": {
+          "label": "그리기"
+        }
+      }
+    }
+  },
   "slots": [
     "composer.media"
   ],

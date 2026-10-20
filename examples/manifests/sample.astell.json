@@ -1,10 +1,28 @@
 {
   "schema": "rasq.plugin-manifest/1",
   "id": "sample.astell",
-  "name": "AsTell プラグイン(サンプル)",
+  "name": "ASTell プラグイン(サンプル)",
   "version": "0.1.0",
   "kind": "action",
   "description": "効果音 / 効果映像 / 定型テキストをルームへ、投稿共有の受け取り",
+  "locales": {
+    "en": {
+      "name": "ASTell plugin (sample)",
+      "description": "Send sound effects, visual effects and quick messages to the room, and receive shared posts"
+    },
+    "zh-Hans": {
+      "name": "ASTell 插件（示例）",
+      "description": "向房间发送音效、视觉效果和常用短语，并接收分享的帖子"
+    },
+    "zh-Hant": {
+      "name": "ASTell 外掛程式（範例）",
+      "description": "向房間傳送音效、視覺效果和常用短語，並接收分享的貼文"
+    },
+    "ko": {
+      "name": "ASTell 플러그인(샘플)",
+      "description": "룸에 효과음·영상 효과·상용구를 보내고 공유된 게시물을 받습니다"
+    }
+  },
   "slots": [
     "astell.action"
   ],

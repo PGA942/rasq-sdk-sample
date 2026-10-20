@@ -5,6 +5,44 @@
   "version": "0.1.0",
   "kind": "action",
   "description": "顔検知ぼかし、スタンプのオブジェクト",
+  "locales": {
+    "en": {
+      "name": "Effects (face blur / stickers) (sample)",
+      "description": "Detect and blur faces, and place stickers as objects (move / resize / rotate / delete / duplicate)",
+      "actions": {
+        "process": {
+          "label": "Effects"
+        }
+      }
+    },
+    "zh-Hans": {
+      "name": "特效（人脸模糊 / 贴纸）（示例）",
+      "description": "检测人脸并模糊处理，将贴纸作为对象贴上（移动 / 缩放 / 旋转 / 删除 / 复制）",
+      "actions": {
+        "process": {
+          "label": "特效"
+        }
+      }
+    },
+    "zh-Hant": {
+      "name": "特效（人臉模糊 / 貼圖）（範例）",
+      "description": "偵測人臉並模糊處理，將貼圖作為物件貼上（移動 / 縮放 / 旋轉 / 刪除 / 複製）",
+      "actions": {
+        "process": {
+          "label": "特效"
+        }
+      }
+    },
+    "ko": {
+      "name": "효과(얼굴 흐리게 / 스티커)(샘플)",
+      "description": "얼굴을 감지해 흐리게 하고, 스티커를 오브젝트로 붙입니다(이동 / 크기 조절 / 회전 / 삭제 / 복제)",
+      "actions": {
+        "process": {
+          "label": "효과"
+        }
+      }
+    }
+  },
   "slots": [
     "composer.media"
   ],

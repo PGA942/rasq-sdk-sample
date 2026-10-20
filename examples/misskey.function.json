@@ -5,6 +5,12 @@
   "kind": "sns",
   "author": "RASQ Official",
   "description": "Misskeyに接続するためのプラグイン。",
+  "locales": {
+    "en": {"description": "A plugin for connecting to Misskey.", "termsOfService": "## Misskey Plugin terms\n\nWhen using this plugin, users shall comply with the terms of service of the Misskey instance they connect to.\n\n### Article 1: No redistribution of the plugin\n", "actions": {"reply": {"label": "Reply"}, "renote": {"label": "Renote"}, "reaction": {"label": "Reaction"}, "favorite": {"label": "Favorite"}}},
+    "zh-Hans": {"name": "Misskey 插件", "description": "用于连接 Misskey 的插件。", "termsOfService": "## Misskey 插件条款\n\n使用本插件时，用户应遵守所连接的 Misskey 实例的服务条款。\n\n### 第一条　禁止再分发本插件\n", "actions": {"reply": {"label": "回复"}, "renote": {"label": "转发"}, "reaction": {"label": "回应"}, "favorite": {"label": "收藏"}}},
+    "zh-Hant": {"name": "Misskey 外掛程式", "description": "用於連線 Misskey 的外掛程式。", "termsOfService": "## Misskey 外掛程式條款\n\n使用本外掛程式時，使用者應遵守所連線之 Misskey 站台的服務條款。\n\n### 第一條　禁止再散布本外掛程式\n", "actions": {"reply": {"label": "回覆"}, "renote": {"label": "轉發"}, "reaction": {"label": "反應"}, "favorite": {"label": "我的最愛"}}},
+    "ko": {"name": "Misskey 플러그인", "description": "Misskey에 연결하기 위한 플러그인입니다.", "termsOfService": "## Misskey 플러그인 약관\n\n이 플러그인을 이용할 때 사용자는 연결하는 Misskey 인스턴스의 이용약관을 준수해야 합니다.\n\n### 제1조 플러그인 재배포 금지\n", "actions": {"reply": {"label": "답글"}, "renote": {"label": "리노트"}, "reaction": {"label": "리액션"}, "favorite": {"label": "즐겨찾기"}}}
+  },
   "supportedSns": ["misskey"],
   "network": { "instance": true },
   "permissions": ["network", "storage.safe", "register_action"],

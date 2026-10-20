@@ -5,6 +5,24 @@
   "version": "0.1.0",
   "kind": "trend",
   "description": "共起辞書と前置一致だけで作るトレンドサジェスト(サーバー無し)",
+  "locales": {
+    "en": {
+      "name": "Local trends (sample)",
+      "description": "Trending suggestions built only from a co-occurrence dictionary and prefix matching (no server)"
+    },
+    "zh-Hans": {
+      "name": "本地热门（示例）",
+      "description": "仅凭共现词典和前缀匹配生成的热门建议（无需服务器）"
+    },
+    "zh-Hant": {
+      "name": "本機熱門（範例）",
+      "description": "僅憑共現詞典和前綴比對產生的熱門建議（無需伺服器）"
+    },
+    "ko": {
+      "name": "로컬 트렌드(샘플)",
+      "description": "동시 출현 사전과 접두사 일치만으로 만드는 트렌드 추천(서버 없음)"
+    }
+  },
   "slots": [
     "trend.suggest"
   ],
