@@ -426,13 +426,17 @@ fn fetch_notes(args: &Value, default_kind: &str) -> Result<(Vec<Value>, String),
 }
 
 /// One Misskey user → `rasq.post/1` の author/user ワイヤ。
+///
+/// `emojis` = 名前の絵文字(ショートコード → 画像の URL、rasq-client D-560)。Misskey はリモートの人の名前の絵文字を
+/// `emojis` に入れて返す(ローカルの人はサーバーの絵文字の一覧で引けるので来ない)。認証マークの絵文字などを
+/// ホストが描けるように、http(s) の URL だけをそのまま渡す。無ければ載せない。
 fn user_wire(user: &Value, fallback_instance: &str) -> Value {
     let username = user["username"].as_str().unwrap_or("?");
     let display = match user["name"].as_str() {
         Some(n) if !n.is_empty() => n,
         _ => username,
     };
-    json!({
+    let mut wire = json!({
         "id": user["id"],
         "kind": "misskey",
         "instance": user["host"].as_str().unwrap_or(fallback_instance),
@@ -440,7 +444,45 @@ fn user_wire(user: &Value, fallback_instance: &str) -> Value {
         "displayName": display,
         "avatarUrl": user["avatarUrl"],
         "bio": user["description"],
-    })
+    });
+    let emojis = name_emojis(&user["emojis"]);
+    if !emojis.is_empty() {
+        wire["emojis"] = Value::Object(emojis);
+    }
+    wire
+}
+
+/// 名前の絵文字: Misskey の `{name: url}`(古いサーバーは `[{name, url}]`)→ `{name: url}`。http(s) だけ。
+fn name_emojis(v: &Value) -> serde_json::Map<String, Value> {
+    let http = |u: &Value| u.as_str().filter(|s| s.starts_with("https://") || s.starts_with("http://")).map(|s| json!(s));
+    let mut out = serde_json::Map::new();
+    match v {
+        Value::Object(m) => {
+            for (k, u) in m {
+                if let Some(u) = http(u) {
+                    out.insert(k.clone(), u);
+                }
+            }
+        }
+        Value::Array(a) => {
+            for e in a {
+                if let (Some(name), Some(u)) = (e["name"].as_str(), http(&e["url"])) {
+                    out.insert(name.to_string(), u);
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+/// フォロー / フォロワーの一覧の公開範囲(rasq-client D-560): `public` / `followers` / `private`。
+/// 2023.12 より前のサーバーは `ffVisibility` 1 つ。分からなければ null。
+fn follow_visibility(u: &Value, key: &str) -> Value {
+    match u[key].as_str().or_else(|| u["ffVisibility"].as_str()) {
+        Some(v @ ("public" | "followers" | "private")) => json!(v),
+        _ => Value::Null,
+    }
 }
 
 /// One Misskey note → `rasq.post/1` Post ワイヤ (D-074: SnsSession 契約の
@@ -705,6 +747,9 @@ fn sns_user(args: &Value) -> Result<Value, Value> {
         "isSuspended": u["isSuspended"],
         "fields": u["fields"],
         "profileUrl": format!("https://{host}/@{username}"),
+        // 公開範囲 (D-560)。人数が来ない(null)とき、ホストが 🔒 / ? を出す。
+        "followingVisibility": follow_visibility(&u, "followingVisibility"),
+        "followersVisibility": follow_visibility(&u, "followersVisibility"),
     } }))
 }
 
@@ -1402,6 +1447,8 @@ fn sns_users(args: &Value) -> Result<Value, Value> {
                 "postsCount": u["notesCount"],
                 "isLocked": u["isLocked"],
                 "isBot": u["isBot"],
+                "followingVisibility": follow_visibility(u, "followingVisibility"),
+                "followersVisibility": follow_visibility(u, "followersVisibility"),
             })
         })
         .collect();
@@ -1821,6 +1868,38 @@ fn read_str(ptr: u32, len: u32) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// 名前の絵文字 (rasq-client D-560): リモートの人の `emojis` を、http(s) の URL だけ載せる。無ければ載せない。
+    #[test]
+    fn user_wire_carries_name_emojis() {
+        let w = user_wire(
+            &json!({
+                "id": "u1", "username": "hana", "host": "remote.example", "name": "はな :verified:",
+                "emojis": { "verified": "https://remote.example/emoji/verified.png", "bad": "javascript:alert(1)" }
+            }),
+            "misskey.io",
+        );
+        assert_eq!(w["emojis"], json!({ "verified": "https://remote.example/emoji/verified.png" }));
+        assert_eq!(w["instance"], "remote.example");
+        // 古いサーバーの配列の形。
+        let old = user_wire(&json!({ "id": "u2", "username": "jiro", "emojis": [{ "name": "a", "url": "https://x.example/a.png" }] }), "misskey.io");
+        assert_eq!(old["emojis"], json!({ "a": "https://x.example/a.png" }));
+        // 無ければ欄ごと無い(ローカルの人)。
+        let local = user_wire(&json!({ "id": "u3", "username": "me", "emojis": {} }), "misskey.io");
+        assert!(local.get("emojis").is_none());
+    }
+
+    /// フォロー / フォロワーの公開範囲 (rasq-client D-560)。古いサーバーは ffVisibility 1 つ。知らない値は null。
+    #[test]
+    fn follow_visibility_reads_new_and_old_keys() {
+        let u = json!({ "followingVisibility": "private", "followersVisibility": "followers" });
+        assert_eq!(follow_visibility(&u, "followingVisibility"), json!("private"));
+        assert_eq!(follow_visibility(&u, "followersVisibility"), json!("followers"));
+        let old = json!({ "ffVisibility": "followers" });
+        assert_eq!(follow_visibility(&old, "followingVisibility"), json!("followers"));
+        assert_eq!(follow_visibility(&json!({ "followingVisibility": "everyone" }), "followingVisibility"), Value::Null);
+        assert_eq!(follow_visibility(&json!({}), "followersVisibility"), Value::Null);
+    }
 
     /// 利用者に見せる文は表から引く(`args.locale`、PROTOCOL.md §4.6)。表の無い言語・読めないタグは ja。
     #[test]

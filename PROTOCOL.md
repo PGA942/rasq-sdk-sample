@@ -190,7 +190,10 @@ SNS プラグインのイベントハンドラー関数は「一定程度は抽�
       `{"code": "quote.fallbackUrl", "message": "引用に対応していないサーバーなので、引用元の URL を付けて投稿しました"}`
       (断られたときは「引用が許可されていなかったため、…」)を返す。
   - `sns.deletePost {id}` → `{}` (D-076)
-  - `sns.me {}` → `{user}` / `sns.user {id | handle+userHost?}` → `{profile: {user, bannerUrl?, description?, followersCount?, followingCount?, postsCount?, fields?, createdAt?, location?, isLocked?, isBot?, isSuspended?, pinnedPosts?, profileUrl?}}`(`host` は接続先と衝突するため、ユーザーの所属ホストは `userHost`)(D-076)
+  - `sns.me {}` → `{user}` / `sns.user {id | handle+userHost?}` → `{profile: {user, bannerUrl?, description?, followersCount?, followingCount?, postsCount?, fields?, createdAt?, location?, isLocked?, isBot?, isSuspended?, pinnedPosts?, profileUrl?, followingVisibility?, followersVisibility?}}`(`host` は接続先と衝突するため、ユーザーの所属ホストは `userHost`)(D-076)
+    - `followingVisibility` / `followersVisibility`(任意、rasq-client D-560): フォロー / フォロワーの一覧の公開範囲 `public` / `followers` / `private`。
+      公開していなくて人数を返さない(null)とき、ホストは人数の代わりに 🔒(`private`)/ ?(`followers`)を出す。分からなければ載せない
+    - `user` は任意で `emojis`(名前の絵文字 `{ショートコード: URL}`、docs/sns-boundary.md)を持てる
   - `sns.userPosts {id, filter: posts|withReplies|replies|media|quotes, limit, cursor?}` → `{page}` — 返信/引用の振り分け規約 (D-069) はプラグイン側で適用 (D-076)
   - `sns.reactions {postId, type?, limit, cursor?}` → `{page: {items: [{id, user, reaction, createdAt, emojiUrl?}], nextCursor?}}` (D-076)
   - `sns.reposters {postId, …}` → `{page: {items: [user]}}` / `sns.quotes {postId, …}` → `{page: {items: [Post]}}` (D-076)
