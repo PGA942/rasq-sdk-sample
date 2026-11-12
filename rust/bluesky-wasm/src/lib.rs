@@ -1249,9 +1249,30 @@ fn langs_from(settings: &Value) -> Vec<String> {
 }
 
 /// `call("sns.createPost", {draft})` (D-076): `app.bsky.feed.post` レコードを組む。
+/// 下書きの公開範囲が Bluesky で守れるか(2026-11-11 の監査 #8)。Bluesky の投稿・リポストは
+/// 誰でも読める公開レコードしか無い(フォロワー限定も指名も、サーバーに留める「ローカル限定」も無い)。
+/// 公開より狭い範囲を意図した下書きを黙って公開で送ると、意図より広く漏れるので、送る前に `D01` で断る。
+/// 通すのは範囲の指定なし / `public` / `home`(Misskey のホーム・Mastodon の未収載 = もともと誰でも読める)だけ。
+/// 知らない値も断る(fail-closed)。DM は `sns.sendDm`(chat.bsky)の口で、ここは通らない。
+fn check_public_draft(ctx: &Ctx, draft: &Value) -> Result<(), Value> {
+    let visibility_ok = match &draft["visibility"] {
+        Value::Null => true,
+        Value::String(v) => matches!(v.as_str(), "public" | "home" | "unlisted"),
+        _ => false,
+    };
+    let local_only = draft["localOnly"].as_bool().unwrap_or(false);
+    let directed = draft["directToIds"].as_array().is_some_and(|ids| !ids.is_empty());
+    if visibility_ok && !local_only && !directed {
+        return Ok(());
+    }
+    Err(err("D01", TEXT.t(i18n::locale_of(ctx.args), "error.notPublic")))
+}
+
 fn sns_create_post(ctx: &Ctx) -> Result<Value, Value> {
     let draft = &ctx.args["draft"];
     let now = ctx.now();
+    // リポストも公開レコード。何かを作る前に、公開範囲を確かめる。
+    check_public_draft(ctx, draft)?;
 
     // リポストは投稿ではなくレコード。NewPost が repostOfId を持って来たら振り替える。
     if let Some(repost_of) = draft["repostOfId"].as_str() {
@@ -3104,5 +3125,45 @@ mod tests {
         let e = dispatch("sns.createPost", &args(json!({ "draft": { "text": " \n", "poll": { "choices": ["a", "b"] } } }))).unwrap_err();
         assert_eq!(e["code"], "D01");
         assert_eq!(e["message"], "本文か添付が要ります(Bluesky に投票はありません)");
+    }
+
+    #[test]
+    fn non_public_drafts_are_refused_before_anything_is_created() {
+        // 監査 #8: フォロワー限定などを選んだ下書きが、公開の app.bsky.feed.post になっていた。
+        let _g = test_lock();
+        mock_xrpc(Value::Null, |_, nsid, _| panic!("must not call {nsid}"));
+        let drafts = [
+            json!({ "text": "x", "visibility": "followers" }),
+            json!({ "text": "x", "visibility": "specified", "directToIds": ["did:plc:bob"] }),
+            json!({ "text": "x", "visibility": "direct" }),
+            json!({ "text": "x", "visibility": "private" }),
+            json!({ "text": "x", "visibility": "somethingNew" }),
+            json!({ "text": "x", "visibility": 3 }),
+            json!({ "text": "x", "localOnly": true }),
+            json!({ "text": "x", "visibility": "public", "directToIds": ["did:plc:bob"] }),
+            json!({ "text": "", "repostOfId": POST, "visibility": "followers" }),
+        ];
+        for draft in drafts {
+            let e = dispatch("sns.createPost", &args(json!({ "draft": draft.clone() }))).unwrap_err();
+            assert_eq!(e["code"], "D01", "{draft}");
+            assert!(e["message"].as_str().unwrap().contains("フォロワー限定"), "{e}");
+        }
+    }
+
+    #[test]
+    fn public_and_home_drafts_are_still_sent() {
+        let _g = test_lock();
+        mock_xrpc(Value::Null, |method, nsid, _| match (method, nsid) {
+            ("POST", "com.atproto.repo.createRecord") => Ok(json!({ "uri": "at://did:plc:alice/app.bsky.feed.post/3kpub", "cid": "c" })),
+            ("GET", "app.bsky.feed.getPosts") => Ok(json!({ "posts": [] })),
+            other => panic!("unexpected {other:?}"),
+        });
+        for draft in [
+            json!({ "text": "x" }),
+            json!({ "text": "x", "visibility": "public", "localOnly": false, "directToIds": [] }),
+            json!({ "text": "x", "visibility": "home" }),
+        ] {
+            dispatch("sns.createPost", &args(json!({ "draft": draft.clone() }))).unwrap_or_else(|e| panic!("{draft}: {e}"));
+        }
     }
 }

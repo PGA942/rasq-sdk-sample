@@ -175,6 +175,10 @@ SNS プラグインのイベントハンドラー関数は「一定程度は抽�
     **`text` は空文字のことがある**(メディア / 投票 / 引用だけの投稿。ホストは本文なしでも送る)。空の本文 / 注釈を
     そのまま API に載せない(Misskey は `text: ""` / `cw: ""` / `fileIds: []` を 400 で断る。Mastodon は `media_ids` があれば
     `status` を省ける)。その SNS で本文なしにできない組み合わせ(Mastodon の投票だけ等)は、送る前に `D01` と理由の文で断る(D-494)。
+    **公開範囲も同じく、その SNS で守れない範囲は黙って広げずに `D01` で断る**(2026-11-11 の監査 #8)。Bluesky は投稿もリポストも
+    誰でも読める公開レコードしか無いので、`visibility` が無い / `public` / `home` / `unlisted` だけを受け付け、`followers`・`specified`・
+    `direct`・知らない値、`localOnly: true`、空でない `directToIds` は何も作らずに断る(DM は `sns.sendDm` の chat.bsky で送る)。
+    ホストのコンポーザーも、その SNS で選べない範囲は出さない
     `sns.sendDm` の `draft` も同じ
   - **`notice`(契約 v0.25、rasq-client D-500)** = 投稿は**できた**が、利用者に知らせたいこと。形は `{code, message}`:
     - `code` — 言語に依らない機械向けの id(`<area>.<item>`、例: `quote.fallbackUrl` = 引用の代わりに引用元の URL を本文に付けて送った)。
