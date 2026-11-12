@@ -324,6 +324,12 @@ struct HostState {
     /// この口はランタイム内で短絡して埋込側の権限検査を通らないので、ここで閉じる。
     /// **既定は false**(fail-closed): 埋込側が設定を忘れても全プラグインに GPU を渡さない。
     gpu_compute: bool,
+    /// ホストが `host_fn` の応答を置くためにゲストの `alloc` を動かしている最中か。
+    /// その `alloc` から `host_fn` を呼び直されると、ホストはまた応答の `alloc` を呼び、
+    /// ゲストが決める深さでネイティブのスタックを積んでアプリごと落ちる(2026-11-11 の監査 #2)。
+    /// 立っている間の `host_fn` はトラップにする。ホストからゲストへ入るのはこの `alloc` だけ
+    /// (ほかは埋込側からの入口で、入れ子にならない)なので、旗 1 本で再入を全部覆える。
+    in_response_alloc: bool,
     /// 線形メモリ / テーブルの成長を止める `ResourceLimiter`。`Store` は
     /// ユーザーデータ経由でしか limiter を引けないのでここに同居させる。
     /// 1 本ごとの上限に加えて合計も見る([`AggregateLimits`]、2026-10-09 の [5])。
@@ -417,6 +423,7 @@ impl RasqWasmInstance {
                 fetch_shapes_new: Vec::new(),
                 fetch_shapes_overflow: false,
                 gpu_compute: false,
+                in_response_alloc: false,
                 limits,
             },
         );
@@ -456,6 +463,8 @@ impl RasqWasmInstance {
         st.call_deadline = Some(std::time::Instant::now() + Duration::from_millis(st.call_wall_ms.max(1)));
         st.call_fetches = 0;
         st.call_fetch_bytes = 0;
+        // 前の呼び出しが応答の alloc の中で止まっても、旗は write_response が下ろす。念のためここでも。
+        st.in_response_alloc = false;
         Ok(())
     }
 
@@ -573,6 +582,10 @@ fn read_guest(memory: &Memory, ctx: impl wasmi::AsContext, ptr: u32, len: u32) -
 /// allocate the response inside wasm memory (via the plugin's `alloc`) and
 /// return `(ptr << 32) | len`.
 fn host_fn_impl(mut caller: Caller<'_, HostState>, ptr: u32, len: u32) -> Result<i64, wasmi::Error> {
+    // 応答の alloc の中からの呼び直しは、何も読まずに止める([`HostState::in_response_alloc`])。
+    if caller.data().in_response_alloc {
+        return Err(wasmi::Error::new("host_fn: re-entered from the guest's alloc while the host was placing a response"));
+    }
     let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
         Some(m) => m,
         None => return Err(wasmi::Error::new("plugin has no exported memory")),
@@ -690,7 +703,11 @@ fn write_response(caller: &mut Caller<'_, HostState>, memory: Memory, bytes: &[u
         .ok_or_else(|| wasmi::Error::new("plugin has no exported alloc"))?
         .typed::<u32, u32>(&*caller)
         .map_err(|e| wasmi::Error::new(format!("alloc signature mismatch: {e}")))?;
-    let out_ptr = alloc.call(&mut *caller, bytes.len() as u32)?;
+    // 応答の alloc を動かす間だけ host_fn の再入を閉じる。成功でもトラップでも旗を下ろす。
+    caller.data_mut().in_response_alloc = true;
+    let out_ptr = alloc.call(&mut *caller, bytes.len() as u32);
+    caller.data_mut().in_response_alloc = false;
+    let out_ptr = out_ptr?;
     memory
         .write(&mut *caller, out_ptr as usize, bytes)
         .map_err(|e| wasmi::Error::new(format!("host_fn: write response failed: {e}")))?;
@@ -2223,6 +2240,64 @@ mod tests {
     // 最小形 — `memory` / `alloc` / `dealloc` / `call` だけ。
 
     /// `call` の中で `net.fetch` を `n` 回くり返すゲスト(要求の JSON は 4096 番地、応答は 8192 番地に置かせる)。
+    /// `alloc` の中から `host_fn`(権限の無い gpu.compute = 拒否の応答だけで済む短い要求)を呼ぶゲスト。
+    /// `reenter_in_call`: `call` の間だけ、毎回の `alloc` で呼び直す(= 応答の alloc から再入する)。
+    /// そうでないときは、最初の 1 回の `alloc`(埋込側が引数を書く口)でだけ呼ぶ(= 入れ子でない正当な呼び出し)。
+    fn reentrant_alloc_wat(request: &serde_json::Value, reenter_in_call: bool) -> String {
+        let json = request.to_string();
+        let escaped: String = json.bytes().map(|b| format!("\\{b:02x}")).collect();
+        let arm = if reenter_in_call { "(global.set $armed (i32.const 1))" } else { "" };
+        format!(
+            r#"
+            (module
+              (import "rasq" "host_fn" (func $host (param i32 i32) (result i64)))
+              (memory (export "memory") 2)
+              (data (i32.const 0) "{escaped}")
+              (global $bump (mut i32) (i32.const 65536))
+              (global $armed (mut i32) (i32.const 0))
+              (global $first (mut i32) (i32.const {first}))
+              (func (export "alloc") (param $n i32) (result i32) (local $p i32)
+                (if (global.get $first)
+                  (then (global.set $first (i32.const 0))
+                        (drop (call $host (i32.const 0) (i32.const {len})))))
+                (if (global.get $armed)
+                  (then (drop (call $host (i32.const 0) (i32.const {len})))))
+                (local.set $p (global.get $bump))
+                (global.set $bump (i32.add (global.get $bump) (local.get $n)))
+                (local.get $p))
+              (func (export "dealloc") (param i32 i32))
+              (func (export "call") (param i32 i32 i32 i32 i32 i32) (result i64)
+                {arm}
+                (call $host (i32.const 0) (i32.const {len}))))
+            "#,
+            len = json.len(),
+            first = if reenter_in_call { 0 } else { 1 },
+        )
+    }
+
+    #[test]
+    fn host_fn_reentry_from_response_alloc_traps_instead_of_exhausting_the_stack() {
+        // 監査 #2: 応答の alloc から host_fn を呼び直すゲスト。直す前はホストのスタックが尽きて落ちた。
+        let wat = reentrant_alloc_wat(&gpu_req(serde_json::json!({})), true);
+        let mut instance = RasqWasmInstance::load_plain(wat.as_bytes()).expect("instantiate");
+        let err = instance.call("reenter", "{}", "call-reenter").expect_err("re-entry must trap");
+        assert!(matches!(&err, RasqWasmError::Wasmi(e) if e.to_string().contains("re-entered")), "{err:?}");
+        // トラップの経路でも旗は下りている(次の呼び出しを巻き添えにしない)。
+        assert!(!instance.store.data().in_response_alloc);
+    }
+
+    #[test]
+    fn host_fn_from_a_top_level_alloc_still_works_and_clears_the_guard() {
+        // 埋込側が引数を書く alloc(応答の alloc ではない)からの host_fn は従来どおり通る。
+        // その中で応答の alloc が 1 段入れ子になっても、成功の経路で旗が下りて `call` の host_fn が通る。
+        let wat = reentrant_alloc_wat(&gpu_req(serde_json::json!({})), false);
+        let mut instance = RasqWasmInstance::load_plain(wat.as_bytes()).expect("instantiate");
+        let result = instance.call("plain", "{}", "call-plain").expect("call");
+        let v: serde_json::Value = serde_json::from_str(&result).expect("json");
+        assert_eq!(v["error"]["code"], "E01", "{result}");
+        assert!(!instance.store.data().in_response_alloc);
+    }
+
     fn fetch_loop_wat(port: u16, n: u32) -> String {
         let req = format!(r#"{{"fn":"net.fetch","callId":"c","args":{{"method":"GET","url":"http://127.0.0.1:{port}/slow"}}}}"#);
         format!(

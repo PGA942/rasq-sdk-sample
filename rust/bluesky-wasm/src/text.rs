@@ -65,6 +65,7 @@ rasq_plugin_kit::i18n_catalog! {
             "error.notBool" => "値は true / false です",
             "error.allowIncoming" => "all / following / none のどれかです",
             "error.emptyPost" => "本文か添付が要ります(Bluesky に投票はありません)",
+            "error.notPublic" => "Bluesky の投稿は誰でも読めます。フォロワー限定・指名・DM・ローカル限定では送れません",
         },
         "en": {
             "timeline.home" => "Following",
@@ -119,6 +120,7 @@ rasq_plugin_kit::i18n_catalog! {
             "error.notBool" => "The value must be true or false",
             "error.allowIncoming" => "Must be all, following or none",
             "error.emptyPost" => "Add text or an attachment (Bluesky has no polls)",
+            "error.notPublic" => "Bluesky posts are readable by anyone, so they can't be sent as followers-only, specified, direct or local-only",
         },
         "zh-Hans": {
             "timeline.home" => "正在关注",
@@ -173,6 +175,7 @@ rasq_plugin_kit::i18n_catalog! {
             "error.notBool" => "值必须为 true 或 false",
             "error.allowIncoming" => "必须为 all、following 或 none",
             "error.emptyPost" => "需要正文或附件（Bluesky 没有投票功能）",
+            "error.notPublic" => "Bluesky 的帖子任何人都能看到，无法以仅关注者、指定用户、私信或仅本站可见的方式发送",
         },
         "zh-Hant": {
             "timeline.home" => "跟隨中",
@@ -227,6 +230,7 @@ rasq_plugin_kit::i18n_catalog! {
             "error.notBool" => "值必須是 true 或 false",
             "error.allowIncoming" => "必須是 all、following 或 none",
             "error.emptyPost" => "需要內文或附件（Bluesky 沒有投票功能）",
+            "error.notPublic" => "Bluesky 的貼文任何人都看得到，無法以僅限追蹤者、指定使用者、私訊或僅限本站的方式傳送",
         },
         "ko": {
             "timeline.home" => "팔로우 중",
@@ -281,6 +285,7 @@ rasq_plugin_kit::i18n_catalog! {
             "error.notBool" => "값은 true 또는 false여야 합니다",
             "error.allowIncoming" => "all, following, none 중 하나여야 합니다",
             "error.emptyPost" => "본문이나 첨부 파일이 필요합니다(Bluesky에는 투표가 없습니다)",
+            "error.notPublic" => "Bluesky 게시물은 누구나 읽을 수 있어 팔로워 전용, 지정, DM, 로컬 전용으로는 보낼 수 없습니다",
         },
     };
 }
