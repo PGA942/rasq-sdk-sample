@@ -1406,6 +1406,8 @@ pub extern "C" fn call(
     let args = read_str(args_ptr, args_len);
     let call_id = read_str(call_id_ptr, call_id_len);
     let args_value: Value = serde_json::from_str(&args).unwrap_or(Value::Null);
+    // args.locale と、言語パックの文の表 args.localeStrings(PROTOCOL.md §4.6、v0.26)を覚えておく。
+    rasq_plugin_kit::i18n::set_current(&args_value);
 
     let outcome: Result<Value, Value> = match fn_name.as_str() {
         "sns.inspectServer" => sns_inspect_server(&args_value),
