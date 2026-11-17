@@ -604,6 +604,8 @@ pub extern "C" fn call(fn_ptr: u32, fn_len: u32, args_ptr: u32, args_len: u32, c
     let args = read_str(args_ptr, args_len);
     let call_id = read_str(call_id_ptr, call_id_len);
     let args_value: Value = serde_json::from_str(&args).unwrap_or(Value::Null);
+    // args.locale と、言語パックの文の表 args.localeStrings(PROTOCOL.md §4.6、v0.26)を覚えておく。
+    rasq_plugin_kit::i18n::set_current(&args_value);
     let outcome = call_impl(&fn_name, &args_value);
     let mut msg = json!({ "schema": "rasq.boundary/1", "scope": SCOPE, "type": "result", "callId": call_id, "ok": outcome.is_ok() });
     match outcome {

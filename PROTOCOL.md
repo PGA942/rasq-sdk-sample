@@ -3,6 +3,7 @@
 > 版の見方: この文書は**スロット契約 v0.19 まで**の内容を含む(版の正典は [`docs/slots.md`](docs/slots.md) の表題)。
 > 以前の表題「Draft v0.1」は最初の版の名残で、中身は v0.19 まで追従している。§4.6(i18n の `args.locale` とマニフェストの `locales`)は v0.24。
 > §4.3 の `sns.createPost` / `sns.sendDm` の答えの `notice`(投稿はできたが利用者に知らせたいこと)は v0.25。
+> §4.6 の言語パックの文の表 `args.localeStrings` は v0.26。
 
 最終更新: 2026-08-22 / 根拠: 決定台帳 D-001(実行境界)・D-002(4層)・D-012(FOW)・D-017〜D-020、Qwen壁打ち「転送プロトコル v0」
 対になる文書: [`CONTRACT.md`](CONTRACT.md)(操作レベルの契約) / スキーマ: [`schema/rrl-node.schema.json`](schema/rrl-node.schema.json), [`schema/boundary.schema.json`](schema/boundary.schema.json)
@@ -362,6 +363,18 @@ SNS プラグインが RRL の icon/body に**タグ付け必須**なのはこ�
 - 言語の切り替えは**次の call から**効く。ホストは文を含む答えを持っておくとき(`sns.settingsPages` / `sns.actions` / `sns.timelines` /
   `tl.timelines` など)は**言語もキーに入れ**、UI の言語が変わったら呼び直す。開いている FOW / ページは閉じて開き直すまで前の言語のままでよい。
 - 版: 対応したホストは `page.open` の `contract` に `"0.24"` を渡す。ただしプラグインは `contract` を見なくてよい(`locale` が無ければ `ja`)。
+
+**ホスト → プラグイン: `args.localeStrings`(言語パック、契約 v0.26、rasq-client D-592)**
+
+- 利用者は、アプリの文言を差し替える**言語パック**(orgate-question/langpack の形の `.rasqlang`。ユーザーが作った非公式の訳など)を
+  読み込める。パックにそのプラグインの文(パックの領域 `plugin:<プラグインの id>`)があるとき、ホストは毎回の call の args に
+  `localeStrings: {<キー>: <文>}`(`args.locale` の言語の分)を載せる。無ければ載せない(args に同じ名前があってもホストが消す)。
+- プラグインは**自分の表より先に**この表を引く。ただし差し込み `{name}` の組が自分の基準の文と違う文は使わない(壊れた訳で
+  文が崩れないように)。`rasq-plugin-kit` の `i18n` はこれを済ませてある([`i18n::set_current`] が覚え、`TEXT.t` / `TEXT.f` が先に
+  引く)。ABI を自前で持つプラグインは call の頭で `i18n::set_current(&args)` を呼ぶ(同梱の SNS プラグインはそうしている)。
+- マニフェストの文(`name` / `description` / `pageTitle` / `actions.<id>.label` / `assets.<id>.label`)はホストが差し替える
+  (パックのキー `manifest.<欄>`。プラグインには渡さない)。規約(`termsOfService`)は差し替えない。
+- 版: 対応したホストは `page.open` の `contract` に `"0.26"` を渡す。対応していないプラグインは今までどおり自分の表を使う。
 
 **引き方(フォールバック)**: `zh-Hant-TW` → `zh-Hant` → `zh` → プラグインの基準の言語(同梱のプラグインはすべて `ja`)。
 表に無いキーは 1 つずつ次へ落ちるので、訳しかけの表を置いてよい。

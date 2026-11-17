@@ -29,6 +29,10 @@
 //! - `args` の無い `snapshot()` などのために、[`rasq_plugin!`](crate::rasq_plugin) は call のたびに [`set_current`] で
 //!   言語を覚える。[`current`] はいちばん新しい call の言語(まだ call が無ければ `"ja"`)。
 //! - 言語を足したら、テストで [`Catalog::check`] が空であることを確かめる(基準に無いキー・差し込み `{name}` の食い違い)。
+//! - **言語パック**(契約 v0.26): 利用者が読み込んだ非公式の言語パックにこのプラグインの文があると、ホストは毎回の call に
+//!   `args.localeStrings`(`{キー: 文}`、`args.locale` の言語)を載せる。[`set_current`] がそれを覚え、[`Catalog::t`] /
+//!   [`Catalog::f`] は**自分の表より先に**引く(いまの言語のときだけ。差し込み `{name}` の組が基準の文と違う文は使わない)。
+//!   ABI を自前で持つプラグインも、call の頭で [`set_current`] を呼べば同じになる。
 
 use serde_json::Value;
 use std::cell::RefCell;
@@ -67,6 +71,11 @@ impl Catalog {
     /// `locale` の文。無ければ親のタグ → 基準の言語の順に落ちる。基準にも無ければキーそのもの
     /// (キーがリテラルなら戻りも `&'static str`)。
     pub fn t<'a>(&self, locale: &str, key: &'a str) -> &'a str {
+        if let Some(s) = override_for(locale, key) {
+            if lookup(self.base, key).is_none_or(|b| placeholders(b) == placeholders(s)) {
+                return s;
+            }
+        }
         for tag in fallback_chain(locale) {
             if same_tag(&tag, self.base_locale) {
                 break;
@@ -144,6 +153,9 @@ pub fn fallback_chain(locale: &str) -> Vec<String> {
     (1..=parts.len()).rev().map(|n| parts[..n].join("-")).collect()
 }
 
+/// ホストが言語パックの文の表を載せる予約キー(`args.localeStrings`、契約 v0.26)。
+pub const STRINGS_ARG_KEY: &str = "localeStrings";
+
 /// `args.locale`(BCP 47)。無い・空・文字列でない・読めないときは [`DEFAULT_LOCALE`]。
 pub fn locale_of(args: &Value) -> &str {
     match args.get(ARG_KEY).and_then(Value::as_str) {
@@ -152,17 +164,53 @@ pub fn locale_of(args: &Value) -> &str {
     }
 }
 
+/// 言語パックの文の表(いまの言語の分)。`&'static str` で返すため、表が変わったときだけ文を漏らして(leak)持つ
+/// (パックはめったに変わらないので、漏れる量はパックの数で決まる)。
+#[derive(Default)]
+struct Overrides {
+    locale: String,
+    source: std::collections::BTreeMap<String, String>,
+    table: std::collections::HashMap<String, &'static str>,
+}
+
 thread_local! {
     static CURRENT: RefCell<String> = RefCell::new(DEFAULT_LOCALE.to_string());
     static MISSES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static OVERRIDES: RefCell<Overrides> = RefCell::new(Overrides::default());
 }
 
 /// call の `args.locale` を「いまの言語」として覚え、その値を返す(`rasq_plugin!` が call のたびに呼ぶ)。
 /// `args.locale` が無ければ `"ja"` に戻す(古いホスト = 日本語)。
+/// 言語パックの文の表 `args.localeStrings`(無ければ空)も覚える(契約 v0.26)。
 pub fn set_current(args: &Value) -> String {
     let loc = locale_of(args).to_string();
     CURRENT.with(|c| c.borrow_mut().clone_from(&loc));
+    let source: std::collections::BTreeMap<String, String> = args
+        .get(STRINGS_ARG_KEY)
+        .and_then(Value::as_object)
+        .map(|m| m.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect())
+        .unwrap_or_default();
+    OVERRIDES.with(|o| {
+        let mut o = o.borrow_mut();
+        if o.locale == loc && o.source == source {
+            return;
+        }
+        o.table = source.iter().map(|(k, v)| (k.clone(), &*Box::leak(v.clone().into_boxed_str()))).collect();
+        o.source = source;
+        o.locale.clone_from(&loc);
+    });
     loc
+}
+
+/// 言語パックの文([`set_current`] で覚えた表。`locale` がいまの言語のときだけ)。
+fn override_for(locale: &str, key: &str) -> Option<&'static str> {
+    OVERRIDES.with(|o| {
+        let o = o.borrow();
+        if o.table.is_empty() || !same_tag(locale.trim(), &o.locale) {
+            return None;
+        }
+        o.table.get(key).copied()
+    })
 }
 
 /// いまの言語(いちばん新しい call の `args.locale`。まだ call が無ければ `"ja"`)。`snapshot()` など args の無い所で使う。
@@ -247,6 +295,20 @@ mod tests {
         assert_eq!(TEXT.t("en", "only.ja"), "日本語だけ"); // 訳しかけの表
         assert_eq!(TEXT.t("", "save"), "保存");
         assert!(take_misses().is_empty());
+    }
+
+    #[test]
+    fn locale_strings_override_the_table_for_the_current_locale() {
+        set_current(&json!({ "locale": "en", "localeStrings": { "save": "Keep", "count": "{n} things", "only.ja": "{x} bad" } }));
+        assert_eq!(TEXT.t("en", "save"), "Keep");
+        assert_eq!(TEXT.t("en-US", "save"), "Save"); // いまの言語(en)と違うタグには効かない
+        assert_eq!(TEXT.t("ja", "save"), "保存");
+        assert_eq!(TEXT.f("en", "count", &[("n", "3")]), "3 things");
+        assert_eq!(TEXT.t("en", "only.ja"), "日本語だけ"); // 差し込みが基準と違う文は使わない
+        // 次の call に表が無ければ消える。
+        set_current(&json!({ "locale": "en" }));
+        assert_eq!(TEXT.t("en", "save"), "Save");
+        set_current(&json!({}));
     }
 
     #[test]
